@@ -116,6 +116,11 @@ function ensureSchema(db) {
       created_at TEXT DEFAULT (datetime('now')),
       UNIQUE(user_id, queue_date, vin)
     );
+
+    CREATE TABLE IF NOT EXISTS marketplace_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    );
   `);
 }
 
@@ -148,7 +153,57 @@ function emptyPublisherQueue() {
     counts: { scheduled: 0, posted: 0, failed: 0, paused: 0 },
     quota: emptyQuota(),
     queue: [],
+    auto_publish: true,
   };
+}
+
+function readAutoPublishFlag(db) {
+  try {
+    const row = db
+      .prepare(`SELECT value FROM marketplace_settings WHERE key = 'auto_publish'`)
+      .get();
+    if (!row) return true;
+    const v = String(row.value || '').trim().toLowerCase();
+    return !(v === 'off' || v === '0' || v === 'false' || v === 'paused');
+  } catch {
+    return true;
+  }
+}
+
+function getAutoPublish() {
+  try {
+    const db = openMarketplaceDb();
+    const enabled = readAutoPublishFlag(db);
+    return {
+      success: true,
+      auto_publish: enabled,
+      status: enabled ? 'active' : 'paused',
+    };
+  } catch (err) {
+    console.error('[marketplace] getAutoPublish', err);
+    return { success: true, auto_publish: true, status: 'active' };
+  }
+}
+
+function setAutoPublish(enabled) {
+  try {
+    const db = openMarketplaceDb();
+    const value = enabled ? 'on' : 'off';
+    db.prepare(
+      `INSERT INTO marketplace_settings (key, value) VALUES ('auto_publish', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ).run(value);
+    return {
+      success: true,
+      auto_publish: Boolean(enabled),
+      status: enabled ? 'active' : 'paused',
+    };
+  } catch (err) {
+    console.error('[marketplace] setAutoPublish', err);
+    const e = new Error(err.message || 'Failed to update auto-publish.');
+    e.status = 500;
+    throw e;
+  }
 }
 
 function emptyInventory() {
@@ -244,6 +299,7 @@ function getPublisherQueue(statusFilter) {
     for (const item of items) {
       counts[item.status] = (counts[item.status] || 0) + 1;
     }
+    const autoPublish = readAutoPublishFlag(db);
     return {
       success: true,
       items,
@@ -251,6 +307,7 @@ function getPublisherQueue(statusFilter) {
       counts,
       quota: quotaPayload(postsToday(db)),
       queue: items,
+      auto_publish: autoPublish,
     };
   } catch (err) {
     console.error('[marketplace] getPublisherQueue', err);
@@ -564,6 +621,8 @@ module.exports = {
   scheduleVehicle,
   setQueueStatus,
   getDailyPostingQueue,
+  getAutoPublish,
+  setAutoPublish,
   openMarketplaceDb,
   sanitizeInventoryList,
   sanitizeVehicleRecord,

@@ -108,6 +108,7 @@ mount('/api/marketplace/queue/status', require('../_routes/marketplace/queue/sta
 mount('/api/marketplace/queue', require('../_routes/marketplace/queue'));
 mount('/api/marketplace/inventory', require('../_routes/marketplace/inventory'));
 mount('/api/marketplace/schedule', require('../_routes/marketplace/schedule'));
+mount('/api/marketplace/toggle-auto', require('../_routes/marketplace/toggle-auto'));
 mount('/api/marketplace/generate-copy', require('../_routes/marketplace/generate-copy'));
 mount('/api/v1/marketplace/queue', require('../_routes/v1/marketplace/queue'));
 
@@ -133,6 +134,7 @@ app.all(['/api', '/api/index', '/'], (_req, res) => {
       '/api/marketplace/queue',
       '/api/marketplace/inventory',
       '/api/marketplace/schedule',
+      '/api/marketplace/toggle-auto',
       '/api/admin/users',
     ],
   });

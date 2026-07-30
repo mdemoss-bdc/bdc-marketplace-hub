@@ -79,6 +79,20 @@ import VideoUploadDropzone from '@/components/VideoUploadDropzone';
 
 const API_BASE = '/api';
 
+/** Mild warning toast — never blocks the Hub UI. */
+function warnToast(description: string, title = 'Marketplace Hub') {
+  try {
+    toast({
+      title,
+      description,
+      variant: 'default',
+      className: 'border-amber-400/30 bg-slate-900 text-amber-100',
+    });
+  } catch {
+    /* toast provider may be unmounted during teardown */
+  }
+}
+
 /** Defensive JSON parse — HTML/text 404 bodies (e.g. "The page…") must not crash the Hub. */
 async function readJsonSafe(res: Response): Promise<Record<string, unknown>> {
   const ct = (res.headers.get('content-type') || '').toLowerCase();
@@ -99,21 +113,47 @@ async function readJsonSafe(res: Response): Promise<Record<string, unknown>> {
   };
 }
 
+type FetchMarketplaceOptions = RequestInit & {
+  /** When true (default), show a mild toast on non-ok / parse / network failure. */
+  warnOnError?: boolean;
+  /** Override toast copy. */
+  warnMessage?: string;
+};
+
+/**
+ * Safe Marketplace Hub fetch — always returns structured data.
+ * Non-ok responses and JSON parse failures yield `{ ok: false }` instead of throwing.
+ */
 async function fetchMarketplaceJson(
   path: string,
-  init?: RequestInit,
+  init?: FetchMarketplaceOptions,
 ): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const { warnOnError = true, warnMessage, ...fetchInit } = init || {};
   try {
-    const res = await fetch(`${API_BASE}${path}`, init);
+    const res = await fetch(`${API_BASE}${path}`, fetchInit);
     const data = await readJsonSafe(res);
-    return { ok: res.ok, status: res.status, data };
+    if (!res.ok || data.success === false) {
+      if (warnOnError) {
+        const msg =
+          warnMessage ||
+          (typeof data.error === 'string' && data.error
+            ? data.error
+            : `Could not load ${path} — showing empty results.`);
+        warnToast(msg);
+      }
+    }
+    return { ok: res.ok && data.success !== false, status: res.status, data };
   } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : 'Network request failed.';
+    if (warnOnError) {
+      warnToast(warnMessage || `${error} — showing empty results.`);
+    }
     return {
       ok: false,
       status: 0,
       data: {
         success: false,
-        error: e instanceof Error ? e.message : 'Network request failed.',
+        error,
       },
     };
   }
@@ -544,15 +584,34 @@ function PublisherView() {
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState('');
 
+  const emptyPublisherState = useCallback((): PublisherQueue => ({
+    items: [],
+    total: 0,
+    counts: { scheduled: 0, posted: 0, failed: 0, paused: 0 },
+    quota: {
+      posts_today: 0, daily_cap: 10, remaining: 10, cap_reached: false,
+      label: '0 / 10 posts today', window: '08:00–21:00',
+    },
+  }), []);
+
   const fetchQueue = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     setError('');
     try {
-      const { ok, data } = await fetchMarketplaceJson('/marketplace/queue');
+      const { ok, data } = await fetchMarketplaceJson('/marketplace/queue', {
+        warnOnError: !quiet,
+        warnMessage: 'Publisher queue unavailable — showing an empty queue.',
+      });
       if (!ok) {
-        throw new Error(
+        setError(
           typeof data.error === 'string' ? data.error : 'Failed to load publisher queue',
         );
+        setQueue(emptyPublisherState());
+        return;
+      }
+      if (typeof data.auto_publish === 'boolean') {
+        setAutoPublish(data.auto_publish);
+        localStorage.setItem(AUTO_PUBLISH_KEY, data.auto_publish ? 'on' : 'off');
       }
       setQueue({
         items: Array.isArray(data.items)
@@ -571,19 +630,12 @@ function PublisherView() {
       });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load publisher queue');
-      setQueue({
-        items: [],
-        total: 0,
-        counts: { scheduled: 0, posted: 0, failed: 0, paused: 0 },
-        quota: {
-          posts_today: 0, daily_cap: 10, remaining: 10, cap_reached: false,
-          label: '0 / 10 posts today', window: '08:00–21:00',
-        },
-      });
+      setQueue(emptyPublisherState());
+      if (!quiet) warnToast('Publisher queue unavailable — showing an empty queue.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [emptyPublisherState]);
 
   useEffect(() => { void fetchQueue(); }, [fetchQueue]);
 
@@ -596,6 +648,22 @@ function PublisherView() {
   const toggleAutoPublish = (on: boolean) => {
     setAutoPublish(on);
     localStorage.setItem(AUTO_PUBLISH_KEY, on ? 'on' : 'off');
+    void (async () => {
+      try {
+        const { ok, data } = await fetchMarketplaceJson('/marketplace/toggle-auto', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: on, auto_publish: on }),
+          warnMessage: 'Could not sync auto-publish setting — kept local preference.',
+        });
+        if (ok && typeof data.auto_publish === 'boolean') {
+          setAutoPublish(data.auto_publish);
+          localStorage.setItem(AUTO_PUBLISH_KEY, data.auto_publish ? 'on' : 'off');
+        }
+      } catch {
+        warnToast('Could not sync auto-publish setting — kept local preference.');
+      }
+    })();
   };
 
   const nextSlot = useMemo(() => {
@@ -619,8 +687,12 @@ function PublisherView() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ vin: item.vin }),
+        warnMessage: 'Could not generate Marketplace copy for this vehicle.',
       });
-      if (!ok) throw new Error(typeof data.error === 'string' ? data.error : 'Copy generation failed');
+      if (!ok) {
+        setCopyError(typeof data.error === 'string' ? data.error : 'Copy generation failed');
+        return;
+      }
       setCopyText(typeof data.ai_description === 'string' ? data.ai_description : '');
       setCopySource(typeof data.source === 'string' ? data.source : '');
     } catch (e: unknown) {
@@ -661,13 +733,17 @@ function PublisherView() {
           publish_now: publishNow,
           ...(publishNow ? {} : { scheduled_time: copyItem.scheduled_time || undefined }),
         }),
+        warnMessage: publishNow
+          ? 'Could not publish to the Marketplace queue.'
+          : 'Could not save the scheduled listing.',
       });
       if (!ok) {
-        throw new Error(
+        setCopyError(
           typeof data.error === 'string'
             ? data.error
             : (status === 429 ? 'Daily cap reached' : 'Request failed'),
         );
+        return;
       }
       setPublishMsg(publishNow ? 'Published to Marketplace queue.' : 'Copy saved to schedule.');
       await fetchQueue(true);
@@ -687,9 +763,11 @@ function PublisherView() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: item.id, status: next }),
+        warnMessage: 'Could not update listing status.',
       });
       if (!ok) {
-        throw new Error(typeof data.error === 'string' ? data.error : 'Status update failed');
+        setError(typeof data.error === 'string' ? data.error : 'Status update failed');
+        return;
       }
       await fetchQueue(true);
     } catch (e: unknown) {
@@ -1027,15 +1105,28 @@ function QueueView({ token }: { token: string }) {
   const fetchQueue = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const { data } = await fetchMarketplaceJson('/v1/marketplace/queue', {
+      const { ok, data } = await fetchMarketplaceJson('/v1/marketplace/queue', {
         headers: { Authorization: `Bearer ${token}` },
+        warnOnError: !quiet,
+        warnMessage: 'Posting queue unavailable — showing an empty schedule.',
       });
+      if (!ok) {
+        setQueue([]);
+        setStats({ Pending: 0, Posted: 0, Skipped: 0, total: 0, date: today });
+        return;
+      }
       setQueue(Array.isArray(data.queue) ? (data.queue as QueueItem[]) : []);
       setStats(
         (data.stats as QueueStats) ?? { Pending: 0, Posted: 0, Skipped: 0, total: 0, date: today },
       );
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+    } catch (e) {
+      console.error(e);
+      setQueue([]);
+      setStats({ Pending: 0, Posted: 0, Skipped: 0, total: 0, date: today });
+      if (!quiet) warnToast('Posting queue unavailable — showing an empty schedule.');
+    } finally {
+      setLoading(false);
+    }
   }, [token, today]);
 
   useEffect(() => { fetchQueue(); }, [fetchQueue]);
@@ -1043,33 +1134,46 @@ function QueueView({ token }: { token: string }) {
   const handleGenerate = async (force = false) => {
     setGenerating(true); setGenMsg('');
     try {
-      const res = await fetch(`${API_BASE}/v1/marketplace/queue/generate`, {
+      const { ok, data } = await fetchMarketplaceJson('/v1/marketplace/queue/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ force }),
+        warnMessage: 'Could not generate today\'s posting queue.',
       });
-      const data = await res.json();
+      if (!ok) {
+        setGenMsg(typeof data.error === 'string' ? data.error : 'Failed to generate queue.');
+        return;
+      }
       if (data.skipped) {
         setGenMsg(`Queue already exists (${data.total_existing} items). Use Regenerate to replace it.`);
       } else {
         setGenMsg(`Scheduled ${data.generated} posts for today.`);
         await fetchQueue(true);
       }
-    } catch { setGenMsg('Failed to generate queue.'); }
-    finally { setGenerating(false); setTimeout(() => setGenMsg(''), 5000); }
+    } catch {
+      setGenMsg('Failed to generate queue.');
+      warnToast('Could not generate today\'s posting queue.');
+    } finally {
+      setGenerating(false);
+      setTimeout(() => setGenMsg(''), 5000);
+    }
   };
 
   const handleUpdateStatus = async (item: QueueItem, status: QueueItem['status']) => {
     setUpdatingId(item.id);
     try {
-      await fetch(`${API_BASE}/v1/marketplace/queue/update`, {
+      const { ok } = await fetchMarketplaceJson('/v1/marketplace/queue/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ id: item.id, status }),
+        warnMessage: 'Could not update queue item status.',
       });
-      await fetchQueue(true);
-    } catch { console.error('update failed'); }
-    finally { setUpdatingId(null); }
+      if (ok) await fetchQueue(true);
+    } catch {
+      warnToast('Could not update queue item status.');
+    } finally {
+      setUpdatingId(null);
+    }
   };
 
   return (
@@ -1335,7 +1439,19 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     if (filterMaxYear) p.set('max_year', filterMaxYear);
     if (filterPosted) p.set('posted_status', filterPosted);
     try {
-      const { data } = await fetchMarketplaceJson(`/marketplace/inventory?${p}`);
+      const { ok, data } = await fetchMarketplaceJson(`/marketplace/inventory?${p}`, {
+        warnOnError: !quiet,
+        warnMessage: 'Inventory unavailable — showing an empty list.',
+      });
+      if (!ok) {
+        setInventory([]);
+        setMakes([]);
+        setModels([]);
+        setYears([]);
+        setLocations([]);
+        setCounts({ ACTIVE: 0, SOLD: 0, total: 0, posted: 0 });
+        return;
+      }
       setInventory(Array.isArray(data.inventory) ? (data.inventory as Vehicle[]) : []);
       setMakes(Array.isArray(data.makes) ? (data.makes as string[]) : []);
       setModels(Array.isArray(data.models) ? (data.models as string[]) : []);
@@ -1349,9 +1465,15 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     } catch (e) {
       console.error(e);
       setInventory([]);
+      setMakes([]);
+      setModels([]);
+      setYears([]);
+      setLocations([]);
       setCounts({ ACTIVE: 0, SOLD: 0, total: 0, posted: 0 });
+      if (!quiet) warnToast('Inventory unavailable — showing an empty list.');
+    } finally {
+      setLoading(false);
     }
-    finally { setLoading(false); }
   }, [filterCondition, filterMinPrice, filterMaxPrice, filterMinYear, filterMaxYear, filterPosted]);
 
   useEffect(() => { fetchInventory(); }, [fetchInventory]);
@@ -1663,23 +1785,25 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     try {
       // Token-free Marketplace copy endpoint — works for manual copy/paste without
       // Meta credentials or a session.
-      const res = await fetch(`${API_BASE}/marketplace/generate-copy`, {
+      const { ok, data } = await fetchMarketplaceJson('/marketplace/generate-copy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ vin: vehicle.vin }),
+        warnOnError: false,
       });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ai_description) {
+      if (ok && data.ai_description) {
         setDrawerCopy(String(data.ai_description));
-        setDrawerTitle(data.title || [
-          vehicle.year, vehicle.make, vehicle.model, vehicle.trim,
-        ].filter(Boolean).join(' '));
-        setDrawerSource(data.source || '');
+        setDrawerTitle(
+          (typeof data.title === 'string' && data.title) || [
+            vehicle.year, vehicle.make, vehicle.model, vehicle.trim,
+          ].filter(Boolean).join(' '),
+        );
+        setDrawerSource(typeof data.source === 'string' ? data.source : '');
         // Keep a GeneratedPost cache so any legacy expand UI stays warm.
         setPosts(prev => ({
           ...prev,
           [vehicle.vin]: {
-            title: data.title || '',
+            title: typeof data.title === 'string' ? data.title : '',
             features: [],
             description: String(data.ai_description),
             hashtags: '',
@@ -1687,9 +1811,11 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
         }));
       } else if (data.error) {
         setDrawerError(String(data.error));
+        warnToast('Could not refresh AI copy — using the local draft.');
       }
     } catch {
       setDrawerError('Could not reach the copy engine — using the local draft below.');
+      warnToast('Could not reach the copy engine — using the local draft.');
     } finally {
       setDrawerLoading(false);
       setGeneratingVin(null);
