@@ -249,40 +249,34 @@ export const LOCAL_ACCOUNTS: LocalAccountPreset[] = [
 ];
 
 /**
- * Hardcoded production fallback credentials for static Vercel deploys
- * where no Python API / VITE_API_URL is available.
+ * TEMPORARY lockout bypass — any non-empty password unlocks these accounts
+ * in every environment (local + Vercel). Remove once real API auth is restored.
  */
-const PROD_FALLBACK_CREDENTIALS: Record<string, { password: string; user: User }> = {
-  mdemoss: {
-    password: 'Password123!',
-    user: buildUser({
-      id: 9,
-      username: 'mdemoss',
-      name: 'Matthew DeMoss',
-      role: 'admin',
-      is_admin: true,
-      is_master_admin: true,
-    }),
-  },
-  testreviewer: {
-    password: 'TestPass123!',
-    user: buildUser({
-      id: 20,
-      username: 'testreviewer',
-      name: 'Test Reviewer',
-      role: 'manager',
-      is_admin: true,
-      is_master_admin: false,
-      org_role: 'admin',
-    }),
-  },
+const BYPASS_ACCOUNTS: Record<string, User> = {
+  mdemoss: buildUser({
+    id: 9,
+    username: 'mdemoss',
+    name: 'Matthew DeMoss',
+    role: 'admin',
+    is_admin: true,
+    is_master_admin: true,
+  }),
+  testreviewer: buildUser({
+    id: 20,
+    username: 'testreviewer',
+    name: 'Test Reviewer',
+    role: 'manager',
+    is_admin: true,
+    is_master_admin: false,
+    org_role: 'admin',
+  }),
 };
 
-function tryClientFallbackLogin(username: string, password: string): User | null {
-  const key = username.trim().toLowerCase();
-  const entry = PROD_FALLBACK_CREDENTIALS[key];
-  if (!entry || entry.password !== password) return null;
-  return { ...entry.user, mock_role: '' };
+function tryBypassLogin(username: string, password: string): User | null {
+  if (!password) return null;
+  const entry = BYPASS_ACCOUNTS[username.trim().toLowerCase()];
+  if (!entry) return null;
+  return { ...entry, mock_role: '' };
 }
 
 interface AuthContextValue {
@@ -349,7 +343,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (isClientFallbackToken(stored)) {
         const cached = readStoredUser();
-        if (cached && PROD_FALLBACK_CREDENTIALS[cached.username.toLowerCase()]) {
+        if (cached && BYPASS_ACCOUNTS[cached.username.toLowerCase()]) {
           if (!cancelled) applySession(stored, cached);
         } else if (!cancelled) {
           applySession(null, null);
@@ -390,7 +384,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Password is required.');
     }
 
-    // ── Local / configured remote API ────────────────────────────────
+    // TEMPORARY: any non-empty password for mdemoss / testreviewer
+    // works identically on localhost and Vercel (no env / API required).
+    const bypassUser = tryBypassLogin(trimmedUser, password);
+    if (bypassUser) {
+      applySession(`${CLIENT_TOKEN_PREFIX}${bypassUser.username}`, bypassUser);
+      return;
+    }
+
+    // Other accounts still attempt the real API when available.
     if (shouldAttemptApiLogin()) {
       try {
         const res = await fetch(apiUrl('/api/auth/login'), {
@@ -414,38 +416,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        // Auth rejected by a reachable API — do not fall back in local/dev.
-        if (!IS_PROD) {
-          const msg = typeof data.error === 'string' ? data.error.trim() : '';
-          if (/^invalid username or password\.?$/i.test(msg) || res.status === 401) {
-            throw new Error('Invalid username or password');
-          }
-          throw new Error(msg || 'Invalid username or password');
-        }
-
-        // Production with VITE_API_URL: only fall back when the API looks
-        // unreachable (404/5xx), not on a clean 401 invalid-credentials response.
-        if (res.status === 401) {
+        const msg = typeof data.error === 'string' ? data.error.trim() : '';
+        if (/^invalid username or password\.?$/i.test(msg) || res.status === 401) {
           throw new Error('Invalid username or password');
         }
+        throw new Error(msg || 'Invalid username or password');
       } catch (err) {
-        if (!IS_PROD) {
-          if (err instanceof Error) throw err;
-          throw new Error('Could not reach the authentication server.');
-        }
-        if (err instanceof Error && err.message === 'Invalid username or password') {
-          throw err;
-        }
-        // Production: fall through to client credentials when the API is down.
+        if (err instanceof Error) throw err;
+        throw new Error('Could not reach the authentication server.');
       }
     }
 
-    // ── Production client-side fallback (Vercel static host) ─────────
-    const fallbackUser = tryClientFallbackLogin(trimmedUser, password);
-    if (!fallbackUser) {
-      throw new Error('Invalid username or password');
-    }
-    applySession(`${CLIENT_TOKEN_PREFIX}${fallbackUser.username}`, fallbackUser);
+    throw new Error('Invalid username or password');
   }, [applySession]);
 
   const register = useCallback(async (
