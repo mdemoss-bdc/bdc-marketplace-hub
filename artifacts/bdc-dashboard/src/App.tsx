@@ -276,11 +276,11 @@ function Router() {
 }
 
 /**
- * Local session gate — password LoginPage when logged out, app shell when signed in.
- * No splash spinner; auth is synchronous from localStorage `active_user`.
+ * Session gate — LoginPage when logged out, app shell when signed in.
+ * Waits for token restore (/api/auth/me) before deciding.
  */
 function AuthGate() {
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const [location] = useLocation();
 
   // Keep a few marketing/legal deep-links public without a sidebar shell.
@@ -294,6 +294,14 @@ function AuthGate() {
     location === '/suspended'
   ) {
     return <PublicRouter />;
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-slate-950 text-sm text-slate-400">
+        Checking session…
+      </div>
+    );
   }
 
   if (!isAuthenticated || !user) {

@@ -30,13 +30,13 @@ export interface User {
   tiktok_token_expires_at: string;
   tiktok_privacy_level: string;
   pending_extra_seats: number;
-  /** Display name for the local account switcher. */
+  /** Display name for the account switcher / header. */
   name: string;
   /** Short role label: admin | rep | manager */
   role: string;
 }
 
-/** Preset local accounts — no external identity provider. */
+/** Preset labels for the optional account switcher UI (display only). */
 export interface LocalAccountPreset {
   id: string;
   label: string;
@@ -44,8 +44,81 @@ export interface LocalAccountPreset {
   user: User;
 }
 
+const TOKEN_KEY = 'bdc_token';
+const USER_KEY = 'bdc_user';
 const ACTIVE_USER_KEY = 'active_user';
-const LOCAL_TOKEN = 'local-dev-force-auth';
+const API_BASE = '/api';
+
+function roleFromUser(u: {
+  is_master_admin?: boolean;
+  is_admin?: boolean;
+  org_role?: string;
+}): string {
+  if (u.is_master_admin) return 'admin';
+  if (u.org_role === 'admin') return 'manager';
+  if (u.is_admin) return 'manager';
+  return 'rep';
+}
+
+function mapApiUser(raw: Record<string, unknown>): User {
+  const username = String(raw.username ?? '');
+  const isAdmin = Boolean(raw.is_admin);
+  const isMaster = Boolean(raw.is_master_admin);
+  return {
+    id: Number(raw.id) || 0,
+    username,
+    name: username,
+    role: roleFromUser({
+      is_master_admin: isMaster,
+      is_admin: isAdmin,
+      org_role: String(raw.org_role ?? ''),
+    }),
+    is_admin: isAdmin,
+    is_master_admin: isMaster,
+    subscription_status: String(raw.subscription_status ?? 'inactive'),
+    subscription_tier: String(raw.subscription_tier ?? ''),
+    org_role: String(raw.org_role ?? ''),
+    organization_id:
+      raw.organization_id === null || raw.organization_id === undefined
+        ? null
+        : Number(raw.organization_id),
+    email: String(raw.email ?? ''),
+    email_verified: Boolean(raw.email_verified),
+    is_suspended: Boolean(raw.is_suspended),
+    created_at: String(raw.created_at ?? ''),
+    recovery_id: raw.recovery_id ? String(raw.recovery_id) : undefined,
+    mock_role: (String(raw.mock_role ?? '') as MockRole) || '',
+    tiktok_connected: Boolean(raw.tiktok_connected),
+    tiktok_token_expires_at: String(raw.tiktok_token_expires_at ?? ''),
+    tiktok_privacy_level: String(raw.tiktok_privacy_level ?? 'SELF_ONLY'),
+    pending_extra_seats: Number(raw.pending_extra_seats) || 0,
+  };
+}
+
+function readStoredToken(): string | null {
+  try {
+    const t = localStorage.getItem(TOKEN_KEY);
+    // Reject the old local-dev bypass token — it is not a real session.
+    if (!t || t === 'local-dev-force-auth') return null;
+    return t;
+  } catch {
+    return null;
+  }
+}
+
+function persistSession(token: string | null, user: User | null) {
+  if (token && user) {
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(USER_KEY, JSON.stringify(user));
+    localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(user));
+    localStorage.setItem('user', user.username);
+  } else {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    localStorage.setItem(ACTIVE_USER_KEY, '');
+    localStorage.removeItem('user');
+  }
+}
 
 function buildUser(partial: {
   id: number;
@@ -80,6 +153,7 @@ function buildUser(partial: {
   };
 }
 
+/** Display presets only — never used to grant a session without a password. */
 export const LOCAL_ACCOUNTS: LocalAccountPreset[] = [
   {
     id: 'mdemoss',
@@ -136,33 +210,6 @@ export const LOCAL_ACCOUNTS: LocalAccountPreset[] = [
   },
 ];
 
-/** Stable numeric id for free-typed local usernames. */
-function localIdForUsername(username: string): number {
-  let h = 0;
-  for (let i = 0; i < username.length; i++) {
-    h = (h * 31 + username.charCodeAt(i)) >>> 0;
-  }
-  return 1000 + (h % 90000);
-}
-
-function resolveLocalUser(usernameRaw: string): User {
-  const username = usernameRaw.trim().toLowerCase();
-  const preset = LOCAL_ACCOUNTS.find(
-    (a) => a.user.username.toLowerCase() === username,
-  );
-  if (preset) return { ...preset.user, mock_role: '' };
-
-  // Free-typed username — mint a local session profile on the fly.
-  const pretty = usernameRaw.trim() || username;
-  return buildUser({
-    id: localIdForUsername(username),
-    username,
-    name: pretty,
-    role: 'rep',
-    is_admin: false,
-    is_master_admin: false,
-  });
-}
 interface AuthContextValue {
   user: User | null;
   token: string | null;
@@ -174,7 +221,7 @@ interface AuthContextValue {
   mockRole: MockRole;
   effectiveIsMasterAdmin: boolean;
   effectiveOrgRole: string;
-  /** One-click local account switch — writes `active_user` to localStorage. */
+  /** Disabled passwordless switch — kept for API compatibility. */
   switchAccount: (accountId: string) => void;
   setMockRole: (role: MockRole) => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -186,61 +233,61 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-/** Empty string = explicitly logged out. Missing key = first visit → Primary Admin. */
-function readActiveUser(): User | null {
-  try {
-    const raw = localStorage.getItem(ACTIVE_USER_KEY);
-    if (raw === null) return LOCAL_ACCOUNTS[0].user;
-    if (raw === '') return null;
-    const parsed = JSON.parse(raw) as User;
-    if (!parsed?.username) return null;
-    return parsed;
-  } catch {
-    return LOCAL_ACCOUNTS[0].user;
+async function fetchMe(token: string): Promise<User> {
+  const res = await fetch(`${API_BASE}/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error('Session expired. Please sign in again.');
   }
-}
-
-function writeActiveUser(user: User | null) {
-  if (user) {
-    localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(user));
-    localStorage.setItem('bdc_user', JSON.stringify(user));
-    localStorage.setItem('bdc_token', LOCAL_TOKEN);
-    // Explicit session key requested by the local login flow.
-    localStorage.setItem('user', user.username);
-  } else {
-    localStorage.setItem(ACTIVE_USER_KEY, '');
-    localStorage.removeItem('bdc_user');
-    localStorage.removeItem('bdc_token');
-    localStorage.removeItem('user');
-  }
+  const data = await res.json();
+  return mapApiUser(data as Record<string, unknown>);
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(() => readActiveUser());
-  const [token, setToken] = useState<string | null>(() =>
-    readActiveUser() ? LOCAL_TOKEN : null,
-  );
-  // Local auth never blocks first paint with a network spinner.
-  const [isLoading] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const tokenRef = useRef<string | null>(null);
   tokenRef.current = token;
 
+  const applySession = useCallback((nextToken: string | null, nextUser: User | null) => {
+    setToken(nextToken);
+    setUser(nextUser);
+    persistSession(nextToken, nextUser);
+  }, []);
+
+  // Restore a real server session on boot — never invent a local user.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const stored = readStoredToken();
+      if (!stored) {
+        // Clear any leftover local-dev bypass session.
+        persistSession(null, null);
+        if (!cancelled) {
+          setToken(null);
+          setUser(null);
+          setIsLoading(false);
+        }
+        return;
+      }
+      try {
+        const me = await fetchMe(stored);
+        if (!cancelled) applySession(stored, me);
+      } catch {
+        if (!cancelled) applySession(null, null);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [applySession]);
+
   useEffect(() => {
     setAuthTokenGetter(() => token);
   }, [token]);
-
-  const applyUser = useCallback((next: User | null) => {
-    setUser(next);
-    setToken(next ? LOCAL_TOKEN : null);
-    writeActiveUser(next);
-  }, []);
-
-  const switchAccount = useCallback((accountId: string) => {
-    const preset = LOCAL_ACCOUNTS.find((a) => a.id === accountId);
-    if (!preset) return;
-    applyUser({ ...preset.user, mock_role: '' });
-  }, [applyUser]);
 
   const login = useCallback(async (username: string, password: string) => {
     const trimmedUser = username.trim();
@@ -250,61 +297,161 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!password) {
       throw new Error('Password is required.');
     }
-    // Local auth: any non-empty password is accepted for any username
-    // (mdemoss, mdemoss1, jdemoss, or a free-typed account).
-    applyUser(resolveLocalUser(trimmedUser));
-  }, [applyUser]);
+
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: trimmedUser, password }),
+      });
+    } catch {
+      throw new Error('Could not reach the authentication server.');
+    }
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = typeof data.error === 'string' ? data.error.trim() : '';
+      // Normalize to the product-facing message (drop trailing period if present).
+      if (/^invalid username or password\.?$/i.test(msg) || res.status === 401) {
+        throw new Error('Invalid username or password');
+      }
+      throw new Error(msg || 'Invalid username or password');
+    }
+
+    const sessionToken = String(data.token || '');
+    if (!sessionToken) {
+      throw new Error('Invalid username or password');
+    }
+
+    // Prefer the full /me profile (includes is_master_admin).
+    try {
+      const me = await fetchMe(sessionToken);
+      applySession(sessionToken, me);
+    } catch {
+      applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
+    }
+  }, [applySession]);
 
   const register = useCallback(async (
-    username: string, password: string, _email: string, _tosAccepted: boolean,
-    _visitorId = '', _referralCode = '', _orgInvite = '',
-    _accountType: 'individual' | 'rooftop' = 'individual',
-    _dealershipName = '', _extraSeats = 0,
-    _billingCycle: 'monthly' | 'annual' | 'lifetime' = 'monthly',
+    username: string, password: string, email: string, tosAccepted: boolean,
+    visitorId = '', referralCode = '', orgInvite = '',
+    accountType: 'individual' | 'rooftop' = 'individual',
+    dealershipName = '', extraSeats = 0,
+    billingCycle: 'monthly' | 'annual' | 'lifetime' = 'monthly',
   ) => {
     if (!username.trim()) throw new Error('Username is required.');
     if (!password) throw new Error('Password is required.');
-    applyUser(resolveLocalUser(username));
-  }, [applyUser]);
+
+    const res = await fetch(`${API_BASE}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: username.trim(),
+        password,
+        email,
+        tos_accepted: tosAccepted,
+        visitor_id: visitorId,
+        referral_code: referralCode,
+        org_invite: orgInvite,
+        account_type: accountType,
+        dealership_name: dealershipName,
+        extra_seats: extraSeats,
+        billing_cycle: billingCycle,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        typeof data.error === 'string' ? data.error : 'Registration failed.',
+      );
+    }
+    const sessionToken = String(data.token || '');
+    if (sessionToken) {
+      try {
+        const me = await fetchMe(sessionToken);
+        applySession(sessionToken, me);
+      } catch {
+        applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
+      }
+    }
+  }, [applySession]);
 
   const logout = useCallback(async () => {
-    // Local-only — no network call to any auth provider.
-    applyUser(null);
-  }, [applyUser]);
+    const tok = tokenRef.current;
+    if (tok) {
+      try {
+        await fetch(`${API_BASE}/auth/logout`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${tok}`,
+            'Content-Type': 'application/json',
+          },
+          body: '{}',
+        });
+      } catch {
+        // Still clear local session if the network call fails.
+      }
+    }
+    applySession(null, null);
+  }, [applySession]);
 
   const authFetch = useCallback(
     async (input: string, init: RequestInit = {}): Promise<Response> => {
       const tok = tokenRef.current;
       const headers = new Headers(init.headers);
       if (tok) headers.set('Authorization', `Bearer ${tok}`);
-      // Never auto-clear the local session on API 401 — that bounced users
-      // into a login loop. Logout is an explicit UI action only.
       return fetch(input, { ...init, headers });
     },
     [],
   );
 
   const refreshUser = useCallback(async () => {
-    const current = readActiveUser();
-    if (current) setUser(current);
+    const tok = tokenRef.current;
+    if (!tok) return;
+    try {
+      const me = await fetchMe(tok);
+      applySession(tok, me);
+    } catch {
+      applySession(null, null);
+    }
+  }, [applySession]);
+
+  // Passwordless account switching is disabled — login requires a real password.
+  const switchAccount = useCallback((_accountId: string) => {
+    console.warn('[auth] switchAccount is disabled; use the login form with a password.');
   }, []);
 
   const setMockRole = useCallback(async (role: MockRole) => {
+    const tok = tokenRef.current;
+    if (!tok) return;
+    try {
+      await fetch(`${API_BASE}/admin/impersonate`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${tok}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ mock_role: role }),
+      });
+    } catch {
+      // Fall through to local override if the endpoint is unavailable.
+    }
     setUser((prev) => {
       if (!prev) return prev;
       const next = { ...prev, mock_role: role };
-      writeActiveUser(next);
+      persistSession(tok, next);
       return next;
     });
   }, []);
 
-  const isAuthenticated        = Boolean(user);
-  const isSubscribed           = Boolean(user?.is_admin || user?.subscription_status === 'active');
-  const isEmailVerified        = Boolean(user?.is_admin || user?.email_verified);
-  const isMasterAdmin          = Boolean(user?.is_master_admin);
-  const mockRole               = (user?.mock_role ?? '') as MockRole;
+  const isAuthenticated = Boolean(user && token);
+  const isSubscribed = Boolean(user?.is_admin || user?.subscription_status === 'active');
+  const isEmailVerified = Boolean(user?.is_admin || user?.email_verified);
+  const isMasterAdmin = Boolean(user?.is_master_admin);
+  const mockRole = (user?.mock_role ?? '') as MockRole;
   const effectiveIsMasterAdmin = mockRole === 'rooftop_admin' ? false : isMasterAdmin;
-  const effectiveOrgRole       = mockRole === 'rooftop_admin' ? 'admin' : (user?.org_role ?? '');
+  const effectiveOrgRole = mockRole === 'rooftop_admin' ? 'admin' : (user?.org_role ?? '');
 
   const value = useMemo(
     () => ({

@@ -1,5 +1,5 @@
 /**
- * Re-export shim — auth lives in auth.tsx (localStorage `active_user` switcher).
+ * Re-export shim — auth lives in auth.tsx (server-backed password sessions).
  */
 export {
   useAuth,
