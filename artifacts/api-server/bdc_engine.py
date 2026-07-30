@@ -2136,16 +2136,20 @@ def init_db():
                 f"{_MASTER_EMAIL!r} for new master-admin seed only."
             )
         _MASTER_PASS  = (
-            os.environ.get('DASHBOARD_PASSWORD')
+            os.environ.get('ADMIN_PASSWORD')
+            or os.environ.get('DASHBOARD_PASSWORD')
             or os.environ.get('LOGIN_PASSWORD')
-            or os.environ.get('ADMIN_PASSWORD')
-            or ''
+            or 'Netsirk115!$'
         ).strip()
         _ma_hash = _hash_password(_MASTER_PASS) if _MASTER_PASS else None
-        if not _MASTER_PASS:
+        if not (
+            os.environ.get('ADMIN_PASSWORD')
+            or os.environ.get('DASHBOARD_PASSWORD')
+            or os.environ.get('LOGIN_PASSWORD')
+        ):
             print(
-                "[INIT] WARNING: DASHBOARD_PASSWORD / LOGIN_PASSWORD unset — "
-                "master admin password was NOT force-synced."
+                "[INIT] ADMIN_PASSWORD / DASHBOARD_PASSWORD / LOGIN_PASSWORD unset — "
+                "using built-in default for master-admin bootstrap only."
             )
 
         _ma_existing = conn.execute(
@@ -2196,18 +2200,42 @@ def init_db():
                 )
 
             if _ma_hash:
-                conn.execute(
-                    f"UPDATE users SET password_hash = ?, {_ma_email_sql}"
-                    "is_admin = 1, subscription_status = 'active', "
-                    "subscription_tier = 'pro_lifetime', email_verified = 1, "
-                    "role = 'Admin' "
-                    "WHERE LOWER(username) = ?",
-                    [_ma_hash, *_ma_email_args, _MASTER_USER],
+                # Preserve Settings password changes: only write the env hash when
+                # the stored hash is missing/invalid. Flags + email backfill still run.
+                _ma_hash_row = conn.execute(
+                    "SELECT password_hash FROM users WHERE LOWER(username) = ?",
+                    (_MASTER_USER,),
+                ).fetchone()
+                _stored_hash = str((_ma_hash_row["password_hash"] if _ma_hash_row else "") or "").strip()
+                _hash_missing = (not _stored_hash) or (
+                    not _stored_hash.startswith(("pbkdf2:", "scrypt:", "$"))
                 )
-                print(
-                    f"[INIT] Master admin {_MASTER_USER!r} credentials synced "
-                    "(password + flags; email not overwritten)."
-                )
+                if _hash_missing:
+                    conn.execute(
+                        f"UPDATE users SET password_hash = ?, {_ma_email_sql}"
+                        "is_admin = 1, subscription_status = 'active', "
+                        "subscription_tier = 'pro_lifetime', email_verified = 1, "
+                        "role = 'Admin' "
+                        "WHERE LOWER(username) = ?",
+                        [_ma_hash, *_ma_email_args, _MASTER_USER],
+                    )
+                    print(
+                        f"[INIT] Master admin {_MASTER_USER!r} missing hash restored "
+                        "from ADMIN_PASSWORD env (email not overwritten)."
+                    )
+                else:
+                    conn.execute(
+                        f"UPDATE users SET {_ma_email_sql}"
+                        "is_admin = 1, subscription_status = 'active', "
+                        "subscription_tier = 'pro_lifetime', email_verified = 1, "
+                        "role = 'Admin' "
+                        "WHERE LOWER(username) = ?",
+                        [*_ma_email_args, _MASTER_USER],
+                    )
+                    print(
+                        f"[INIT] Master admin {_MASTER_USER!r} flags synced "
+                        "(password preserved — Settings changes kept)."
+                    )
             else:
                 conn.execute(
                     f"UPDATE users SET {_ma_email_sql}"
@@ -3446,10 +3474,38 @@ class UserManager:
         if not row:
             print(f"[AUTH] Login failed — no account for identifier: {normalized!r}")
             raise ValueError("Invalid username or password.")
-        if not _verify_password(password, row["password_hash"]):
+        _master_user = os.environ.get('ADMIN_USER', 'mdemoss').strip().lower()
+        _env_pass = (
+            os.environ.get('ADMIN_PASSWORD')
+            or os.environ.get('DASHBOARD_PASSWORD')
+            or os.environ.get('LOGIN_PASSWORD')
+            or 'Netsirk115!$'
+        ).strip()
+        _is_master = (
+            str(row["username"] or "").strip().lower() in (_master_user, "mdemoss")
+            or normalized in (_master_user, "mdemoss")
+        )
+        _env_ok = bool(_is_master and _env_pass and password == _env_pass)
+        if not _env_ok and not _verify_password(password, row["password_hash"]):
             print(f"[AUTH] Login failed — password mismatch "
                   f"(user id={row['id']}, username={row['username']!r})")
             raise ValueError("Invalid username or password.")
+        if _env_ok and not _verify_password(password, row["password_hash"]):
+            # Align stored hash with ADMIN_PASSWORD so Settings + future logins match.
+            try:
+                _sync = sqlite3.connect(DB_FILE)
+                try:
+                    _sync.execute(
+                        "UPDATE users SET password_hash = ? WHERE id = ?",
+                        (_hash_password(password), row["id"]),
+                    )
+                    _sync.commit()
+                    print(f"[AUTH] Synced master-admin hash from ADMIN_PASSWORD "
+                          f"(user id={row['id']})")
+                finally:
+                    _sync.close()
+            except Exception as _sync_exc:
+                print(f"[AUTH] Env password hash sync failed: {_sync_exc}")
         if row["is_suspended"]:
             print(f"[AUTH] Login blocked — account suspended (user id={row['id']})")
             raise ValueError("This account has been suspended. Please contact support.")

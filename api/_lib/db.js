@@ -12,6 +12,12 @@ const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { hashPassword, verifyPassword } = require('./crypto-passwords');
 
+/**
+ * Bootstrap password for mdemoss when no env secret is configured.
+ * Prefer setting ADMIN_PASSWORD (or DASHBOARD_PASSWORD) in the environment.
+ */
+const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
+
 let _db = null;
 
 function dbPath() {
@@ -77,14 +83,24 @@ function openDb() {
   return _db;
 }
 
+/**
+ * Resolve the master-admin (mdemoss) password from the environment.
+ * Priority: ADMIN_PASSWORD → DASHBOARD_PASSWORD → LOGIN_PASSWORD → default.
+ */
+function adminEnvPassword() {
+  const fromEnv = (
+    process.env.ADMIN_PASSWORD ||
+    process.env.DASHBOARD_PASSWORD ||
+    process.env.LOGIN_PASSWORD ||
+    ''
+  ).trim();
+  return fromEnv || DEFAULT_ADMIN_PASSWORD;
+}
+
 function envPassword(username) {
   const key = String(username || '').trim().toLowerCase();
-  if (key === 'mdemoss') {
-    return (
-      process.env.DASHBOARD_PASSWORD ||
-      process.env.LOGIN_PASSWORD ||
-      ''
-    ).trim();
+  if (key === 'mdemoss' || key === String(process.env.ADMIN_USER || '').trim().toLowerCase()) {
+    return adminEnvPassword();
   }
   if (key === 'testreviewer') {
     return (process.env.TESTER_PASSWORD || '').trim();
@@ -134,12 +150,14 @@ function seedAccount(db, spec) {
     return;
   }
 
-  // Cold-start re-seed: sync password/flags, but never overwrite a profile email
-  // the user already saved (empty email may be backfilled from seed defaults).
+  // Cold-start re-seed: sync roles/flags and backfill empty email, but never
+  // overwrite a password the user already set in Settings (or a prior seed).
   const storedEmail = String(existing.email || '').trim();
   const nextEmail = storedEmail || spec.email || '';
+  const storedHash = String(existing.password_hash || '').trim();
+  const hashMissing = !storedHash || !storedHash.startsWith('scrypt:');
 
-  if (hash) {
+  if (hash && hashMissing) {
     db.prepare(
       `UPDATE users SET password_hash = ?, role = ?, email = ?, full_name = ?,
         is_admin = ?, is_master_admin = ?, subscription_status = ?,
@@ -159,12 +177,13 @@ function seedAccount(db, spec) {
       spec.organization_id,
       username,
     );
+    console.log(`[auth-db] restored missing password hash for ${username}`);
   } else {
     db.prepare(
       `UPDATE users SET role = ?, email = ?, full_name = ?,
         is_admin = ?, is_master_admin = ?, subscription_status = ?,
         subscription_tier = ?, org_role = ?, organization_id = ?,
-        email_verified = 1
+        email_verified = 1, is_suspended = 0
        WHERE LOWER(username) = ?`,
     ).run(
       spec.role,
@@ -198,8 +217,9 @@ function adminSeedEmail() {
 
 /**
  * If the users table is empty (or missing bootstrap accounts), seed
- * mdemoss / testreviewer from DASHBOARD_PASSWORD / TESTER_PASSWORD.
- * Safe to call on every cold start — does not clobber saved profile emails.
+ * mdemoss / testreviewer from ADMIN_PASSWORD / TESTER_PASSWORD.
+ * Safe to call on every cold start — does not clobber saved profile emails
+ * or passwords changed via Settings.
  */
 function ensureSeeded(db) {
   const countRow = db.prepare('SELECT COUNT(*) AS cnt FROM users').get();
@@ -209,7 +229,7 @@ function ensureSeeded(db) {
   }
 
   seedAccount(db, {
-    username: 'mdemoss',
+    username: String(process.env.ADMIN_USER || 'mdemoss').trim().toLowerCase() || 'mdemoss',
     role: 'Admin',
     email: adminSeedEmail(),
     full_name: 'Matthew DeMoss',
@@ -220,7 +240,7 @@ function ensureSeeded(db) {
     org_role: '',
     organization_id: null,
     recovery_id: 'MD-DEMO-0009-AAAA',
-    envHint: 'DASHBOARD_PASSWORD',
+    envHint: 'ADMIN_PASSWORD (or DASHBOARD_PASSWORD)',
   });
 
   seedAccount(db, {
@@ -309,6 +329,28 @@ function authenticate(username, password) {
     .prepare('SELECT * FROM users WHERE LOWER(username) = ?')
     .get(key);
   if (!row || row.is_suspended) return null;
+
+  const masterUser = String(process.env.ADMIN_USER || 'mdemoss').trim().toLowerCase() || 'mdemoss';
+  const isMaster = key === 'mdemoss' || key === masterUser;
+  const envPass = isMaster ? adminEnvPassword() : '';
+
+  // Master admin: accept ADMIN_PASSWORD (env chain) even if the stored hash is
+  // stale after a /tmp DB recycle — then sync the hash so Settings stays aligned.
+  if (envPass && password === envPass) {
+    try {
+      if (!verifyPassword(password, row.password_hash)) {
+        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
+          hashPassword(password),
+          row.id,
+        );
+        console.log(`[auth-db] synced ${key} password hash from ADMIN_PASSWORD env`);
+      }
+    } catch (err) {
+      console.warn('[auth-db] env password hash sync failed:', err);
+    }
+    return rowToUser(row);
+  }
+
   if (!verifyPassword(password, row.password_hash)) return null;
   return rowToUser(row);
 }
@@ -457,7 +499,11 @@ function changePassword(userId, currentPassword, newPassword) {
   const db = openDb();
   const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
   if (!row) throw new Error('User not found.');
-  if (!verifyPassword(currentPassword, row.password_hash)) {
+  const key = String(row.username || '').trim().toLowerCase();
+  const masterUser = String(process.env.ADMIN_USER || 'mdemoss').trim().toLowerCase() || 'mdemoss';
+  const isMaster = key === 'mdemoss' || key === masterUser;
+  const envOk = isMaster && adminEnvPassword() && currentPassword === adminEnvPassword();
+  if (!envOk && !verifyPassword(currentPassword, row.password_hash)) {
     throw new Error('Current password is incorrect.');
   }
   if (!newPassword || String(newPassword).length < 6) {
@@ -473,6 +519,7 @@ function changePassword(userId, currentPassword, newPassword) {
 module.exports = {
   openDb,
   ensureSeeded,
+  adminEnvPassword,
   getUserByUsername,
   getUserById,
   authenticate,

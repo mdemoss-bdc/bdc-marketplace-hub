@@ -1,7 +1,7 @@
 /**
  * Account profiles + credential verification backed by persistent SQLite
  * (api/_lib/db.js). Passwords are scrypt-hashed; bootstrap accounts are
- * seeded from DASHBOARD_PASSWORD / TESTER_PASSWORD when the DB is empty.
+ * seeded from ADMIN_PASSWORD / TESTER_PASSWORD on cold start.
  */
 const {
   authenticate: dbAuthenticate,

@@ -11,6 +11,7 @@ const MAX_AGE_SEC = 7 * 24 * 60 * 60; // 7d
 function jwtSecret() {
   return (
     process.env.AUTH_SESSION_SECRET ||
+    process.env.ADMIN_PASSWORD ||
     process.env.DASHBOARD_PASSWORD ||
     ''
   );
@@ -48,7 +49,7 @@ function safeEqual(a, b) {
 function signJwt(claims) {
   const secret = jwtSecret();
   if (!secret) {
-    throw new Error('AUTH_SESSION_SECRET or DASHBOARD_PASSWORD must be configured.');
+    throw new Error('AUTH_SESSION_SECRET, ADMIN_PASSWORD, or DASHBOARD_PASSWORD must be configured.');
   }
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: 'HS256', typ: 'JWT' };
