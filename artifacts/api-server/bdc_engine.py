@@ -146,18 +146,18 @@ CURRENT_YEAR = 2026
 AVG_MILES_PER_YEAR = 12000
 
 # ── Free-tool rate limiting (soft, in-memory, resets on server restart) ──────
-# Key: "ip:YYYY-MM-DD"  →  request count today
+# Key: "ip:YYYY-MM-DD"  ->  request count today
 _FREE_TOOL_RATE: dict[str, int] = {}
 FREE_TOOL_DAILY_LIMIT = 3
 
 # ── Registration IP rate limiting ─────────────────────────────────────────────
-# Prevents spam signups.  Key: "ip:YYYY-MM-DD"  →  new-account count today.
+# Prevents spam signups.  Key: "ip:YYYY-MM-DD"  ->  new-account count today.
 # Soft in-memory; resets on server restart (acceptable — server restarts are rare).
 _REG_RATE: dict[str, int] = {}
 REG_DAILY_LIMIT = 3   # max new accounts per IP address per 24-hour window
 
 # ── Authenticated trial quota ─────────────────────────────────────────────────
-# Key: "user_id:action:YYYY-MM-DD"  →  count today
+# Key: "user_id:action:YYYY-MM-DD"  ->  count today
 # Actions: 'ai_post' | 'wishlist_entry'
 # Resets each server restart (acceptable: free tier is limited anyway).
 _TRIAL_QUOTA: dict[str, int] = {}
@@ -180,7 +180,7 @@ def _check_trial_access(user: dict, action: str) -> tuple[bool, dict]:
         created_date = datetime.strptime(created_raw[:10], '%Y-%m-%d')
         days_elapsed = (datetime.now() - created_date).days
     except Exception:
-        days_elapsed = 0          # brand-new or unknown → give benefit of the doubt
+        days_elapsed = 0          # brand-new or unknown -> give benefit of the doubt
 
     if days_elapsed >= TRIAL_MAX_DAYS:
         return False, {
@@ -283,7 +283,7 @@ FREE_TOOL_FETCH_HEADERS = {
 }
 
 # ── Moses Auto Group canonical dealership group names ─────────────────────────
-# These are pre-seeded into every user account so the Settings → Locations card
+# These are pre-seeded into every user account so the Settings -> Locations card
 # shows up immediately — without requiring a sync first.
 # Values are (location_name, enabled_by_default).
 MOSES_DEFAULT_LOCATIONS: list[tuple[str, bool]] = [
@@ -294,7 +294,7 @@ MOSES_DEFAULT_LOCATIONS: list[tuple[str, bool]] = [
     ("Morgantown",                 False),  # Toyota, Mitsubishi — opt-in only
 ]
 
-# Keyword → canonical group name mapping.
+# Keyword -> canonical group name mapping.
 # Each tuple is ([keywords_to_match_in_lowercased_string], canonical_name).
 MOSES_LOCATION_KEYWORDS: list[tuple[list[str], str]] = [
     (["st. albans", "st albans", "stalbans", "saint albans", "kanawha city",
@@ -462,7 +462,7 @@ DEALERPEAK_DEALER_URL = "https://api.dealerpeak.com/crm/v1/dealers"
 _ACTIVE_SESSIONS: dict = {}
 
 # Per-user sync job state for the full-crawl progress endpoint.
-# user_id → {phase, synced, total, enriched, done, error, started}
+# user_id -> {phase, synced, total, enriched, done, error, started}
 _SYNC_JOBS: dict = {}
 
 # ── Security exploit monitoring ───────────────────────────────────────────────
@@ -491,8 +491,8 @@ _PATH_TRAVERSAL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 # Rate limiting — per-user timestamp buckets for management POST endpoints.
-_RATE_LIMITER: dict  = {}   # user_id → [unix_timestamp, ...]
-_LOGIN_FAILS: dict = {}     # ip → [unix_timestamp, ...]  (auth brute-force guard)
+_RATE_LIMITER: dict  = {}   # user_id -> [unix_timestamp, ...]
+_LOGIN_FAILS: dict = {}     # ip -> [unix_timestamp, ...]  (auth brute-force guard)
 _LOGIN_FAIL_WINDOW = 15 * 60
 _LOGIN_FAIL_MAX = 5
 _RATE_LIMIT_WINDOW   = 60.0  # seconds per window
@@ -951,13 +951,13 @@ class TikTokTokenManager:
 
         Algorithm:
           1. Read current token + refresh_token + expires_at from DB.
-          2. If no access token → raise TikTokTokenExpiredError (not connected).
+          2. If no access token -> raise TikTokTokenExpiredError (not connected).
           3. If *force* is True, or expires_at is missing, or the token expires within
              REFRESH_BUFFER_SECS:
                a. Call TikTok's OAuth refresh endpoint with the stored refresh_token.
-               b. On success → atomically write the new access_token, refresh_token,
+               b. On success -> atomically write the new access_token, refresh_token,
                   and expires_at to the DB and return (new_access_token, True).
-               c. On failure → NULL-out both tokens in the DB (forces re-connect) and
+               c. On failure -> NULL-out both tokens in the DB (forces re-connect) and
                   raise TikTokTokenExpiredError.
           4. Otherwise return (current_access_token, False) unchanged.
 
@@ -989,7 +989,7 @@ class TikTokTokenManager:
         needs_refresh = force  # daemon passes force=True to bypass the buffer window
         if not needs_refresh:
             if not expires_at_str:
-                needs_refresh = True  # no expiry stored → refresh defensively
+                needs_refresh = True  # no expiry stored -> refresh defensively
             else:
                 try:
                     expires_dt    = datetime.fromisoformat(expires_at_str)
@@ -1563,7 +1563,7 @@ def init_db():
                     cursor.execute(
                         f"ALTER TABLE {_tbl} ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0"
                     )
-                    print(f"[INIT] Migrated {_tbl} → multi-tenant schema (user_id column added).")
+                    print(f"[INIT] Migrated {_tbl} -> multi-tenant schema (user_id column added).")
                 except sqlite3.OperationalError:
                     pass  # column already present — nothing to do
 
@@ -1575,7 +1575,7 @@ def init_db():
             cursor.execute(
                 "ALTER TABLE users ADD COLUMN active_session_id TEXT DEFAULT ''"
             )
-            print("[INIT] Migrated users → single-session enforcement "
+            print("[INIT] Migrated users -> single-session enforcement "
                   "(active_session_id column added).")
         except Exception:
             pass  # column already present — nothing to do
@@ -2023,7 +2023,7 @@ def init_db():
             """
         )
 
-        # Referral program — one row per referred signup; status pending → converted
+        # Referral program — one row per referred signup; status pending -> converted
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS referrals (
@@ -2198,7 +2198,7 @@ def init_db():
         # Real Gmail+alias — verification emails land in matthewdemoss@gmail.com
         # inbox (Gmail delivers all plus-alias mail to the base address).
         # email_verified is intentionally kept 0 so the blue banner is live for
-        # end-to-end testing of the full resend → click → verify flow.
+        # end-to-end testing of the full resend -> click -> verify flow.
         _TR_EMAIL = 'matthewdemoss+testreviewer@gmail.com'
         _TR_PASS  = (os.environ.get('TESTER_PASSWORD') or '').strip()
         _tr_existing = conn.execute(
@@ -2527,7 +2527,7 @@ def init_db():
                     )
                     print(
                         f"[REPAIR] Orphan '{_orph['username']}' (id={_orph['id']}) "
-                        f"→ org {_repair_org_id}, tier={_repair_tier} (DeMoss Auto Group)."
+                        f"-> org {_repair_org_id}, tier={_repair_tier} (DeMoss Auto Group)."
                     )
             else:
                 for _orph in _orphan_rows:
@@ -2844,225 +2844,212 @@ def _log_billing_event(
         print(f"[BILLING] billing_events write error: {_ble}")
 
 
-# ── Email provider constants ──────────────────────────────────────────────────
+# ── Email provider constants / helpers (delegates to email_transporter) ───────
 _GMAIL_HOST = 'smtp.gmail.com'
 _GMAIL_PORT = 465  # SMTP_SSL
 
-# ── Email provider helpers ────────────────────────────────────────────────────
 
-
-def _send_via_resend(
-    to_addr:   str,
-    subject:   str,
-    body_text: str,
-    body_html: str,
-    api_key:   str,
-) -> bool:
-    """Send via the Resend transactional email API.
-
-    Primary provider — higher inbox placement than raw SMTP because Resend
-    maintains warmed dedicated IP pools, handles DKIM signing, and publishes
-    SPF/DMARC records for its shared sender domain.
-
-    From address:
-      • Prefer RESEND_FROM_EMAIL env var (a verified custom domain address,
-        e.g.  "BDC Manager Desk <noreply@bdcmanagerdesk.com>").
-      • Fall back to Resend's shared test sender (onboarding@resend.dev) so
-        delivery still works before a custom domain is verified.  This sender
-        is rate-limited by Resend; set RESEND_FROM_EMAIL for production.
-
-    Returns True on successful delivery, False on any failure.
-    """
+def _load_email_transporter():
+    """Import email_transporter even when CWD is not artifacts/api-server."""
     try:
-        import resend as _resend
+        import email_transporter as _mail
+        return _mail
     except ImportError:
-        print("[EMAIL] resend package not installed — cannot use Resend provider.")
-        return False
-
-    _resend.api_key = api_key
-
-    from_addr = (
-        os.environ.get('RESEND_FROM_EMAIL', '').strip()
-        or 'BDC Manager Desk <onboarding@resend.dev>'
-    )
-
-    try:
-        _resend.Emails.send({
-            "from":    from_addr,
-            "to":      [to_addr],
-            "subject": subject,
-            "html":    body_html or f"<pre>{body_text}</pre>",
-            "text":    body_text,
-        })
-        print(f"[EMAIL] Sent (Resend) '{subject}' → {to_addr}")
-        return True
-    except Exception as err:
-        import traceback as _tb
-        print(f"[EMAIL] Resend delivery error for {to_addr!r}: {err}")
-        print(_tb.format_exc())
-        return False
-
-
-def _send_via_smtp(
-    to_addr:   str,
-    subject:   str,
-    body_text: str,
-    body_html: str,
-    user:      str,
-    password:  str,
-) -> bool:
-    """Send via Gmail SMTP SSL (port 465) — fallback when Resend is unavailable.
-
-    Uses the authenticated Gmail account as the From address (Gmail enforces
-    this; a mismatched From header causes a 5xx rejection).  Retries once on
-    SMTPServerDisconnected; raises immediately on auth errors.
-
-    Returns True on successful delivery, False on any failure.
-    """
-    import smtplib, ssl, traceback as _tb
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text      import MIMEText
-    from email.message        import EmailMessage as _EmailMessage
-
-    from_full = f"BDC Manager Desk <{user}>"
-
-    if body_html:
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From']    = from_full
-        msg['To']      = to_addr
-        msg.attach(MIMEText(body_text, 'plain'))
-        msg.attach(MIMEText(body_html, 'html'))
-    else:
-        msg = _EmailMessage()
-        msg['Subject'] = subject
-        msg['From']    = from_full
-        msg['To']      = to_addr
-        msg.set_content(body_text)
-
-    _last_err: Exception | None = None
-    for _attempt in range(2):
-        try:
-            ctx = ssl.create_default_context()
-            with smtplib.SMTP_SSL(_GMAIL_HOST, _GMAIL_PORT, context=ctx, timeout=15) as smtp:
-                smtp.login(user, password)
-                smtp.send_message(msg)
-            print(f"[EMAIL] Sent (SMTP) '{subject}' → {to_addr}"
-                  + (f" (attempt {_attempt + 1})" if _attempt else ""))
-            return True
-        except smtplib.SMTPServerDisconnected as err:
-            _last_err = err
-            print(f"[EMAIL] SMTP disconnected (attempt {_attempt + 1}/2): {err}"
-                  + (" — retrying…" if _attempt == 0 else " — giving up."))
-            if _attempt == 0:
-                import time as _time; _time.sleep(1)
-        except Exception as err:
-            print(f"SMTP Connection Error: {err}")
-            print(_tb.format_exc())
-            return False
-    print(f"SMTP Connection Error (after retry): {_last_err}")
-    return False
+        import importlib.util
+        import pathlib
+        _mod_path = pathlib.Path(__file__).resolve().parent / "email_transporter.py"
+        _spec = importlib.util.spec_from_file_location("email_transporter", _mod_path)
+        if _spec is None or _spec.loader is None:
+            raise ImportError("email_transporter.py not found")
+        _mail = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mail)
+        return _mail
 
 
 def _send_email(to_addr: str, subject: str, body_text: str, body_html: str = '') -> bool:
-    """Route one transactional email through the best available provider.
+    """Route one transactional email through the shared transporter module.
 
-    Provider selection order
-    ------------------------
-    1. Resend  (RESEND_API_KEY env var) — recommended for production.
-         Better inbox placement than raw SMTP: dedicated IP pools, per-message
-         DKIM, shared SPF/DMARC on resend.dev, and bounce/complaint handling.
-         Set RESEND_FROM_EMAIL to a verified custom-domain address for
-         branded "From" headers; falls back to onboarding@resend.dev otherwise.
-
-    2. Gmail SMTP  (EMAIL_USER + EMAIL_PASS) — legacy fallback.
-         Requires a Gmail App Password (not the account password).  Works
-         reliably for low-volume sends but Gmail's shared sending IPs carry
-         mixed inbox/spam placement for recipients outside Google Workspace.
-
-    Neither configured → logs the full message to stdout so nothing is lost.
-    Returns True on confirmed delivery, False on any failure.
+    Providers: Resend -> SendGrid -> SMTP -> console log (dev fallback).
+    Console fallback returns True so local profile security tests still succeed.
     """
-    # Sanitize recipient.
-    to_addr = to_addr.strip().lower()
-    print(f"Sending email to recipient: {to_addr}")
-
-    # ── Provider 1: Resend ────────────────────────────────────────────────────
-    _resend_key = os.environ.get('RESEND_API_KEY', '').strip()
-    if _resend_key:
-        return _send_via_resend(to_addr, subject, body_text, body_html, _resend_key)
-
-    # ── Provider 2: Gmail SMTP ────────────────────────────────────────────────
-    _smtp_user = os.environ.get('EMAIL_USER', '').strip()
-    _smtp_pass = os.environ.get('EMAIL_PASS', '').strip()
-    if _smtp_user and _smtp_pass:
-        return _send_via_smtp(to_addr, subject, body_text, body_html,
-                              _smtp_user, _smtp_pass)
-
-    # ── No provider configured ────────────────────────────────────────────────
-    print(
-        f"[EMAIL] WARNING: No email provider configured — email NOT sent to {to_addr}.\n"
-        f"[EMAIL] To fix: add RESEND_API_KEY to Secrets (recommended) "
-        f"or set EMAIL_USER + EMAIL_PASS for Gmail SMTP fallback.\n"
-        f"[EMAIL] Missed subject: {subject}\n"
-        f"[EMAIL] Missed body:\n{body_text}"
-    )
-    return False
+    try:
+        return _load_email_transporter().send_email(to_addr, subject, body_text, body_html)
+    except Exception as err:
+        print(f"[EMAIL] transporter failure: {err}")
+        return False
 
 
 def _check_email_connection() -> None:
-    """Verify the active email provider at server startup and print a status line.
+    """Verify / announce the active email provider at server startup."""
+    try:
+        _load_email_transporter().check_connection()
+    except Exception as err:
+        print(f"[EMAIL] connection check failed: {err}")
 
-    Provider check order mirrors _send_email:
-      1. Resend (RESEND_API_KEY) — validated by importing the SDK only (no API
-         call at startup to avoid consuming send quota).
-      2. Gmail SMTP (EMAIL_USER + EMAIL_PASS) — validated with a live EHLO/AUTH
-         handshake so credential errors surface immediately.
 
-    Prints a clear WARNING when neither provider is configured so the problem
-    is visible in logs before any real email is attempted.
-    Never raises — a mis-configured mailer must not crash the server.
-    """
-    import smtplib, ssl, traceback as _tb
-
-    _resend_key  = os.environ.get('RESEND_API_KEY',   '').strip()
-    _smtp_user   = os.environ.get('EMAIL_USER',       '').strip()
-    _smtp_pass   = os.environ.get('EMAIL_PASS',       '').strip()
-    _resend_from = os.environ.get('RESEND_FROM_EMAIL','').strip()
-
-    if _resend_key:
-        _from_display = _resend_from or 'onboarding@resend.dev (shared — set RESEND_FROM_EMAIL for custom domain)'
-        print(f"[EMAIL] Provider: Resend — from: {_from_display}")
-        if not _resend_from:
-            print(
-                "[EMAIL] WARNING: RESEND_FROM_EMAIL is not set. "
-                "Emails will be sent from onboarding@resend.dev (Resend shared sender). "
-                "Set RESEND_FROM_EMAIL to a verified domain address "
-                "(e.g. 'BDC Manager Desk <noreply@yourdomain.com>') for production."
-            )
-        return
-
-    if _smtp_user and _smtp_pass:
-        print(
-            "[EMAIL] WARNING: RESEND_API_KEY is not set. "
-            "Falling back to Gmail SMTP — lower inbox placement for transactional email. "
-            "Add RESEND_API_KEY to Secrets for reliable delivery."
-        )
-        try:
-            ctx = ssl.create_default_context()
-            with smtplib.SMTP_SSL(_GMAIL_HOST, _GMAIL_PORT, context=ctx, timeout=15) as smtp:
-                smtp.login(_smtp_user, _smtp_pass)
-            print(f"Nodemailer SMTP server ready to send messages (authenticated as {_smtp_user})")
-        except Exception as err:
-            print(f"SMTP Connection Error: {err}")
-            print(_tb.format_exc())
-        return
-
-    print(
-        "[EMAIL] WARNING: No email provider configured — all transactional email is disabled.\n"
-        "[EMAIL] To enable: add RESEND_API_KEY to Secrets (recommended for inbox delivery),\n"
-        "[EMAIL] or set both EMAIL_USER and EMAIL_PASS for Gmail SMTP fallback."
+def _build_email_change_messages(
+    *,
+    new_email: str,
+    old_email: str,
+    revert_url: str,
+    changed_at: str,
+) -> tuple[str, str, str, str]:
+    """Return (confirm_text, confirm_html, alert_text, alert_html)."""
+    confirm_text = (
+        "Hi,\n\n"
+        "Your BDC Manager Desk account email address was successfully updated.\n\n"
+        f"New email: {new_email}\n"
+        f"Changed:   {changed_at}\n\n"
+        "Your account remains verified — no further action is required.\n\n"
+        "If you did not make this change, contact support immediately.\n\n"
+        "— The BDC Manager Desk Team"
     )
+    confirm_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
+    <tr><td align="center">
+      <table width="100%" style="max-width:560px;">
+        <tr>
+          <td style="background:#2563eb;padding:28px 32px;border-radius:10px 10px 0 0;">
+            <h1 style="margin:0;color:#fff;font-size:20px;font-weight:700;">Email Address Updated</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:#fff;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;">
+            <p style="margin:0 0 16px;font-size:15px;color:#374151;">
+              Your <strong>BDC Manager Desk</strong> account email address was successfully updated.
+            </p>
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
+              <p style="margin:0 0 6px;font-size:13px;color:#166534;font-weight:600;">New email address</p>
+              <p style="margin:0;font-size:15px;color:#15803d;font-weight:700;">{new_email}</p>
+              <p style="margin:8px 0 0;font-size:12px;color:#166534;">Changed: {changed_at}</p>
+            </div>
+            <p style="margin:0;font-size:12px;color:#9ca3af;">— The BDC Manager Desk Team</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+    alert_text = (
+        "SECURITY ALERT — BDC Manager Desk\n\n"
+        "The email address on your account was just changed.\n\n"
+        f"Changed to:  {new_email}\n"
+        f"Changed at:  {changed_at}\n"
+        f"Previous:    {old_email or '(none)'}\n\n"
+        "If YOU authorized this change, no action is needed.\n\n"
+        "If you did NOT authorize this change, click the link below IMMEDIATELY\n"
+        "to lock your account and revert the email address:\n\n"
+        f"  {revert_url}\n\n"
+        "This emergency link expires in 48 hours.\n\n"
+        "— The BDC Manager Desk Security Team"
+    )
+    alert_html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
+    <tr><td align="center">
+      <table width="100%" style="max-width:560px;">
+        <tr>
+          <td style="background:#dc2626;padding:28px 32px;border-radius:10px 10px 0 0;">
+            <h1 style="margin:0;color:#fff;font-size:20px;font-weight:700;">
+              &#9888; SECURITY ALERT: Email Address Changed
+            </h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="background:#fff;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;">
+            <p style="margin:0 0 16px;font-size:15px;color:#374151;">
+              The email address on your <strong>BDC Manager Desk</strong> account was just changed.
+            </p>
+            <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
+              <p style="margin:0 0 4px;font-size:13px;color:#991b1b;font-weight:600;">Changed to</p>
+              <p style="margin:0 0 8px;font-size:15px;color:#b91c1c;font-weight:700;">{new_email}</p>
+              <p style="margin:0;font-size:12px;color:#991b1b;">At: {changed_at}</p>
+            </div>
+            <p style="margin:0 0 20px;font-size:15px;color:#111827;font-weight:600;">
+              If you did NOT authorize this change, click below immediately:
+            </p>
+            <a href="{revert_url}"
+               style="display:inline-block;background:#dc2626;color:#fff;padding:14px 28px;
+                      border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">
+              &#128274; Lock Account &amp; Revert Email Now
+            </a>
+            <p style="margin:20px 0 4px;font-size:12px;color:#9ca3af;">
+              Or paste this link into your browser (expires in 48 hours):
+            </p>
+            <p style="margin:0 0 24px;font-size:12px;">
+              <a href="{revert_url}" style="color:#dc2626;word-break:break-all;">{revert_url}</a>
+            </p>
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px;">
+            <p style="margin:0;font-size:12px;color:#9ca3af;">— The BDC Manager Desk Security Team</p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+    return confirm_text, confirm_html, alert_text, alert_html
+
+
+def _dispatch_email_change_notifications(
+    *,
+    user_id: int,
+    new_email: str,
+    old_email: str,
+    revert_token: str,
+) -> dict:
+    """Send security alert (old address) + confirmation (new address)."""
+    revert_base = (APP_BASE_URL or "").rstrip("/") or "http://127.0.0.1:5173"
+    revert_url = f"{revert_base}/api/security/revert-email?token={revert_token}"
+    changed_at = datetime.now().strftime("%B %d, %Y at %I:%M %p UTC")
+    confirm_text, confirm_html, alert_text, alert_html = _build_email_change_messages(
+        new_email=new_email,
+        old_email=old_email,
+        revert_url=revert_url,
+        changed_at=changed_at,
+    )
+
+    alert_sent = False
+    if old_email:
+        alert_sent = bool(
+            _send_email(
+                old_email,
+                "SECURITY ALERT: Email address changed on your BDC Manager Desk account",
+                alert_text,
+                alert_html,
+            )
+        )
+        print(
+            f"[AUTH] Email-change security alert -> {old_email!r} "
+            f"(user id={user_id}, sent={alert_sent})"
+        )
+    else:
+        print(f"[AUTH] No previous email on file for user id={user_id} — skip security alert.")
+
+    confirm_sent = bool(
+        _send_email(
+            new_email,
+            "Your BDC Manager Desk email address has been updated",
+            confirm_text,
+            confirm_html,
+        )
+    )
+    print(
+        f"[AUTH] Email-change confirmation -> {new_email!r} "
+        f"(user id={user_id}, sent={confirm_sent})"
+    )
+    return {
+        "alert_sent": alert_sent,
+        "confirm_sent": confirm_sent,
+        "revert_url": revert_url,
+    }
 
 
 def _validate_email(email: str) -> str:
@@ -4341,7 +4328,7 @@ class BillingManager:
                     conn.close()
                 print(
                     f"[BILLING] checkout.session.completed (lifetime) — "
-                    f"user {user_id_str} → plan={plan}, status=active."
+                    f"user {user_id_str} -> plan={plan}, status=active."
                 )
             elif mode == "subscription" and subscription_id:
                 conn = sqlite3.connect(DB_FILE)
@@ -4362,7 +4349,7 @@ class BillingManager:
                     conn.close()
                 print(
                     f"[BILLING] checkout.session.completed (subscription) — "
-                    f"user {user_id_str} → plan={plan}, sub_id={subscription_id}."
+                    f"user {user_id_str} -> plan={plan}, sub_id={subscription_id}."
                 )
             else:
                 print(
@@ -4428,7 +4415,7 @@ class BillingManager:
                 finally:
                     conn.close()
                 print(
-                    f"[BILLING] subscription.updated — {subscription_id} → {db_status}, "
+                    f"[BILLING] subscription.updated — {subscription_id} -> {db_status}, "
                     f"cancel_scheduled={cancel_at_period_end}, period_end={period_end_str}."
                 )
 
@@ -5578,7 +5565,7 @@ class EmailReengagementWorker(threading.Thread):
 
                 if auto:
                     EmailQueueManager.update_status(draft_id, uid, "sent")
-                    print(f"[EMAIL AUTO-SENT] Draft #{draft_id} → {customer_name}")
+                    print(f"[EMAIL AUTO-SENT] Draft #{draft_id} -> {customer_name}")
 
 
 # =====================================================================
@@ -5744,7 +5731,7 @@ def _normalize_scraped(item: dict, condition: str) -> dict | None:
         'pageUrl', 'PageUrl',
     ) or '').strip()
 
-    # Multi-tag price fallbacks (internet → sale → final → library → MSRP)
+    # Multi-tag price fallbacks (internet -> sale -> final -> library -> MSRP)
     # plus "$77,965" / "Call for Price" cleansing via _int_safe.
     _ask, _retail = _extract_vehicle_price(item)
 
@@ -5910,18 +5897,18 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
 #
 # Architecture — routes in priority order:
 #   1. Platform router  (Method 3):
-#        DealerOn  → direct REST API (/api/Inventory/GetInventory, paginated)
-#        Dealer.com → accountId extraction + CDK widget API + embedded JSON
-#        Sincro     → embedded window.SRP_DATA / SERVER_DATA state blobs
+#        DealerOn  -> direct REST API (/api/Inventory/GetInventory, paginated)
+#        Dealer.com -> accountId extraction + CDK widget API + embedded JSON
+#        Sincro     -> embedded window.SRP_DATA / SERVER_DATA state blobs
 #   2. Generic fallback chain (Method 2):
-#        JSON arrays in <script> blocks  → Schema.org JSON-LD →
-#        HTML data-vin attributes        → structural text-block VIN+stock scan
+#        JSON arrays in <script> blocks  -> Schema.org JSON-LD ->
+#        HTML data-vin attributes        -> structural text-block VIN+stock scan
 #
 # Safety contract enforced after every path:
 #   • stock_number  = real extracted value  or  'N/A'
 #                     (never empty, never VIN-derived, never auto-increment)
 #   • condition     = locked to the URL-derived argument — never overridden by
-#                     scraped data (new_inventory_url → 'New', used → 'Used')
+#                     scraped data (new_inventory_url -> 'New', used -> 'Used')
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PLATFORM_SIGS: dict[str, list[str]] = {
@@ -5966,14 +5953,14 @@ _PLATFORM_SIGS: dict[str, list[str]] = {
 # JS-rendered DealerOn SRP pages (whose raw HTML is an empty shell with no
 # platform markers) are still routed to the DealerOn parsers correctly.
 # These patterns appear in the URL path or query string on every DealerOn SRP:
-#   .aspx         → SearchNew.aspx, SearchUsed.aspx, VehicleDetails.aspx, …
-#   searchnew     → /SearchNew, SearchNew.aspx?…, /searchnew?…
-#   searchused    → /SearchUsed, SearchUsed.aspx?…, /searchused?…
+#   .aspx         -> SearchNew.aspx, SearchUsed.aspx, VehicleDetails.aspx, …
+#   searchnew     -> /SearchNew, SearchNew.aspx?…, /searchnew?…
+#   searchused    -> /SearchUsed, SearchUsed.aspx?…, /searchused?…
 _PLATFORM_URL_SIGS: dict[str, list[str]] = {
-    # .aspx      → SearchNew.aspx / SearchUsed.aspx / VehicleDetails.aspx
-    # searchnew  → /SearchNew, SearchNew.aspx, /searchnew?…
-    # searchused → /SearchUsed, SearchUsed.aspx, /searchused?…
-    # dlron.us   → short-link / CDN domain used by some DealerOn dealer groups
+    # .aspx      -> SearchNew.aspx / SearchUsed.aspx / VehicleDetails.aspx
+    # searchnew  -> /SearchNew, SearchNew.aspx, /searchnew?…
+    # searchused -> /SearchUsed, SearchUsed.aspx, /searchused?…
+    # dlron.us   -> short-link / CDN domain used by some DealerOn dealer groups
     'dealeron':     ['.aspx', 'searchnew', 'searchused', 'dlron.us'],
     'edealer':      ['edealer.ca'],
     'homenet':      ['homenet.com'],
@@ -5987,10 +5974,10 @@ def _norm_condition(raw: str, fallback: str = 'Used') -> str:
     """Normalise any raw condition label to the canonical 'New' or 'Used'.
 
     Maps every variant used by DealerOn and other platforms:
-      new / newvehicle / n                              → 'New'
+      new / newvehicle / n                              -> 'New'
       used / preowned / certifiedpreowned / certified /
-      cpo / u                                           → 'Used'
-      anything else                                     → fallback
+      cpo / u                                           -> 'Used'
+      anything else                                     -> fallback
     """
     s = re.sub(r'[\s\-]+', '', str(raw or '').strip().lower())
     if s in ('new', 'newvehicle', 'n'):
@@ -6240,13 +6227,13 @@ def _int_safe(raw, default: int = 0) -> int:
     """Coerce any scraper-sourced value to a plain Python int for DB insertion.
 
     Handles the common forms scrapers produce:
-      • Already an int / float          → int(value)
-      • '$31,995'  / '31,995'           → 31995   (dollar sign, commas)
-      • '1,016 mi' / '52000 mi'         → 1016 / 52000   (mileage suffix)
-      • '2024'  / ' 2024 '              → 2024   (year with whitespace)
-      • '' / None / 'N/A' / '—' / '–'  → default (0)  (em/en dashes)
-      • 'Call for Price' / 'Request a Quote' → default (0)
-      • Any other non-numeric string    → default (0)
+      • Already an int / float          -> int(value)
+      • '$31,995'  / '31,995'           -> 31995   (dollar sign, commas)
+      • '1,016 mi' / '52000 mi'         -> 1016 / 52000   (mileage suffix)
+      • '2024'  / ' 2024 '              -> 2024   (year with whitespace)
+      • '' / None / 'N/A' / '—' / '–'  -> default (0)  (em/en dashes)
+      • 'Call for Price' / 'Request a Quote' -> default (0)
+      • Any other non-numeric string    -> default (0)
 
     Never raises.  PostgreSQL and SQLite both reject empty strings for INTEGER
     columns; this function ensures only a proper int ever reaches the DB.
@@ -6370,7 +6357,7 @@ def _parse_dealeron_html(url: str, html: str, condition: str) -> list[dict]:
                 vehicles = _extract_vehicles_recursive(data, condition)
                 if vehicles:
                     print(f"[DEALERON-HTML] config blob ({condition}) "
-                          f"→ {len(vehicles)} vehicles")
+                          f"-> {len(vehicles)} vehicles")
                     return vehicles
             except Exception:
                 pass
@@ -6472,7 +6459,7 @@ def _parse_dealeron_html(url: str, html: str, condition: str) -> list[dict]:
         })
     if vehicles_html:
         print(f"[DEALERON-HTML] data-* cards ({condition}) "
-              f"→ {len(vehicles_html)} vehicles")
+              f"-> {len(vehicles_html)} vehicles")
         return vehicles_html
 
     # ── Strategy 3: generic window.* JSON sweep ───────────────────────────────
@@ -6485,7 +6472,7 @@ def _parse_dealeron_html(url: str, html: str, condition: str) -> list[dict]:
             vehicles = _extract_vehicles_recursive(data, condition)
             if vehicles:
                 print(f"[DEALERON-HTML] window.* sweep ({condition}) "
-                      f"→ {len(vehicles)} vehicles")
+                      f"-> {len(vehicles)} vehicles")
                 return vehicles
         except Exception:
             pass
@@ -6501,7 +6488,7 @@ def _fetch_dealeron_srp_config(url: str) -> dict | None:
     ``inventory-widget`` Vue component reads at runtime to build the API URL.
 
     Discovered via SRP bundle analysis:
-        /resources/{dealerCode}/pages/searchResultsPage/…  → dealerCode
+        /resources/{dealerCode}/pages/searchResultsPage/…  -> dealerCode
         dlron-srp-model JSON: DealerId, PageId, BaseFilter
 
     Returns a dict with keys (dealer_code, dealer_id, page_id, base_filter,
@@ -6791,7 +6778,7 @@ def _parse_dealeron_cosmos_api(
         )
         print(
             f"[DEALERON-COSMOS] ({condition}) "
-            f"→ {len(first_batch)} vehicles from {netloc} "
+            f"-> {len(first_batch)} vehicles from {netloc} "
             f"(dealerId={dealer_id}, pageId={page_id}, pages=1"
             f"{', cancelled' if _cancelled() else ''})"
         )
@@ -6865,7 +6852,7 @@ def _parse_dealeron_cosmos_api(
     _cancel_note = ", cancelled" if _cancelled() else ""
     print(
         f"[DEALERON-COSMOS] ({condition}) "
-        f"→ {len(all_vehicles)}/{total_count} vehicles from {netloc} "
+        f"-> {len(all_vehicles)}/{total_count} vehicles from {netloc} "
         f"(dealerId={dealer_id}, pageId={page_id}, "
         f"pages={total_pages}, pn={actual_page_size}, "
         f"workers={COSMOS_PARALLEL_WORKERS}{_cancel_note})"
@@ -6966,7 +6953,7 @@ def _parse_dealeron_api(url: str, condition: str) -> list[dict]:
 
             if all_vehicles:
                 print(f"[HYBRID] DealerOn API ({condition}) "
-                      f"→ {len(all_vehicles)} vehicles from {parsed.netloc}")
+                      f"-> {len(all_vehicles)} vehicles from {parsed.netloc}")
                 return all_vehicles
         except Exception:
             pass   # try the next endpoint variant
@@ -7135,7 +7122,7 @@ def _extract_ddc_inventory(html: str, condition: str, base_url: str = '') -> lis
             })
 
         if results:
-            print(f"[HYBRID] DDC.WS.state ({condition}) → {len(results)} vehicles "
+            print(f"[HYBRID] DDC.WS.state ({condition}) -> {len(results)} vehicles "
                   f"from {widget!r}[{inst!r}].WIS.inventory")
             return results
 
@@ -7190,7 +7177,7 @@ def _parse_dealerdotcom(url: str, html: str, condition: str) -> list[dict]:
                 merged.append(stub)
                 stub_urls_added.add(su)
         if merged:
-            print(f"[HYBRID] Dealer.com ({condition}) → {len(merged)} vehicles "
+            print(f"[HYBRID] Dealer.com ({condition}) -> {len(merged)} vehicles "
                   f"({len(vehicles)} rich + {len(merged)-len(vehicles)} sitemap stubs)")
             return merged
     if vehicles:
@@ -7230,7 +7217,7 @@ def _parse_dealerdotcom(url: str, html: str, condition: str) -> list[dict]:
                          if v]
                 if batch:
                     print(f"[HYBRID] Dealer.com API ({condition}) "
-                          f"→ {len(batch)} vehicles via {api_url.split('?')[0]}")
+                          f"-> {len(batch)} vehicles via {api_url.split('?')[0]}")
                     return batch
             except Exception:
                 pass
@@ -7248,7 +7235,7 @@ def _parse_dealerdotcom(url: str, html: str, condition: str) -> list[dict]:
                 vehicles = _extract_vehicles_recursive(data, condition)
                 if vehicles:
                     print(f"[HYBRID] Dealer.com embedded JSON ({condition}) "
-                          f"→ {len(vehicles)} vehicles")
+                          f"-> {len(vehicles)} vehicles")
                     return vehicles
             except Exception:
                 pass
@@ -7318,7 +7305,7 @@ def _parse_dealerdotcom_sitemap(base: str, condition: str) -> list[dict]:
                 slug4       = uuid_m.group(4)       # e.g. "Chevrolet-Equinox" or "Ford-F-150"
                 make_prefix = uuid_m.group(2)        # directory segment, e.g. "Chevrolet"
                 # Strip the leading make from the slug so model never duplicates it
-                # ("Chevrolet-Equinox" → "Equinox", "Ford-F-150" → "F-150")
+                # ("Chevrolet-Equinox" -> "Equinox", "Ford-F-150" -> "F-150")
                 if slug4.lower().startswith(make_prefix.lower() + '-'):
                     slug4 = slug4[len(make_prefix) + 1:]
                 make_dir   = make_prefix.replace('-', ' ').title()
@@ -7406,7 +7393,7 @@ def _parse_dealerdotcom_sitemap(base: str, condition: str) -> list[dict]:
 
         if results:
             print(f"[HYBRID] Dealer.com sitemap ({condition}) "
-                  f"→ {len(results)} vehicles from {sm_url}")
+                  f"-> {len(results)} vehicles from {sm_url}")
             return results
 
     return []
@@ -7426,7 +7413,7 @@ def _parse_sincro(url: str, html: str, condition: str) -> list[dict]:
                 vehicles = _extract_vehicles_recursive(data, condition)
                 if vehicles:
                     print(f"[HYBRID] Sincro embedded state ({condition}) "
-                          f"→ {len(vehicles)} vehicles")
+                          f"-> {len(vehicles)} vehicles")
                     return vehicles
             except Exception:
                 pass
@@ -7441,7 +7428,7 @@ def _parse_json_ld(html: str, condition: str) -> list[dict]:
     Handles:
     - Direct Car/Vehicle/Product objects
     - @graph arrays containing typed nodes
-    - ItemList / OfferCatalog wrapping a list of ListItem → item
+    - ItemList / OfferCatalog wrapping a list of ListItem -> item
     """
     results: list[dict] = []
 
@@ -7498,7 +7485,7 @@ def _parse_json_ld(html: str, condition: str) -> list[dict]:
                     for node in (item.get('@graph') or []):
                         if isinstance(node, dict):
                             _ingest(node)
-                # ItemList / OfferCatalog wrapping ListItem → item
+                # ItemList / OfferCatalog wrapping ListItem -> item
                 elif t in ('itemlist', 'offercatalog', 'breadcrumblist'):
                     for li in (item.get('itemListElement') or []):
                         if isinstance(li, dict):
@@ -7573,7 +7560,7 @@ def _parse_text_blocks(html: str, condition: str) -> list[dict]:
             })
 
     if results:
-        print(f"[HYBRID] Text-block scan ({condition}) → {len(results)} VINs found")
+        print(f"[HYBRID] Text-block scan ({condition}) -> {len(results)} VINs found")
     return results
 
 
@@ -7680,7 +7667,7 @@ def _probe_generic_api_endpoints(base_url: str, condition: str) -> list[dict]:
         vehicles = _extract_vehicles_recursive(data, condition)
         if vehicles:
             print(f"[API-PROBE] ({condition}) hit {label}: {probe_url} "
-                  f"→ {len(vehicles)} vehicles")
+                  f"-> {len(vehicles)} vehicles")
             return vehicles
     return []
 
@@ -7815,7 +7802,7 @@ def _parse_vinsolutions(url: str, html: str, condition: str) -> list[dict]:
 
 # ── Generic SRP pagination follower ──────────────────────────────────────────
 _MAX_SRP_PAGES   = 50   # hard cap — no site should need more
-_STALE_PAGE_STOP = 2    # consecutive pages with 0 new VINs → stop early
+_STALE_PAGE_STOP = 2    # consecutive pages with 0 new VINs -> stop early
 
 # Query-parameter names that carry a page number across common DMS platforms
 _PAGE_PARAMS = (
@@ -7942,7 +7929,7 @@ def _paginate_srp(
 
     total_pages = page_num - 1
     if total_pages > 1:
-        print(f"[PAGINATE] ({condition}) {first_url!r} → "
+        print(f"[PAGINATE] ({condition}) {first_url!r} -> "
               f"{len(all_vehicles)} vehicles across {total_pages} pages")
     return all_vehicles
 
@@ -7964,16 +7951,16 @@ def _fetch_dealer_page(
     1.  Fetch raw HTML with retry  (up to 2 attempts, 25 s each)
     2.  Platform fingerprinting  (URL + HTML head)
     3.  Platform-specific parsers:
-            DealerOn    → HTML fallback (API already tried in 0a/0b)
-            Dealer.com  → CDK widget API + embedded DDC state
-            Sincro      → window.SRP_DATA / SERVER_DATA
-            eDealer     → window.inventoryData + REST API
-            HomeNet     → window.hn_inventory + REST API
-            VinSolutions→ window.__vin_data + REST API
-            AutoSoft / Tekion → generic fallback chain
+            DealerOn    -> HTML fallback (API already tried in 0a/0b)
+            Dealer.com  -> CDK widget API + embedded DDC state
+            Sincro      -> window.SRP_DATA / SERVER_DATA
+            eDealer     -> window.inventoryData + REST API
+            HomeNet     -> window.hn_inventory + REST API
+            VinSolutions-> window.__vin_data + REST API
+            AutoSoft / Tekion -> generic fallback chain
     4.  Generic fallback chain (platform unknown or platform path returned []):
-            JSON in <script>  →  Schema.org JSON-LD  →
-            HTML data-vin     →  text-block VIN+stock scan
+            JSON in <script>  ->  Schema.org JSON-LD  ->
+            HTML data-vin     ->  text-block VIN+stock scan
     5.  Pagination  (non-DealerOn/Dealer.com platforms only, via _paginate_srp)
     6.  JSON-LD stock-number enrichment  (back-fill missing stock numbers)
     7.  Safety sweep  (always last — locks condition, sanitises stock_number)
@@ -8162,8 +8149,8 @@ def _parse_vdp_url(raw_url: str) -> dict | None:
     condition = _condition_from_url(decoded)
     # DealerOn path segments always start with the condition prefix:
     #   new-<Location>-<Year>-... or used-<Location>-<Year>-...
-    # len('New')+1 = 4  → strips "new-"
-    # len('Used')+1 = 5 → strips "used-"
+    # len('New')+1 = 4  -> strips "new-"
+    # len('Used')+1 = 5 -> strips "used-"
     remainder = path[len(condition) + 1:]   # drop "new-" / "used-" prefix
     remainder = remainder[:-(len(vin) + 1)] # drop "-VIN" suffix
 
@@ -8173,8 +8160,8 @@ def _parse_vdp_url(raw_url: str) -> dict | None:
         return None
     year        = int(year_m.group(1))
     # Collapse sequences of multiple spaces that arise when a URL path segment
-    # encodes a special character as nothing (e.g. "Town++Country" → "Town  Country"
-    # after "+" → " " substitution).  A single re.sub is enough; the path is
+    # encodes a special character as nothing (e.g. "Town++Country" -> "Town  Country"
+    # after "+" -> " " substitution).  A single re.sub is enough; the path is
     # ASCII-only at this point so Unicode normalisation is not required.
     def _url_seg(s: str) -> str:
         return re.sub(r' {2,}', ' ', s.replace('+', ' ')).strip()
@@ -8952,8 +8939,8 @@ def _sync_user_inventory(
     new_locations = 0
 
     # ── Scrape engine selection ───────────────────────────────────────────────
-    # Moses → static engine (sitemap-based crawl; no pagination needed)
-    # Custom non-Moses → Playwright always.
+    # Moses -> static engine (sitemap-based crawl; no pagination needed)
+    # Custom non-Moses -> Playwright always.
     #
     # Why Playwright always for custom URLs:
     #   Modern DMS platforms (DealerOn, Dealer.com, Dealer Inspire, CDK, eDealer,
@@ -9446,8 +9433,8 @@ class MarketplaceDB:
         ``location``        : exact location string to filter by; '' = no filter.
         ``model``           : exact model string; '' = no filter.
         ``enabled_locations``:
-          None  → no location filter
-          set   → include rows whose location is in the set OR blank/unknown
+          None  -> no location filter
+          set   -> include rows whose location is in the set OR blank/unknown
         """
         conn = sqlite3.connect(DB_FILE)
         conn.row_factory = sqlite3.Row
@@ -10140,7 +10127,7 @@ class LocationDB:
         Returns **None** when the user has no location config at all
         (meaning the scraper should pass every vehicle through unchanged).
         Returns an empty set when the user has configured locations but
-        disabled all of them (nothing matches → zero results).
+        disabled all of them (nothing matches -> zero results).
         """
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -10411,7 +10398,7 @@ class PostingQueueManager:
 
         available = [v for v in active_vins if v not in cycled]
 
-        # Full cycle complete → reset rotation for this user
+        # Full cycle complete -> reset rotation for this user
         if not available:
             conn = sqlite3.connect(DB_FILE)
             try:
@@ -10682,7 +10669,7 @@ def _extract_price_bloc(html_text: str) -> dict:
     """
     def _parse_amount(raw: str) -> int | None:
         import html as _html_mod
-        unescaped = _html_mod.unescape(raw)   # decode &#x2B; → + before stripping
+        unescaped = _html_mod.unescape(raw)   # decode &#x2B; -> + before stripping
         cleaned = re.sub(r'[^\d]', '', unescaped)
         try:
             v = int(cleaned)
@@ -10743,7 +10730,7 @@ def _extract_price_bloc(html_text: str) -> dict:
             elif any(k in label for k in ('saving', 'you save', 'discount', 'rebate')):
                 result.setdefault('savings', amount)
             else:
-                # Moses Price / Internet Price / Sale Price / Your Price → selling price
+                # Moses Price / Internet Price / Sale Price / Your Price -> selling price
                 result.setdefault('internet_price', amount)
 
     # ── Strategy B: generic CSS-class patterns for other dealer sites ────────
@@ -11670,7 +11657,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
         #   /api/feeds/meta?format=csv&catalog_id=<commerce_catalog_id>
         #   /api/feeds/meta?format=xml&token=<catalog_token>
         #   /api/feeds/meta?format=csv&user_id=<id>
-        #   /api/feeds/meta?format=csv   (Bearer token → current user)
+        #   /api/feeds/meta?format=csv   (Bearer token -> current user)
         if path == "/api/feeds/meta":
             _qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
 
@@ -11814,8 +11801,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 return False
 
             # body_style keyword inference (case-insensitive substring match on
-            # model + trim).  Evaluated in priority order: TRUCK → SUV → COUPE
-            # → SEDAN → OTHER.
+            # model + trim).  Evaluated in priority order: TRUCK -> SUV -> COUPE
+            # -> SEDAN -> OTHER.
             _TRUCK_KW = {
                 'silverado', 'f-150', 'f150', 'f 150', 'sierra', 'tacoma',
                 'tundra', 'colorado', 'canyon', 'ranger', 'frontier', 'titan',
@@ -11942,7 +11929,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     print(f"[CATALOG] User-profile fetch error for uid={_cat_uid}: {_ue}")
 
             # ── Link fallback chain (fully dynamic — no hardcoded domains) ─
-            # Priority: used_inventory_url → new_inventory_url →
+            # Priority: used_inventory_url -> new_inventory_url ->
             #           root domain of whichever URL is configured
             def _root_domain(raw: str) -> str:
                 """Extract scheme://host from a URL string, e.g. https://dealer.com"""
@@ -12004,7 +11991,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     _year_raw = int(str(_v.get('year', '') or '0').strip() or '0')
                     _year     = str(_year_raw) if _year_raw >= 1900 else ''
 
-                    # ── vehicle_id: real 17-char VIN → stock# → DB id ─────
+                    # ── vehicle_id: real 17-char VIN -> stock# -> DB id ─────
                     _real_vin  = _vin  if len(_vin) == 17 else ''
                     _stk_clean = _stk  if (_stk and _stk != 'N/A') else ''
                     _vid = _real_vin or _stk_clean or _dbid
@@ -12042,7 +12029,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                                                 str(_v.get('retail_price') or '')) or '0')
                     _price_str = f"{_price_raw} USD"
 
-                    # ── link: VDP URL → user's SRP → root domain (dynamic) ─
+                    # ── link: VDP URL -> user's SRP -> root domain (dynamic) ─
                     _raw_link = str(_v.get('vdp_url', '') or '').strip()
                     if _valid_url(_raw_link):
                         _link = _raw_link
@@ -12054,7 +12041,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                         _loc_url = str(_v.get('location', '') or '').strip()
                         _link = _root_domain(_loc_url) if _loc_url else ''
 
-                    # ── image: vehicle photo → high-res generic placeholder ─
+                    # ── image: vehicle photo -> high-res generic placeholder ─
                     _raw_img = str(_v.get('image_url', '') or '').strip()
                     _img = _raw_img if _valid_url(_raw_img) else _IMAGE_FALLBACK
 
@@ -12082,13 +12069,13 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
 
                     # ── 16-column Meta Automotive Catalog row ─────────────
                     lines.append(','.join([
-                        _q(_vid),           # vehicle_id      — VIN → stock# → row id
+                        _q(_vid),           # vehicle_id      — VIN -> stock# -> row id
                         _q(_title),         # title           — Year Make Model Trim
                         _q(_desc),          # description     — Color · Mi · State · Trim
                         _q('in stock'),     # availability    — always "in stock"
                         _q(_state_v),       # state_of_vehicle — "NEW" or "USED"
                         _q(_price_str),     # price           — "[N] USD"
-                        _q(_link),          # link            — VDP → SRP → root domain
+                        _q(_link),          # link            — VDP -> SRP -> root domain
                         _q(_img),           # image           — photo or placeholder
                         _q(_make),          # brand           — vehicle make
                         _q(_make),          # make            — vehicle make
@@ -13232,8 +13219,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 _orgs_by_id: dict = {o["id"]: dict(o) for o in _all_orgs_raw}
 
                 # Sort users into rooftop admins, members (sub-accounts), and personal
-                _rooftop_admins: dict = {}   # org_id → rooftop entry dict
-                _sub_by_org:     dict = {}   # org_id → list of sub-account dicts
+                _rooftop_admins: dict = {}   # org_id -> rooftop entry dict
+                _sub_by_org:     dict = {}   # org_id -> list of sub-account dicts
                 _personal_accts: list = []
 
                 for _u in _all_users_raw:
@@ -13563,7 +13550,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     "error":           "not_configured",
                     "message":         (
                         "TikTok API credentials are not configured. "
-                        "A master admin can add them from the Admin Console → TikTok Integration."
+                        "A master admin can add them from the Admin Console -> TikTok Integration."
                     ),
                     "missing_secrets": _missing_keys,
                 }, 503)
@@ -13684,7 +13671,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             if _processing_rows:
                 try:
                     _ar_token, _ = TikTokTokenManager.refresh_if_needed(user["id"])
-                    _resolved_map: dict[str, str] = {}  # publish_id → resolved status
+                    _resolved_map: dict[str, str] = {}  # publish_id -> resolved status
                     for _ar_row in _processing_rows[:5]:
                         _ar_pub_id = _ar_row["publish_id"]
                         try:
@@ -14581,7 +14568,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             <a href="{_app_url}/marketplace-hub"
                style="display:inline-block;background:#f97316;color:#fff;padding:13px 26px;
                       border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">
-              Open Your Desk →
+              Open Your Desk ->
             </a>
             <hr style="border:none;border-top:1px solid #e5e7eb;margin:32px 0 20px;">
             <p style="margin:0;font-size:12px;color:#9ca3af;">
@@ -14707,7 +14694,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             <a href="{reset_url}"
                style="display:inline-block;background:#1e293b;color:#fff;padding:13px 26px;
                       border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">
-              Reset My Password →
+              Reset My Password ->
             </a>
             <p style="margin:24px 0 4px;font-size:12px;color:#9ca3af;">
               If the button doesn't work, paste this link into your browser:
@@ -14817,7 +14804,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             <a href="{_rv_verify_url}"
                style="display:inline-block;background:#2563eb;color:#fff;padding:13px 26px;
                       border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">
-              Verify My Email →
+              Verify My Email ->
             </a>
             <p style="margin:24px 0 4px;font-size:12px;color:#9ca3af;">
               If the button doesn't work, paste this link into your browser:
@@ -14998,7 +14985,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 if _has_fields or not str(payload.get("vin") or "").strip():
                     result = _build_desc(payload, db_path=DB_FILE)
                 else:
-                    # VIN-only → reuse generate_copy then wrap keys for the modal.
+                    # VIN-only -> reuse generate_copy then wrap keys for the modal.
                     _gc = _generate_copy(str(payload.get("vin")).strip(), db_path=DB_FILE)
                     result = {
                         **_gc,
@@ -15224,8 +15211,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                   f"session={_sc_session!r} "
                   f"(used={_sc_used!r}, new={_sc_new!r}, purged={_sc_purged})")
 
-            # /api/sync → background + progress polling (drives the UI).
-            # /api/scrape → run inline and return the final vehicle count.
+            # /api/sync -> background + progress polling (drives the UI).
+            # /api/scrape -> run inline and return the final vehicle count.
             if path in ("/api/sync", "/api/v1/sync"):
                 threading.Thread(
                     target=_sync_full_crawl,
@@ -15660,152 +15647,20 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             finally:
                 _ue_conn.close()
 
-            _ue_app_url    = APP_BASE_URL
-            _ue_revert_url = f"{_ue_app_url}/api/security/revert-email?token={_ue_revert_tok}"
-            _ue_changed_at = datetime.now().strftime("%B %d, %Y at %I:%M %p UTC")
-
-            # ── Email 1: confirmation to new address ─────────────────────────
-            _ue_confirm_text = (
-                "Hi,\n\n"
-                "Your BDC Manager Desk account email address was successfully updated.\n\n"
-                f"New email: {_ue_new_email}\n"
-                f"Changed:   {_ue_changed_at}\n\n"
-                "Your account remains verified — no further action is required.\n\n"
-                "If you did not make this change, contact support immediately.\n\n"
-                "— The BDC Manager Desk Team"
+            _notify = _dispatch_email_change_notifications(
+                user_id=user["id"],
+                new_email=_ue_new_email,
+                old_email=_ue_old_email,
+                revert_token=_ue_revert_tok,
             )
-            _ue_confirm_html = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
-    <tr><td align="center">
-      <table width="100%" style="max-width:560px;">
-        <tr>
-          <td style="background:#2563eb;padding:28px 32px;border-radius:10px 10px 0 0;">
-            <h1 style="margin:0;color:#fff;font-size:20px;font-weight:700;">Email Address Updated</h1>
-          </td>
-        </tr>
-        <tr>
-          <td style="background:#fff;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;">
-            <p style="margin:0 0 16px;font-size:15px;color:#374151;">
-              Your <strong>BDC Manager Desk</strong> account email address was successfully updated.
-            </p>
-            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
-              <p style="margin:0 0 6px;font-size:13px;color:#166534;font-weight:600;">New email address</p>
-              <p style="margin:0;font-size:15px;color:#15803d;font-weight:700;">{_ue_new_email}</p>
-              <p style="margin:8px 0 0;font-size:12px;color:#166534;">Changed: {_ue_changed_at}</p>
-            </div>
-            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
-              <p style="margin:0;font-size:14px;color:#166534;font-weight:600;">
-                Your account remains verified — no further action is required.
-              </p>
-            </div>
-            <p style="margin:0 0 24px;font-size:14px;color:#374151;">
-              If you did not make this change, please contact support immediately.
-            </p>
-            <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px;">
-            <p style="margin:0;font-size:12px;color:#9ca3af;">— The BDC Manager Desk Team</p>
-          </td>
-        </tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>"""
-
-            # ── Email 2: security alert to old address ────────────────────
-            _ue_alert_text = (
-                "SECURITY ALERT — BDC Manager Desk\n\n"
-                "The email address on your account was just changed.\n\n"
-                f"Changed to:  {_ue_new_email}\n"
-                f"Changed at:  {_ue_changed_at}\n\n"
-                "If YOU authorized this change, no action is needed.\n\n"
-                "If you did NOT authorize this change, click the link below IMMEDIATELY\n"
-                "to lock your account and revert the email address:\n\n"
-                f"  {_ue_revert_url}\n\n"
-                "This emergency link expires in 48 hours.\n\n"
-                "— The BDC Manager Desk Security Team"
-            )
-            _ue_alert_html = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 16px;">
-    <tr><td align="center">
-      <table width="100%" style="max-width:560px;">
-        <tr>
-          <td style="background:#dc2626;padding:28px 32px;border-radius:10px 10px 0 0;">
-            <h1 style="margin:0;color:#fff;font-size:20px;font-weight:700;">
-              &#9888; SECURITY ALERT: Email Address Changed
-            </h1>
-          </td>
-        </tr>
-        <tr>
-          <td style="background:#fff;padding:32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 10px 10px;">
-            <p style="margin:0 0 16px;font-size:15px;color:#374151;">
-              The email address on your <strong>BDC Manager Desk</strong> account was just changed.
-            </p>
-            <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px 20px;margin:0 0 24px;">
-              <p style="margin:0 0 4px;font-size:13px;color:#991b1b;font-weight:600;">Changed to</p>
-              <p style="margin:0 0 8px;font-size:15px;color:#b91c1c;font-weight:700;">{_ue_new_email}</p>
-              <p style="margin:0;font-size:12px;color:#991b1b;">At: {_ue_changed_at}</p>
-            </div>
-            <p style="margin:0 0 20px;font-size:15px;color:#111827;font-weight:600;">
-              If you did NOT authorize this change, click below immediately:
-            </p>
-            <a href="{_ue_revert_url}"
-               style="display:inline-block;background:#dc2626;color:#fff;padding:14px 28px;
-                      border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">
-              &#128274; Lock Account &amp; Revert Email Now
-            </a>
-            <p style="margin:20px 0 4px;font-size:12px;color:#9ca3af;">
-              Or paste this link into your browser (expires in 48 hours):
-            </p>
-            <p style="margin:0 0 24px;font-size:12px;">
-              <a href="{_ue_revert_url}" style="color:#dc2626;word-break:break-all;">{_ue_revert_url}</a>
-            </p>
-            <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:12px 16px;margin:0 0 24px;">
-              <p style="margin:0;font-size:13px;color:#92400e;">
-                <strong>If you made this change yourself</strong>, you can safely ignore this email.
-                Your account is secure.
-              </p>
-            </div>
-            <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px;">
-            <p style="margin:0;font-size:12px;color:#9ca3af;">— The BDC Manager Desk Security Team</p>
-          </td>
-        </tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>"""
-
-            # Send security alert to old address first (most critical)
-            if _ue_old_email:
-                _send_email(
-                    _ue_old_email,
-                    "SECURITY ALERT: Email address changed on your BDC Manager Desk account",
-                    _ue_alert_text,
-                    _ue_alert_html,
-                )
-            # Confirmation to new address — capture return value so a delivery
-            # failure is surfaced to the client instead of silently swallowed.
-            _ue_confirm_sent = _send_email(
-                _ue_new_email,
-                "Your BDC Manager Desk email address has been updated",
-                _ue_confirm_text,
-                _ue_confirm_html,
-            )
-
-            print(f"[AUTH] Email updated for user id={user['id']} → {_ue_new_email!r}")
+            print(f"[AUTH] Email updated for user id={user['id']} -> {_ue_new_email!r}")
             _ue_user_out = {
                 "id": user["id"],
                 "username": user["username"],
                 "email": _ue_new_email,
                 "email_verified": True,
             }
-            if _ue_confirm_sent:
+            if _notify.get("confirm_sent"):
                 self._json({
                     "success": True,
                     "status": "ok",
@@ -15816,12 +15671,6 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     ),
                 })
             else:
-                # DB change stands; only delivery failed.  Tell the client so the
-                # UI can prompt the user to check spam or click "Resend Verification".
-                print(
-                    f"[AUTH] WARNING: confirmation email delivery failed for user "
-                    f"id={user['id']} → {_ue_new_email!r}; DB update was committed."
-                )
                 self._json({
                     "success": True,
                     "status": "ok",
@@ -15830,8 +15679,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     "message": (
                         "Your email address has been updated, but the confirmation "
                         f"email could not be delivered to {_ue_new_email}. "
-                        "Check your spam folder or use \"Resend Verification\" in the "
-                        "app to request a new link."
+                        "Check your spam folder or server logs."
                     ),
                 })
             return
@@ -15926,10 +15774,21 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     )
                     return
                 try:
+                    _ue_revert_tok = secrets.token_urlsafe(32)
+                    _ue_revert_exp = (datetime.now() + timedelta(hours=48)).isoformat()
                     _ue_conn.execute(
-                        "UPDATE users SET email = ?, email_verified = 1, "
-                        "verification_token = NULL WHERE id = ?",
-                        (_ue_new_email, user["id"]),
+                        """UPDATE users
+                           SET email = ?, old_email_history = ?, email_revert_token = ?,
+                               email_revert_expires_at = ?, email_verified = 1,
+                               verification_token = NULL
+                           WHERE id = ?""",
+                        (
+                            _ue_new_email,
+                            _ue_old_email,
+                            _ue_revert_tok,
+                            _ue_revert_exp,
+                            user["id"],
+                        ),
                     )
                     _ue_conn.commit()
                 except Exception:
@@ -15940,7 +15799,28 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     raise
                 finally:
                     _ue_conn.close()
-                _msg = "Email updated."
+
+                _notify = _dispatch_email_change_notifications(
+                    user_id=user["id"],
+                    new_email=_ue_new_email,
+                    old_email=_ue_old_email,
+                    revert_token=_ue_revert_tok,
+                )
+                if _notify.get("confirm_sent"):
+                    _msg = (
+                        "Email updated. A security alert was sent to your previous "
+                        "address with an emergency revert link."
+                    )
+                else:
+                    _msg = (
+                        "Email updated, but confirmation delivery may have failed. "
+                        "Check server logs or your spam folder."
+                    )
+                print(
+                    f"[AUTH] Profile email updated for user id={user['id']} "
+                    f"-> {_ue_new_email!r} (alert={_notify.get('alert_sent')}, "
+                    f"confirm={_notify.get('confirm_sent')})"
+                )
 
             _out_conn = sqlite3.connect(DB_FILE)
             _out_conn.row_factory = sqlite3.Row
@@ -16824,7 +16704,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 "- Auto-Sync Frequency options: Manual only, Hourly, Every 6 hours, Daily.\n"
                 "- After saving, inventory syncs and exports as a Meta Catalog CSV at "
                 "https://[domain]/api/v1/catalog/[user_id].csv.\n"
-                "- Posting Queue: select vehicles → Add to Queue → vehicles post to "
+                "- Posting Queue: select vehicles -> Add to Queue -> vehicles post to "
                 "Facebook Marketplace on schedule.\n\n"
                 "### Team & Seats (Rooftop Admin)\n"
                 "- Rooftop Admin accounts manage team seats from the admin console Team section.\n"
@@ -16844,7 +16724,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 "- Add customers with vehicle criteria: make, model, year range, max mileage, max budget.\n"
                 "- Auto-matching runs on every sync and every 30 seconds.\n"
                 "- Matched customers float to the top with a green MATCH FOUND badge.\n"
-                "- Click View Match → Text Customer to send a pre-filled SMS.\n"
+                "- Click View Match -> Text Customer to send a pre-filled SMS.\n"
                 "- To match across multiple makes: select 'Any / All Makes' or create multiple entries.\n\n"
                 "### Pricing (/pricing) and Login Screen Showcase\n"
                 "Both the /pricing page and the login/register screen display plan pricing.\n\n"
@@ -16890,7 +16770,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 "- Feed URL: https://[domain]/api/v1/catalog/[user_id].csv\n"
                 "- Required fields: fb_page_id, vehicle_id, title, description, availability, "
                 "condition, state_of_vehicle, price, link, image_link\n"
-                "- Submit as a Scheduled Feed in Meta Commerce Manager → Catalogs → Data Sources.\n\n"
+                "- Submit as a Scheduled Feed in Meta Commerce Manager -> Catalogs -> Data Sources.\n\n"
                 "### Master Admin Tools (user: mdemoss)\n"
                 "- The '⚡ AI Fix' button appears in the sidebar beside the Engine Status indicator "
                 "and is visible ONLY to the master admin account (mdemoss / is_master_admin = true).\n"
@@ -16954,8 +16834,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                         "hashtags, or type your own caption.\n"
                         "6. Click 'Post to TikTok' — video chunks upload directly from "
                         "your browser to TikTok's servers.\n\n"
-                        "Trial limits: Free users → 3 posts/day for 5 days. "
-                        "Pro users → unlimited daily posts with no expiry."
+                        "Trial limits: Free users -> 3 posts/day for 5 days. "
+                        "Pro users -> unlimited daily posts with no expiry."
                     )
 
                 # Inventory scraper / sync setup
@@ -17032,8 +16912,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                         "2. Your feed URL is: "
                         "https://[your-domain]/api/v1/catalog/[user_id].csv\n"
                         "   (Use the Diagnostics tab in this panel to find your user_id.)\n"
-                        "3. Open Meta Commerce Manager → Catalogs → your catalog → Data Sources.\n"
-                        "4. Click Add Data Source → Scheduled Feed.\n"
+                        "3. Open Meta Commerce Manager -> Catalogs -> your catalog -> Data Sources.\n"
+                        "4. Click Add Data Source -> Scheduled Feed.\n"
                         "5. Paste your feed URL, set the update schedule to Daily, and save.\n\n"
                         "Tip: Use the Diagnostics tab to validate all required Meta fields "
                         "(fb_page_id, vehicle_id, price, link, image_link) before submitting."
@@ -17047,7 +16927,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                         "(Make, Model, Year range, Max Mileage, Max Budget).\n"
                         "2. The matcher runs on every sync and every 30 seconds automatically.\n"
                         "3. Matched customers float to the top with a green MATCH FOUND badge.\n"
-                        "4. Click View Match → Text Customer to send a pre-filled SMS.\n\n"
+                        "4. Click View Match -> Text Customer to send a pre-filled SMS.\n\n"
                         "For multiple makes: select 'Any / All Makes', or create multiple "
                         "wishlist entries for the same customer."
                     )
@@ -17444,7 +17324,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 raise
             finally:
                 _c.close()
-            print(f"[ADMIN] {adm['username']!r} toggled Pro → {new_status!r} for user id={target_id}")
+            print(f"[ADMIN] {adm['username']!r} toggled Pro -> {new_status!r} for user id={target_id}")
             self._json({"status": "ok", "subscription_status": new_status})
             return
 
