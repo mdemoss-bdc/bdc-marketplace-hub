@@ -161,15 +161,24 @@ export default function DashboardHub() {
       ]);
 
       if (invRes && invRes.ok) {
-        const data = await invRes.json();
+        const raw = await invRes.text();
+        let data: Record<string, unknown> = {};
+        try {
+          data = raw.trimStart().startsWith('{') || raw.trimStart().startsWith('[')
+            ? (JSON.parse(raw) as Record<string, unknown>)
+            : {};
+        } catch {
+          data = {};
+        }
         const list: ApiVehicle[] = Array.isArray(data.vehicles)
-          ? data.vehicles
+          ? (data.vehicles as ApiVehicle[])
           : Array.isArray(data.inventory)
-            ? data.inventory
+            ? (data.inventory as ApiVehicle[])
             : [];
         setInventory(list.slice(0, 48).map(mapVehicle));
+        const counts = data.counts as { ACTIVE?: number } | undefined;
         setActiveCount(
-          Number(data.active) || Number(data.counts?.ACTIVE) || list.length,
+          Number(data.active) || Number(counts?.ACTIVE) || list.length,
         );
       }
 

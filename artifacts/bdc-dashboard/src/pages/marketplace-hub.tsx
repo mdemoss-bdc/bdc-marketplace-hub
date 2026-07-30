@@ -79,6 +79,46 @@ import VideoUploadDropzone from '@/components/VideoUploadDropzone';
 
 const API_BASE = '/api';
 
+/** Defensive JSON parse — HTML/text 404 bodies (e.g. "The page…") must not crash the Hub. */
+async function readJsonSafe(res: Response): Promise<Record<string, unknown>> {
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  const text = await res.text();
+  if (!text) return {};
+  if (ct.includes('application/json') || text.trimStart().startsWith('{') || text.trimStart().startsWith('[')) {
+    try {
+      return JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      return { success: false, error: 'Invalid JSON response from server.' };
+    }
+  }
+  return {
+    success: false,
+    error: res.ok
+      ? 'Server returned a non-JSON response.'
+      : `Request failed (${res.status}). Expected JSON from ${res.url || 'API'}.`,
+  };
+}
+
+async function fetchMarketplaceJson(
+  path: string,
+  init?: RequestInit,
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, init);
+    const data = await readJsonSafe(res);
+    return { ok: res.ok, status: res.status, data };
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      status: 0,
+      data: {
+        success: false,
+        error: e instanceof Error ? e.message : 'Network request failed.',
+      },
+    };
+  }
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type PostedStatus = 'not_posted' | 'posted';
@@ -508,12 +548,38 @@ function PublisherView() {
     if (!quiet) setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${API_BASE}/marketplace/queue`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to load publisher queue');
-      setQueue(data as PublisherQueue);
+      const { ok, data } = await fetchMarketplaceJson('/marketplace/queue');
+      if (!ok) {
+        throw new Error(
+          typeof data.error === 'string' ? data.error : 'Failed to load publisher queue',
+        );
+      }
+      setQueue({
+        items: Array.isArray(data.items)
+          ? (data.items as PublisherItem[])
+          : Array.isArray(data.queue)
+            ? (data.queue as PublisherItem[])
+            : [],
+        total: Number(data.total) || 0,
+        counts: (data.counts as PublisherQueue['counts']) || {
+          scheduled: 0, posted: 0, failed: 0, paused: 0,
+        },
+        quota: (data.quota as PublisherQuota) || {
+          posts_today: 0, daily_cap: 10, remaining: 10, cap_reached: false,
+          label: '0 / 10 posts today', window: '08:00–21:00',
+        },
+      });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to load publisher queue');
+      setQueue({
+        items: [],
+        total: 0,
+        counts: { scheduled: 0, posted: 0, failed: 0, paused: 0 },
+        quota: {
+          posts_today: 0, daily_cap: 10, remaining: 10, cap_reached: false,
+          label: '0 / 10 posts today', window: '08:00–21:00',
+        },
+      });
     } finally {
       setLoading(false);
     }
@@ -549,15 +615,14 @@ function PublisherView() {
     setPublishMsg('');
     setCopyLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/marketplace/generate-copy`, {
+      const { ok, data } = await fetchMarketplaceJson('/marketplace/generate-copy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ vin: item.vin }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Copy generation failed');
-      setCopyText(data.ai_description || '');
-      setCopySource(data.source || '');
+      if (!ok) throw new Error(typeof data.error === 'string' ? data.error : 'Copy generation failed');
+      setCopyText(typeof data.ai_description === 'string' ? data.ai_description : '');
+      setCopySource(typeof data.source === 'string' ? data.source : '');
     } catch (e: unknown) {
       setCopyError(e instanceof Error ? e.message : 'Copy generation failed');
     } finally {
@@ -587,7 +652,7 @@ function PublisherView() {
     setPublishing(true);
     setPublishMsg('');
     try {
-      const res = await fetch(`${API_BASE}/marketplace/schedule`, {
+      const { ok, status, data } = await fetchMarketplaceJson('/marketplace/schedule', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -597,9 +662,12 @@ function PublisherView() {
           ...(publishNow ? {} : { scheduled_time: copyItem.scheduled_time || undefined }),
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || (res.status === 429 ? 'Daily cap reached' : 'Request failed'));
+      if (!ok) {
+        throw new Error(
+          typeof data.error === 'string'
+            ? data.error
+            : (status === 429 ? 'Daily cap reached' : 'Request failed'),
+        );
       }
       setPublishMsg(publishNow ? 'Published to Marketplace queue.' : 'Copy saved to schedule.');
       await fetchQueue(true);
@@ -615,14 +683,13 @@ function PublisherView() {
     setBusyId(item.id);
     const next: PublisherStatus = item.status === 'paused' ? 'scheduled' : 'paused';
     try {
-      const res = await fetch(`${API_BASE}/marketplace/queue/status`, {
+      const { ok, data } = await fetchMarketplaceJson('/marketplace/queue/status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: item.id, status: next }),
       });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || 'Status update failed');
+      if (!ok) {
+        throw new Error(typeof data.error === 'string' ? data.error : 'Status update failed');
       }
       await fetchQueue(true);
     } catch (e: unknown) {
@@ -960,15 +1027,16 @@ function QueueView({ token }: { token: string }) {
   const fetchQueue = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/v1/marketplace/queue`, {
+      const { data } = await fetchMarketplaceJson('/v1/marketplace/queue', {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const data = await res.json();
-      setQueue(data.queue ?? []);
-      setStats(data.stats ?? { Pending: 0, Posted: 0, Skipped: 0, total: 0, date: today });
+      setQueue(Array.isArray(data.queue) ? (data.queue as QueueItem[]) : []);
+      setStats(
+        (data.stats as QueueStats) ?? { Pending: 0, Posted: 0, Skipped: 0, total: 0, date: today },
+      );
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
-  }, [token]);
+  }, [token, today]);
 
   useEffect(() => { fetchQueue(); }, [fetchQueue]);
 
@@ -1267,16 +1335,22 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     if (filterMaxYear) p.set('max_year', filterMaxYear);
     if (filterPosted) p.set('posted_status', filterPosted);
     try {
-      const res = await fetch(`${API_BASE}/marketplace/inventory?${p}`);
-      const data = await res.json();
-      setInventory(data.inventory ?? []);
-      setMakes(data.makes ?? []);
-      setModels(data.models ?? []);
-      setYears(data.years ?? []);
-      setLocations(data.locations ?? []);
-      setCounts(data.counts ?? { ACTIVE: 0, SOLD: 0, total: 0, posted: 0 });
-      setLastSync(data.last_sync ?? '');
-    } catch (e) { console.error(e); }
+      const { data } = await fetchMarketplaceJson(`/marketplace/inventory?${p}`);
+      setInventory(Array.isArray(data.inventory) ? (data.inventory as Vehicle[]) : []);
+      setMakes(Array.isArray(data.makes) ? (data.makes as string[]) : []);
+      setModels(Array.isArray(data.models) ? (data.models as string[]) : []);
+      setYears(Array.isArray(data.years) ? (data.years as number[]) : []);
+      setLocations(Array.isArray(data.locations) ? (data.locations as string[]) : []);
+      setCounts(
+        (data.counts as { ACTIVE: number; SOLD: number; total: number; posted: number })
+          ?? { ACTIVE: 0, SOLD: 0, total: 0, posted: 0 },
+      );
+      setLastSync(typeof data.last_sync === 'string' ? data.last_sync : '');
+    } catch (e) {
+      console.error(e);
+      setInventory([]);
+      setCounts({ ACTIVE: 0, SOLD: 0, total: 0, posted: 0 });
+    }
     finally { setLoading(false); }
   }, [filterCondition, filterMinPrice, filterMaxPrice, filterMinYear, filterMaxYear, filterPosted]);
 

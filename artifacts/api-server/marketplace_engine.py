@@ -867,10 +867,12 @@ def get_queue(status: str | None = None, db_path: str | None = None) -> dict:
         counts[item["status"]] = counts.get(item["status"], 0) + 1
 
     return {
+        "success": True,
         "items": items,
         "total": len(items),
         "counts": counts,
         "quota": quota,
+        "queue": items,
     }
 
 
@@ -980,6 +982,7 @@ def schedule_vehicle(
         conn.close()
 
     return {
+        "success": True,
         "status": "ok",
         "action": action,
         "item": _row_to_item(row) if row else None,

@@ -12720,12 +12720,25 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             _mq_status = (qs.get("status", [None])[0]) or None
             try:
-                self._json(_get_queue(status=_mq_status, db_path=DB_FILE))
+                _mq = _get_queue(status=_mq_status, db_path=DB_FILE)
+                if isinstance(_mq, dict):
+                    _mq.setdefault("success", True)
+                    # Alias for clients that expect a top-level `queue` array.
+                    if "queue" not in _mq and "items" in _mq:
+                        _mq["queue"] = _mq["items"]
+                self._json(_mq)
             except ValueError as exc:
-                self._json({"error": str(exc)}, 400)
+                self._json({"success": False, "error": str(exc), "items": [], "queue": []}, 400)
             except Exception as exc:
                 print(f"[MARKETPLACE] queue error: {exc}")
-                self._json({"error": "Failed to load marketplace queue."}, 500)
+                self._json({
+                    "success": False,
+                    "error": "Failed to load marketplace queue.",
+                    "items": [],
+                    "queue": [],
+                    "total": 0,
+                    "counts": {"scheduled": 0, "posted": 0, "failed": 0, "paused": 0},
+                }, 500)
             return
 
         # ── Scrape / sync progress (public/local, no token) ────────────
@@ -12783,6 +12796,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             _mi_uid = _local_settings_user_id(self._get_bearer_token())
             if not _mi_uid:
                 self._json({
+                    "success": True,
                     "inventory": [], "makes": [], "models": [], "years": [], "locations": [],
                     "counts": {"ACTIVE": 0, "SOLD": 0, "total": 0, "posted": 0},
                     "last_sync": "",
@@ -12800,6 +12814,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     return 0
 
             self._json({
+                "success": True,
                 "inventory": MarketplaceDB.get_inventory(
                     _mi_uid,
                     condition=_miq('condition'),
@@ -15099,15 +15114,18 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 or payload.get("instant")
             )
             try:
-                self._json(_schedule_vehicle(
+                _sched = _schedule_vehicle(
                     vin=vin,
                     scheduled_time=payload.get("scheduled_time") or None,
                     publish_now=_publish_now,
                     ai_description=payload.get("ai_description"),
                     db_path=DB_FILE,
-                ))
+                )
+                if isinstance(_sched, dict):
+                    _sched.setdefault("success", True)
+                self._json(_sched)
             except LookupError as exc:
-                self._json({"error": str(exc)}, 404)
+                self._json({"success": False, "error": str(exc)}, 404)
             except PermissionError as exc:
                 # Daily cap reached — surface quota so the UI can show the gauge.
                 try:
@@ -15115,12 +15133,12 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     _q = _get_quota(db_path=DB_FILE)
                 except Exception:
                     _q = None
-                self._json({"error": str(exc), "quota": _q}, 429)
+                self._json({"success": False, "error": str(exc), "quota": _q}, 429)
             except ValueError as exc:
-                self._json({"error": str(exc)}, 400)
+                self._json({"success": False, "error": str(exc)}, 400)
             except Exception as exc:
                 print(f"[MARKETPLACE] schedule error: {exc}")
-                self._json({"error": "Scheduling failed."}, 500)
+                self._json({"success": False, "error": "Scheduling failed."}, 500)
             return
 
         # ── Marketplace publisher: pause / resume / mark failed (public/local) ─
