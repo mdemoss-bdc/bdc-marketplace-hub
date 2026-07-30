@@ -21,7 +21,7 @@ module.exports = async function handler(req, res) {
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const query = Object.fromEntries(url.searchParams.entries());
-    const payload = listInventory(query);
+    const payload = await listInventory(query);
     res.status(200).json(payload);
   } catch (err) {
     console.error('[api/marketplace/inventory]', err);

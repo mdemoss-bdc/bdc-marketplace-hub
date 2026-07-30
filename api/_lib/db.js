@@ -1,11 +1,11 @@
 /**
  * Auth database facade.
  *
- * Prefers persistent PostgreSQL when DATABASE_URL / POSTGRES_URL is set
- * (Vercel Postgres / Neon). Falls back to the local SQLite + vault store
- * for offline development without a cloud database.
+ * On Vercel / serverless: ALWAYS PostgreSQL (DATABASE_URL / POSTGRES_URL).
+ * SQLite file storage is never used in production — it fails on the
+ * read-only filesystem and wipes /tmp state between invocations.
  *
- * All exported methods are async so route handlers can `await` uniformly.
+ * Locally without DATABASE_URL: SQLite fallback for offline development.
  */
 function databaseUrl() {
   return (
@@ -17,8 +17,19 @@ function databaseUrl() {
   ).trim();
 }
 
+function isServerless() {
+  return Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
 function usePostgres() {
+  if (isServerless()) return true;
   return Boolean(databaseUrl());
+}
+
+if (isServerless() && !databaseUrl()) {
+  console.error(
+    '[auth-db] FATAL: Vercel requires DATABASE_URL / POSTGRES_URL — SQLite disabled',
+  );
 }
 
 const impl = usePostgres() ? require('./db-pg') : require('./db-sqlite');
@@ -49,7 +60,7 @@ for (const key of Object.keys(impl)) {
 if (usePostgres()) {
   console.log('[auth-db] backend=postgresql (DATABASE_URL/POSTGRES_URL)');
 } else {
-  console.log('[auth-db] backend=sqlite (set DATABASE_URL for persistent Postgres)');
+  console.log('[auth-db] backend=sqlite (local only — set DATABASE_URL for Postgres)');
 }
 
 module.exports = exported;

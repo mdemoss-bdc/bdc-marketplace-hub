@@ -28,7 +28,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const payload = setQueueStatus({
+    const payload = await setQueueStatus({
       id,
       status,
       error_message: body.error_message || '',

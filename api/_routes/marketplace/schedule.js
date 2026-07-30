@@ -21,7 +21,7 @@ module.exports = async function handler(req, res) {
 
   const body = parseBody(req);
   try {
-    const payload = scheduleVehicle({
+    const payload = await scheduleVehicle({
       vin: body.vin,
       ai_description: body.ai_description,
       publish_now: Boolean(body.publish_now || body.post_now || body.instant),

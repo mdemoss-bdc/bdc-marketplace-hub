@@ -5,7 +5,7 @@
  */
 const { applySecurityHeaders } = require('../../_lib/security');
 const { parseBody } = require('../../_lib/http');
-const { openMarketplaceDb } = require('../../_lib/marketplace');
+const { getInventoryByVin, getLatestQueueCopy } = require('../../_lib/marketplace');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);
@@ -28,17 +28,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const db = openMarketplaceDb();
-    const vehicle = db
-      .prepare(`SELECT * FROM marketplace_inventory WHERE UPPER(vin) = ? LIMIT 1`)
-      .get(vin);
-    const queueRow = db
-      .prepare(
-        `SELECT ai_description FROM marketplace_queue WHERE UPPER(vin) = ?
-         ORDER BY id DESC LIMIT 1`,
-      )
-      .get(vin);
-
+    const queueRow = await getLatestQueueCopy(vin);
     if (queueRow?.ai_description) {
       res.status(200).json({
         success: true,
@@ -48,6 +38,7 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    const vehicle = await getInventoryByVin(vin);
     if (!vehicle) {
       res.status(404).json({ success: false, error: `VIN ${vin} not found in inventory` });
       return;

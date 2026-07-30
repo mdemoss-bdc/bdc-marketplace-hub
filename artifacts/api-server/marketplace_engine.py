@@ -22,13 +22,26 @@ from __future__ import annotations
 import json
 import os
 import re
-import sqlite3
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _DEFAULT_DB = os.path.join(_HERE, "bdc_production.db")
+_DATABASE_URL = (
+    os.environ.get("DATABASE_URL")
+    or os.environ.get("POSTGRES_URL")
+    or ""
+).strip()
+
+# Prefer PostgreSQL when DATABASE_URL / POSTGRES_URL is set (Vercel / Neon).
+# Local standalone runs without a URL keep SQLite for offline development.
+if _DATABASE_URL:
+    import pg_compat as sqlite3  # noqa: E402
+    _DB_TARGET = _DATABASE_URL
+else:
+    import sqlite3  # noqa: E402
+    _DB_TARGET = os.environ.get("SQLITE_PATH") or _DEFAULT_DB
 
 # ── Safety rails ──────────────────────────────────────────────────────────
 DAILY_POST_CAP = 10          # hard ceiling on posts per calendar day
@@ -55,13 +68,17 @@ _HOST_DEALER_DEFAULTS: dict[str, tuple[str, str]] = {
 # ---------------------------------------------------------------------------
 
 def _db_path() -> str:
-    return os.environ.get("SQLITE_PATH") or _DEFAULT_DB
+    return _DB_TARGET
 
 
 def _connect(db_path: str | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path or _db_path())
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    if not _DATABASE_URL:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            pass
     return conn
 
 

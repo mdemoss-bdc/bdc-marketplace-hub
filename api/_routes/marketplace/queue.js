@@ -21,7 +21,7 @@ module.exports = async function handler(req, res) {
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const status = url.searchParams.get('status') || undefined;
-    const payload = getPublisherQueue(status);
+    const payload = await getPublisherQueue(status);
     res.status(200).json(payload);
   } catch (err) {
     console.error('[api/marketplace/queue]', err);

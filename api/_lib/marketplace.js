@@ -1,11 +1,18 @@
 /**
- * Marketplace queue + inventory helpers for Vercel/Node serverless routes.
- * Mirrors the Python marketplace_engine / MarketplaceDB JSON contracts so the
- * Hub never receives HTML 404 bodies (which caused "Unexpected token 'T'").
+ * Marketplace queue + inventory helpers — PostgreSQL only on Vercel.
+ *
+ * Uses DATABASE_URL / POSTGRES_URL via api/_lib/pg.js. Never opens a local
+ * SQLite file in serverless environments (that caused "unable to open
+ * database file" and wiped ephemeral state).
  */
-const fs = require('fs');
-const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+const {
+  query,
+  queryOne,
+  queryAll,
+  ensureCoreSchema,
+  databaseUrl,
+  isServerless,
+} = require('./pg');
 const {
   sanitizeInventoryList,
   sanitizeVehicleRecord,
@@ -15,123 +22,25 @@ const {
 const DAILY_POST_CAP = 10;
 const VALID_STATUSES = new Set(['scheduled', 'posted', 'failed', 'paused']);
 
-let _db = null;
-let _dbFile = null;
+let _ready = null;
 
-function candidateDbPaths() {
-  const env =
-    process.env.MARKETPLACE_DB_PATH ||
-    process.env.SQLITE_PATH ||
-    process.env.AUTH_DB_PATH ||
-    '';
-  const roots = [
-    env,
-    path.join(__dirname, '..', '..', 'artifacts', 'api-server', 'bdc_production.db'),
-    path.join(process.cwd(), 'artifacts', 'api-server', 'bdc_production.db'),
-    path.join(__dirname, '..', '_data', 'marketplace.db'),
-  ].filter(Boolean);
-
-  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    roots.push(path.join('/tmp', 'bdc-marketplace.db'));
+async function openMarketplaceDb() {
+  if (!databaseUrl() && isServerless()) {
+    throw new Error(
+      'DATABASE_URL / POSTGRES_URL required — SQLite is disabled on Vercel.',
+    );
   }
-  return roots;
-}
-
-function resolveDbPath() {
-  for (const file of candidateDbPaths()) {
-    try {
-      if (fs.existsSync(file)) return file;
-    } catch {
-      /* skip */
-    }
+  if (!databaseUrl()) {
+    throw new Error(
+      'DATABASE_URL / POSTGRES_URL is not configured for marketplace storage.',
+    );
   }
-  // Prefer writable fallback for cold starts with no shipped SQLite file.
-  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    return path.join('/tmp', 'bdc-marketplace.db');
-  }
-  return path.join(__dirname, '..', '_data', 'marketplace.db');
-}
-
-function ensureSchema(db) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS marketplace_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      vin TEXT NOT NULL,
-      stock_number TEXT NOT NULL DEFAULT '',
-      year INTEGER NOT NULL DEFAULT 0,
-      make TEXT NOT NULL DEFAULT '',
-      model TEXT NOT NULL DEFAULT '',
-      trim TEXT NOT NULL DEFAULT '',
-      price INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'scheduled',
-      scheduled_time TEXT DEFAULT NULL,
-      posted_at TEXT DEFAULT NULL,
-      ai_description TEXT NOT NULL DEFAULT '',
-      error_message TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-      is_demo INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE INDEX IF NOT EXISTS idx_mq_status ON marketplace_queue(status);
-    CREATE INDEX IF NOT EXISTS idx_mq_posted_at ON marketplace_queue(posted_at);
-
-    CREATE TABLE IF NOT EXISTS marketplace_inventory (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL DEFAULT 0,
-      vin TEXT NOT NULL,
-      stock_number TEXT DEFAULT '',
-      condition TEXT DEFAULT 'Used',
-      year INTEGER DEFAULT 0,
-      make TEXT DEFAULT '',
-      model TEXT DEFAULT '',
-      trim TEXT DEFAULT '',
-      mileage INTEGER DEFAULT 0,
-      price INTEGER DEFAULT 0,
-      exterior_color TEXT DEFAULT '',
-      interior_color TEXT DEFAULT '',
-      image_url TEXT DEFAULT '',
-      status TEXT DEFAULT 'ACTIVE',
-      location TEXT DEFAULT '',
-      dealership_group TEXT DEFAULT '',
-      vdp_url TEXT DEFAULT '',
-      posted_status TEXT DEFAULT 'not_posted',
-      ai_description TEXT DEFAULT '',
-      last_seen TEXT DEFAULT (datetime('now')),
-      created_at TEXT DEFAULT (datetime('now')),
-      UNIQUE(user_id, vin)
-    );
-
-    CREATE TABLE IF NOT EXISTS posting_queue (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL DEFAULT 0,
-      queue_date TEXT NOT NULL,
-      vin TEXT NOT NULL,
-      stock_number TEXT DEFAULT '',
-      year INTEGER DEFAULT 0,
-      make TEXT DEFAULT '',
-      model TEXT DEFAULT '',
-      trim TEXT DEFAULT '',
-      scheduled_time TEXT NOT NULL DEFAULT '',
-      status TEXT DEFAULT 'Pending',
-      posted_at TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      UNIQUE(user_id, queue_date, vin)
-    );
-
-    CREATE TABLE IF NOT EXISTS marketplace_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL DEFAULT ''
-    );
-  `);
-}
-
-function openMarketplaceDb() {
-  const file = resolveDbPath();
-  if (_db && _dbFile === file) return _db;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  _db = new DatabaseSync(file);
-  _dbFile = file;
-  ensureSchema(_db);
-  return _db;
+  if (_ready) return _ready;
+  _ready = ensureCoreSchema().catch((err) => {
+    _ready = null;
+    throw err;
+  });
+  return _ready;
 }
 
 function emptyQuota() {
@@ -155,55 +64,6 @@ function emptyPublisherQueue() {
     queue: [],
     auto_publish: true,
   };
-}
-
-function readAutoPublishFlag(db) {
-  try {
-    const row = db
-      .prepare(`SELECT value FROM marketplace_settings WHERE key = 'auto_publish'`)
-      .get();
-    if (!row) return true;
-    const v = String(row.value || '').trim().toLowerCase();
-    return !(v === 'off' || v === '0' || v === 'false' || v === 'paused');
-  } catch {
-    return true;
-  }
-}
-
-function getAutoPublish() {
-  try {
-    const db = openMarketplaceDb();
-    const enabled = readAutoPublishFlag(db);
-    return {
-      success: true,
-      auto_publish: enabled,
-      status: enabled ? 'active' : 'paused',
-    };
-  } catch (err) {
-    console.error('[marketplace] getAutoPublish', err);
-    return { success: true, auto_publish: true, status: 'active' };
-  }
-}
-
-function setAutoPublish(enabled) {
-  try {
-    const db = openMarketplaceDb();
-    const value = enabled ? 'on' : 'off';
-    db.prepare(
-      `INSERT INTO marketplace_settings (key, value) VALUES ('auto_publish', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    ).run(value);
-    return {
-      success: true,
-      auto_publish: Boolean(enabled),
-      status: enabled ? 'active' : 'paused',
-    };
-  } catch (err) {
-    console.error('[marketplace] setAutoPublish', err);
-    const e = new Error(err.message || 'Failed to update auto-publish.');
-    e.status = 500;
-    throw e;
-  }
 }
 
 function emptyInventory() {
@@ -248,14 +108,63 @@ function rowToPublisherItem(row) {
   };
 }
 
-function postsToday(db) {
+async function readAutoPublishFlag() {
+  try {
+    const row = await queryOne(
+      `SELECT value FROM marketplace_settings WHERE key = 'auto_publish'`,
+    );
+    if (!row) return true;
+    const v = String(row.value || '').trim().toLowerCase();
+    return !(v === 'off' || v === '0' || v === 'false' || v === 'paused');
+  } catch {
+    return true;
+  }
+}
+
+async function getAutoPublish() {
+  try {
+    await openMarketplaceDb();
+    const enabled = await readAutoPublishFlag();
+    return {
+      success: true,
+      auto_publish: enabled,
+      status: enabled ? 'active' : 'paused',
+    };
+  } catch (err) {
+    console.error('[marketplace] getAutoPublish', err);
+    return { success: true, auto_publish: true, status: 'active' };
+  }
+}
+
+async function setAutoPublish(enabled) {
+  try {
+    await openMarketplaceDb();
+    const value = enabled ? 'on' : 'off';
+    await query(
+      `INSERT INTO marketplace_settings (key, value) VALUES ('auto_publish', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [value],
+    );
+    return {
+      success: true,
+      auto_publish: Boolean(enabled),
+      status: enabled ? 'active' : 'paused',
+    };
+  } catch (err) {
+    console.error('[marketplace] setAutoPublish', err);
+    const e = new Error(err.message || 'Failed to update auto-publish.');
+    e.status = 500;
+    throw e;
+  }
+}
+
+async function postsToday() {
   const day = new Date().toISOString().slice(0, 10);
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS c FROM marketplace_queue
-       WHERE status = 'posted' AND posted_at IS NOT NULL AND posted_at LIKE ?`,
-    )
-    .get(`${day}%`);
+  const row = await queryOne(
+    `SELECT COUNT(*)::int AS c FROM marketplace_queue
+     WHERE status = 'posted' AND posted_at IS NOT NULL AND posted_at LIKE $1`,
+    [`${day}%`],
+  );
   return Number(row?.c) || 0;
 }
 
@@ -271,41 +180,39 @@ function quotaPayload(used) {
   };
 }
 
-function getPublisherQueue(statusFilter) {
+async function getPublisherQueue(statusFilter) {
   try {
-    const db = openMarketplaceDb();
+    await openMarketplaceDb();
     let rows;
     if (statusFilter && VALID_STATUSES.has(statusFilter)) {
-      rows = db
-        .prepare(
-          `SELECT * FROM marketplace_queue WHERE status = ?
-           ORDER BY CASE status WHEN 'scheduled' THEN 0 WHEN 'failed' THEN 1
-           WHEN 'paused' THEN 2 ELSE 3 END,
-           COALESCE(scheduled_time, posted_at, created_at) ASC`,
-        )
-        .all(statusFilter);
+      rows = await queryAll(
+        `SELECT * FROM marketplace_queue WHERE status = $1
+         ORDER BY CASE status WHEN 'scheduled' THEN 0 WHEN 'failed' THEN 1
+         WHEN 'paused' THEN 2 ELSE 3 END,
+         COALESCE(scheduled_time, posted_at, created_at::text) ASC`,
+        [statusFilter],
+      );
     } else {
-      rows = db
-        .prepare(
-          `SELECT * FROM marketplace_queue
-           ORDER BY CASE status WHEN 'scheduled' THEN 0 WHEN 'failed' THEN 1
-           WHEN 'paused' THEN 2 ELSE 3 END,
-           COALESCE(scheduled_time, posted_at, created_at) ASC`,
-        )
-        .all();
+      rows = await queryAll(
+        `SELECT * FROM marketplace_queue
+         ORDER BY CASE status WHEN 'scheduled' THEN 0 WHEN 'failed' THEN 1
+         WHEN 'paused' THEN 2 ELSE 3 END,
+         COALESCE(scheduled_time, posted_at, created_at::text) ASC`,
+      );
     }
     const items = rows.map(rowToPublisherItem);
     const counts = { scheduled: 0, posted: 0, failed: 0, paused: 0 };
     for (const item of items) {
       counts[item.status] = (counts[item.status] || 0) + 1;
     }
-    const autoPublish = readAutoPublishFlag(db);
+    const autoPublish = await readAutoPublishFlag();
+    const used = await postsToday();
     return {
       success: true,
       items,
       total: items.length,
       counts,
-      quota: quotaPayload(postsToday(db)),
+      quota: quotaPayload(used),
       queue: items,
       auto_publish: autoPublish,
     };
@@ -315,116 +222,108 @@ function getPublisherQueue(statusFilter) {
   }
 }
 
-function listInventory(query = {}) {
+async function listInventory(queryParams = {}) {
   try {
-    const db = openMarketplaceDb();
+    await openMarketplaceDb();
     const clauses = [];
     const params = [];
+    let i = 1;
 
-    const status = String(query.status || 'ACTIVE').trim() || 'ACTIVE';
+    const status = String(queryParams.status || 'ACTIVE').trim() || 'ACTIVE';
     if (status.toUpperCase() !== 'ALL') {
-      clauses.push('UPPER(status) = UPPER(?)');
+      clauses.push(`UPPER(status) = UPPER($${i++})`);
       params.push(status);
     }
-    if (query.condition) {
-      clauses.push('LOWER(condition) = LOWER(?)');
-      params.push(String(query.condition));
+    if (queryParams.condition) {
+      clauses.push(`LOWER(condition) = LOWER($${i++})`);
+      params.push(String(queryParams.condition));
     }
-    if (query.make) {
-      clauses.push('LOWER(make) = LOWER(?)');
-      params.push(String(query.make));
+    if (queryParams.make) {
+      clauses.push(`LOWER(make) = LOWER($${i++})`);
+      params.push(String(queryParams.make));
     }
-    if (query.model) {
-      clauses.push('LOWER(model) = LOWER(?)');
-      params.push(String(query.model));
+    if (queryParams.model) {
+      clauses.push(`LOWER(model) = LOWER($${i++})`);
+      params.push(String(queryParams.model));
     }
-    if (query.location) {
-      clauses.push('LOWER(location) = LOWER(?)');
-      params.push(String(query.location));
+    if (queryParams.location) {
+      clauses.push(`LOWER(location) = LOWER($${i++})`);
+      params.push(String(queryParams.location));
     }
-    if (query.posted_status) {
-      clauses.push('LOWER(COALESCE(posted_status, \'not_posted\')) = LOWER(?)');
-      params.push(String(query.posted_status));
+    if (queryParams.posted_status) {
+      clauses.push(
+        `LOWER(COALESCE(posted_status, 'not_posted')) = LOWER($${i++})`,
+      );
+      params.push(String(queryParams.posted_status));
     }
-    const minPrice = Number(query.min_price) || 0;
-    const maxPrice = Number(query.max_price) || 0;
-    const minYear = Number(query.min_year) || 0;
-    const maxYear = Number(query.max_year) || 0;
+    const minPrice = Number(queryParams.min_price) || 0;
+    const maxPrice = Number(queryParams.max_price) || 0;
+    const minYear = Number(queryParams.min_year) || 0;
+    const maxYear = Number(queryParams.max_year) || 0;
     if (minPrice > 0) {
-      clauses.push('price >= ?');
+      clauses.push(`price >= $${i++}`);
       params.push(minPrice);
     }
     if (maxPrice > 0) {
-      clauses.push('price <= ?');
+      clauses.push(`price <= $${i++}`);
       params.push(maxPrice);
     }
     if (minYear > 0) {
-      clauses.push('year >= ?');
+      clauses.push(`year >= $${i++}`);
       params.push(minYear);
     }
     if (maxYear > 0) {
-      clauses.push('year <= ?');
+      clauses.push(`year <= $${i++}`);
       params.push(maxYear);
     }
 
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const inventory = sanitizeInventoryList(
-      db
-        .prepare(
-          `SELECT * FROM marketplace_inventory ${where}
-           ORDER BY condition ASC, year DESC, price ASC`,
-        )
-        .all(...params),
+      await queryAll(
+        `SELECT * FROM marketplace_inventory ${where}
+         ORDER BY condition ASC, year DESC, price ASC`,
+        params,
+      ),
     );
 
-    const makes = db
-      .prepare(
+    const makes = (
+      await queryAll(
         `SELECT DISTINCT make FROM marketplace_inventory
          WHERE make != '' AND UPPER(status)='ACTIVE' ORDER BY make`,
       )
-      .all()
-      .map((r) => r.make);
-    const models = db
-      .prepare(
+    ).map((r) => r.make);
+    const models = (
+      await queryAll(
         `SELECT DISTINCT model FROM marketplace_inventory
          WHERE model != '' AND UPPER(status)='ACTIVE' ORDER BY model`,
       )
-      .all()
-      .map((r) => r.model);
-    const years = db
-      .prepare(
+    ).map((r) => r.model);
+    const years = (
+      await queryAll(
         `SELECT DISTINCT year FROM marketplace_inventory
          WHERE year > 0 ORDER BY year ASC`,
       )
-      .all()
-      .map((r) => r.year);
-    const locations = db
-      .prepare(
+    ).map((r) => r.year);
+    const locations = (
+      await queryAll(
         `SELECT DISTINCT location FROM marketplace_inventory
          WHERE location != '' ORDER BY location`,
       )
-      .all()
-      .map((r) => r.location);
+    ).map((r) => r.location);
 
-    const active = db
-      .prepare(
-        `SELECT COUNT(*) AS c FROM marketplace_inventory WHERE UPPER(status)='ACTIVE'`,
-      )
-      .get();
-    const sold = db
-      .prepare(
-        `SELECT COUNT(*) AS c FROM marketplace_inventory WHERE UPPER(status)='SOLD'`,
-      )
-      .get();
-    const posted = db
-      .prepare(
-        `SELECT COUNT(*) AS c FROM marketplace_inventory
-         WHERE LOWER(COALESCE(posted_status,'')) IN ('posted','queued')`,
-      )
-      .get();
-    const last = db
-      .prepare(`SELECT MAX(last_seen) AS last_sync FROM marketplace_inventory`)
-      .get();
+    const active = await queryOne(
+      `SELECT COUNT(*)::int AS c FROM marketplace_inventory WHERE UPPER(status)='ACTIVE'`,
+    );
+    const sold = await queryOne(
+      `SELECT COUNT(*)::int AS c FROM marketplace_inventory WHERE UPPER(status)='SOLD'`,
+    );
+    const posted = await queryOne(
+      `SELECT COUNT(*)::int AS c FROM marketplace_inventory
+       WHERE LOWER(COALESCE(posted_status,'')) IN ('posted','queued')`,
+    );
+    const last = await queryOne(
+      `SELECT MAX(last_seen) AS last_sync FROM marketplace_inventory`,
+    );
 
     return {
       success: true,
@@ -439,7 +338,7 @@ function listInventory(query = {}) {
         total: (Number(active?.c) || 0) + (Number(sold?.c) || 0),
         posted: Number(posted?.c) || 0,
       },
-      last_sync: last?.last_sync || '',
+      last_sync: last?.last_sync ? String(last.last_sync) : '',
     };
   } catch (err) {
     console.error('[marketplace] listInventory', err);
@@ -447,15 +346,15 @@ function listInventory(query = {}) {
   }
 }
 
-function findVehicleByVin(db, vin) {
-  return db
-    .prepare(
-      `SELECT * FROM marketplace_inventory WHERE UPPER(vin) = UPPER(?) LIMIT 1`,
-    )
-    .get(vin);
+async function findVehicleByVin(vin) {
+  return queryOne(
+    `SELECT * FROM marketplace_inventory WHERE UPPER(vin) = UPPER($1) LIMIT 1`,
+    [vin],
+  );
 }
 
-function scheduleVehicle({ vin, ai_description, publish_now, scheduled_time }) {
+async function scheduleVehicle({ vin, ai_description, publish_now, scheduled_time }) {
+  await openMarketplaceDb();
   const cleanVin = String(vin || '').trim().toUpperCase();
   if (!cleanVin) {
     const err = new Error('vin is required.');
@@ -463,15 +362,14 @@ function scheduleVehicle({ vin, ai_description, publish_now, scheduled_time }) {
     throw err;
   }
 
-  const db = openMarketplaceDb();
-  const vehicle = findVehicleByVin(db, cleanVin);
+  const vehicle = await findVehicleByVin(cleanVin);
   if (!vehicle) {
     const err = new Error(`VIN ${cleanVin} not found in inventory`);
     err.status = 404;
     throw err;
   }
 
-  const used = postsToday(db);
+  const used = await postsToday();
   if (publish_now && used >= DAILY_POST_CAP) {
     const err = new Error(
       `Daily cap reached (${used}/${DAILY_POST_CAP}) — cannot publish now.`,
@@ -495,32 +393,31 @@ function scheduleVehicle({ vin, ai_description, publish_now, scheduled_time }) {
       new Date(Date.now() + 45 * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const postedAt = publish_now ? nowIso : null;
 
-  const existing = db
-    .prepare(
-      `SELECT id FROM marketplace_queue
-       WHERE vin = ? AND status IN ('scheduled','paused')
-       ORDER BY id DESC LIMIT 1`,
-    )
-    .get(cleanVin);
+  const existing = await queryOne(
+    `SELECT id FROM marketplace_queue
+     WHERE vin = $1 AND status IN ('scheduled','paused')
+     ORDER BY id DESC LIMIT 1`,
+    [cleanVin],
+  );
 
   let rowId;
   let action;
   if (existing) {
-    db.prepare(
-      `UPDATE marketplace_queue SET status=?, scheduled_time=?, posted_at=?,
-       ai_description=?, error_message='' WHERE id=?`,
-    ).run(status, sched, postedAt, description, existing.id);
+    await query(
+      `UPDATE marketplace_queue SET status=$1, scheduled_time=$2, posted_at=$3,
+       ai_description=$4, error_message='' WHERE id=$5`,
+      [status, sched, postedAt, description, existing.id],
+    );
     rowId = existing.id;
     action = 'updated';
   } else {
-    const result = db
-      .prepare(
-        `INSERT INTO marketplace_queue
-          (vin, stock_number, year, make, model, trim, price,
-           status, scheduled_time, posted_at, ai_description, is_demo)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-      )
-      .run(
+    const inserted = await queryOne(
+      `INSERT INTO marketplace_queue
+        (vin, stock_number, year, make, model, trim, price,
+         status, scheduled_time, posted_at, ai_description, is_demo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,0)
+       RETURNING id`,
+      [
         cleanVin,
         vehicle.stock_number || '',
         Number(vehicle.year) || 0,
@@ -532,29 +429,32 @@ function scheduleVehicle({ vin, ai_description, publish_now, scheduled_time }) {
         sched,
         postedAt,
         description,
-      );
-    rowId = Number(result.lastInsertRowid) || 0;
+      ],
+    );
+    rowId = Number(inserted?.id) || 0;
     action = publish_now ? 'published' : 'scheduled';
   }
 
-  const row = db.prepare(`SELECT * FROM marketplace_queue WHERE id = ?`).get(rowId);
+  const row = await queryOne(`SELECT * FROM marketplace_queue WHERE id = $1`, [rowId]);
   return {
     success: true,
     status: 'ok',
     action,
     item: row ? rowToPublisherItem(row) : null,
-    quota: quotaPayload(postsToday(db)),
+    quota: quotaPayload(await postsToday()),
   };
 }
 
-function setQueueStatus({ id, status, error_message }) {
+async function setQueueStatus({ id, status, error_message }) {
+  await openMarketplaceDb();
   if (!VALID_STATUSES.has(status)) {
     const err = new Error(`status must be one of ${[...VALID_STATUSES].join(', ')}`);
     err.status = 400;
     throw err;
   }
-  const db = openMarketplaceDb();
-  const row = db.prepare(`SELECT id FROM marketplace_queue WHERE id = ?`).get(Number(id));
+  const row = await queryOne(`SELECT id FROM marketplace_queue WHERE id = $1`, [
+    Number(id),
+  ]);
   if (!row) {
     const err = new Error(`Queue item ${id} not found`);
     err.status = 404;
@@ -562,39 +462,41 @@ function setQueueStatus({ id, status, error_message }) {
   }
   if (status === 'posted') {
     const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-    db.prepare(
-      `UPDATE marketplace_queue SET status=?, posted_at=?, error_message='' WHERE id=?`,
-    ).run(status, nowIso, Number(id));
+    await query(
+      `UPDATE marketplace_queue SET status=$1, posted_at=$2, error_message='' WHERE id=$3`,
+      [status, nowIso, Number(id)],
+    );
   } else {
-    db.prepare(
-      `UPDATE marketplace_queue SET status=?, error_message=? WHERE id=?`,
-    ).run(status, String(error_message || ''), Number(id));
+    await query(
+      `UPDATE marketplace_queue SET status=$1, error_message=$2 WHERE id=$3`,
+      [status, String(error_message || ''), Number(id)],
+    );
   }
-  const updated = db.prepare(`SELECT * FROM marketplace_queue WHERE id = ?`).get(Number(id));
+  const updated = await queryOne(`SELECT * FROM marketplace_queue WHERE id = $1`, [
+    Number(id),
+  ]);
   return {
     success: true,
     item: updated ? rowToPublisherItem(updated) : null,
-    quota: quotaPayload(postsToday(db)),
+    quota: quotaPayload(await postsToday()),
   };
 }
 
-function getDailyPostingQueue(userId, date) {
+async function getDailyPostingQueue(userId, date) {
   try {
-    const db = openMarketplaceDb();
+    await openMarketplaceDb();
     const target = date || new Date().toISOString().slice(0, 10);
     const uid = Number(userId) || 0;
-    const queue = db
-      .prepare(
-        `SELECT * FROM posting_queue WHERE user_id = ? AND queue_date = ?
-         ORDER BY scheduled_time ASC, id ASC`,
-      )
-      .all(uid, target);
-    const statsRows = db
-      .prepare(
-        `SELECT status, COUNT(*) AS c FROM posting_queue
-         WHERE user_id = ? AND queue_date = ? GROUP BY status`,
-      )
-      .all(uid, target);
+    const queue = await queryAll(
+      `SELECT * FROM posting_queue WHERE user_id = $1 AND queue_date = $2
+       ORDER BY scheduled_time ASC, id ASC`,
+      [uid, target],
+    );
+    const statsRows = await queryAll(
+      `SELECT status, COUNT(*)::int AS c FROM posting_queue
+       WHERE user_id = $1 AND queue_date = $2 GROUP BY status`,
+      [uid, target],
+    );
     const stats = { Pending: 0, Posted: 0, Skipped: 0, total: 0, date: target };
     for (const r of statsRows) {
       if (r.status in stats) stats[r.status] = Number(r.c) || 0;
@@ -612,6 +514,20 @@ function getDailyPostingQueue(userId, date) {
   }
 }
 
+async function getInventoryByVin(vin) {
+  await openMarketplaceDb();
+  return findVehicleByVin(String(vin || '').trim().toUpperCase());
+}
+
+async function getLatestQueueCopy(vin) {
+  await openMarketplaceDb();
+  return queryOne(
+    `SELECT ai_description FROM marketplace_queue WHERE UPPER(vin) = UPPER($1)
+     ORDER BY id DESC LIMIT 1`,
+    [vin],
+  );
+}
+
 module.exports = {
   DAILY_POST_CAP,
   emptyPublisherQueue,
@@ -624,6 +540,9 @@ module.exports = {
   getAutoPublish,
   setAutoPublish,
   openMarketplaceDb,
+  getInventoryByVin,
+  getLatestQueueCopy,
+  findVehicleByVin,
   sanitizeInventoryList,
   sanitizeVehicleRecord,
   parseInventoryText,

@@ -5,9 +5,9 @@
  * Schema mirrors the Python engine `users` table so registrations survive
  * ephemeral /tmp SQLite on serverless.
  */
-const crypto = require('crypto');
 const { Pool } = require('pg');
 const { hashPassword, verifyPassword, looksLikePasswordHash, needsRehash } = require('./crypto-passwords');
+const { ensureCoreSchema, databaseUrl: sharedDatabaseUrl } = require('./pg');
 
 const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
 const DEFAULT_TESTER_PASSWORD = 'TestReviewer123!';
@@ -22,13 +22,7 @@ let _pool = null;
 let _ready = null;
 
 function databaseUrl() {
-  return (
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    process.env.POSTGRES_PRISMA_URL ||
-    process.env.POSTGRES_URL_NON_POOLING ||
-    ''
-  ).trim();
+  return sharedDatabaseUrl();
 }
 
 function getPool() {
@@ -63,37 +57,10 @@ async function queryOne(text, params = []) {
 }
 
 async function ensureSchema() {
-  await query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'Reviewer',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      email TEXT DEFAULT '',
-      phone TEXT DEFAULT '',
-      full_name TEXT DEFAULT '',
-      is_admin INTEGER NOT NULL DEFAULT 0,
-      is_master_admin INTEGER NOT NULL DEFAULT 0,
-      subscription_status TEXT DEFAULT 'inactive',
-      subscription_tier TEXT DEFAULT '',
-      org_role TEXT DEFAULT '',
-      organization_id INTEGER,
-      email_verified INTEGER NOT NULL DEFAULT 1,
-      is_suspended INTEGER NOT NULL DEFAULT 0,
-      recovery_id TEXT DEFAULT '',
-      mock_role TEXT DEFAULT '',
-      email_revert_token TEXT DEFAULT NULL,
-      email_revert_expires_at TIMESTAMPTZ DEFAULT NULL,
-      old_email_history TEXT DEFAULT '',
-      cox_client_id TEXT DEFAULT '',
-      cox_client_secret TEXT DEFAULT '',
-      cox_dealer_id TEXT DEFAULT '',
-      active_session_id TEXT DEFAULT ''
-    );
-  `);
+  // Shared DDL: users + marketplace_inventory + marketplace_queue + posting_queue
+  await ensureCoreSchema();
 
-  // Idempotent column adds for older Neon schemas
+  // Idempotent column adds for older Neon schemas / Cox fields
   const alters = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT DEFAULT ''",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT DEFAULT ''",
@@ -112,6 +79,9 @@ async function ensureSchema() {
     'ALTER TABLE users ADD COLUMN IF NOT EXISTS email_revert_expires_at TIMESTAMPTZ DEFAULT NULL',
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS old_email_history TEXT DEFAULT ''",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS active_session_id TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS cox_client_id TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS cox_client_secret TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS cox_dealer_id TEXT DEFAULT ''",
   ];
   for (const ddl of alters) {
     try {
@@ -120,15 +90,6 @@ async function ensureSchema() {
       console.warn('[auth-pg] alter skipped:', err.message || err);
     }
   }
-
-  await query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower
-      ON users (LOWER(username));
-  `);
-  await query(`
-    CREATE INDEX IF NOT EXISTS idx_users_email_lower
-      ON users (LOWER(email));
-  `);
 }
 
 function adminEnvPassword() {

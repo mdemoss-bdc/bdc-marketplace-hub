@@ -36,5 +36,5 @@ module.exports = async function handler(req, res) {
 
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const date = url.searchParams.get('date') || '';
-  res.status(200).json(getDailyPostingQueue(userId, date));
+  res.status(200).json(await getDailyPostingQueue(userId, date));
 };

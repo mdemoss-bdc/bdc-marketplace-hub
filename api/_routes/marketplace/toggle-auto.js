@@ -17,7 +17,7 @@ module.exports = async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    res.status(200).json(getAutoPublish());
+    res.status(200).json(await getAutoPublish());
     return;
   }
 
@@ -36,12 +36,12 @@ module.exports = async function handler(req, res) {
     } else if (typeof body.on === 'boolean') {
       enabled = body.on;
     } else if (body.toggle === true || body.toggle === 'toggle') {
-      enabled = !getAutoPublish().auto_publish;
+      enabled = !(await getAutoPublish()).auto_publish;
     } else {
       // Default: toggle
-      enabled = !getAutoPublish().auto_publish;
+      enabled = !(await getAutoPublish()).auto_publish;
     }
-    const payload = setAutoPublish(Boolean(enabled));
+    const payload = await setAutoPublish(Boolean(enabled));
     res.status(200).json(payload);
   } catch (err) {
     console.error('[api/marketplace/toggle-auto]', err);

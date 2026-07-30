@@ -71,11 +71,11 @@ function emptyInventory() {
 }
 
 /** GET /api/marketplace/queue */
-router.get("/marketplace/queue", (req, res) => {
+router.get("/marketplace/queue", async (req, res) => {
   try {
     const lib = loadMarketplaceLib();
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
-    const payload = lib.getPublisherQueue(status);
+    const payload = await lib.getPublisherQueue(status);
     res.status(200).json(payload ?? emptyQueue());
   } catch (err) {
     console.error("[marketplace/queue]", err);
@@ -84,10 +84,10 @@ router.get("/marketplace/queue", (req, res) => {
 });
 
 /** GET /api/marketplace/inventory */
-router.get("/marketplace/inventory", (req, res) => {
+router.get("/marketplace/inventory", async (req, res) => {
   try {
     const lib = loadMarketplaceLib();
-    const payload = lib.listInventory(req.query as Record<string, string>);
+    const payload = await lib.listInventory(req.query as Record<string, string>);
     res.status(200).json(payload ?? emptyInventory());
   } catch (err) {
     console.error("[marketplace/inventory]", err);
@@ -96,11 +96,11 @@ router.get("/marketplace/inventory", (req, res) => {
 });
 
 /** POST /api/marketplace/schedule */
-router.post("/marketplace/schedule", (req, res) => {
+router.post("/marketplace/schedule", async (req, res) => {
   try {
     const lib = loadMarketplaceLib();
     const body = (req.body || {}) as Record<string, unknown>;
-    const payload = lib.scheduleVehicle({
+    const payload = await lib.scheduleVehicle({
       vin: body.vin,
       ai_description: body.ai_description,
       publish_now: Boolean(body.publish_now || body.post_now || body.instant),
@@ -127,17 +127,17 @@ router.post("/marketplace/schedule", (req, res) => {
 });
 
 /** GET|POST /api/marketplace/toggle-auto */
-router.get("/marketplace/toggle-auto", (_req, res) => {
+router.get("/marketplace/toggle-auto", async (_req, res) => {
   try {
     const lib = loadMarketplaceLib();
-    res.status(200).json(lib.getAutoPublish());
+    res.status(200).json(await lib.getAutoPublish());
   } catch (err) {
     console.error("[marketplace/toggle-auto GET]", err);
     res.status(200).json({ success: true, auto_publish: true, status: "active" });
   }
 });
 
-router.post("/marketplace/toggle-auto", (req, res) => {
+router.post("/marketplace/toggle-auto", async (req, res) => {
   try {
     const lib = loadMarketplaceLib();
     const body = (req.body || {}) as Record<string, unknown>;
@@ -149,10 +149,10 @@ router.post("/marketplace/toggle-auto", (req, res) => {
     } else if (typeof body.on === "boolean") {
       enabled = body.on;
     } else {
-      const current = lib.getAutoPublish() as { auto_publish?: boolean };
+      const current = (await lib.getAutoPublish()) as { auto_publish?: boolean };
       enabled = !Boolean(current?.auto_publish);
     }
-    const payload = lib.setAutoPublish(enabled);
+    const payload = await lib.setAutoPublish(enabled);
     res.status(200).json(payload);
   } catch (err: unknown) {
     const e = err as { status?: number; message?: string };

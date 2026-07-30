@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Warm persistent auth store (Postgres schema + baseline seed) on cold start.
+// Warm persistent Postgres schema (auth + marketplace) on cold start.
 try {
   const { openDb, backend } = require('./db');
   Promise.resolve(openDb())
@@ -19,6 +19,14 @@ try {
     .catch((err) => console.error('[api] auth store warm failed:', err.message || err));
 } catch (err) {
   console.warn('[api] auth store warm skipped:', err.message || err);
+}
+try {
+  const { openMarketplaceDb } = require('./marketplace');
+  Promise.resolve(openMarketplaceDb())
+    .then(() => console.log('[api] marketplace store ready (postgresql)'))
+    .catch((err) => console.error('[api] marketplace warm failed:', err.message || err));
+} catch (err) {
+  console.warn('[api] marketplace warm skipped:', err.message || err);
 }
 
 /**
