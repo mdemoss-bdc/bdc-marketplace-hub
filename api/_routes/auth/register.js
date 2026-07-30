@@ -2,7 +2,8 @@
  * POST /api/auth/register
  * POST /api/auth/signup (alias)
  *
- * Creates a new user with a scrypt password hash and persists to SQLite + vault.
+ * Creates a new user with a scrypt password hash, persists to SQLite + vault,
+ * and returns a JWT session token for immediate sign-in.
  */
 const { createUser } = require('../../_lib/users');
 const { signJwt, setAuthCookie } = require('../../_lib/jwt');
@@ -23,18 +24,27 @@ module.exports = async function handler(req, res) {
   }
 
   const body = parseBody(req);
-  const username = String(body.username || '').trim();
+  const username = String(body.username || '').trim().toLowerCase();
   const password = String(body.password || '');
-  const email = String(body.email || '').trim();
+  const confirm = String(body.confirm_password || body.confirmPassword || '');
+  const email = String(body.email || '').trim().toLowerCase();
   const fullName = String(body.full_name || body.name || username).trim();
   const accountType = String(body.account_type || '').trim().toLowerCase();
-  const tosAccepted = Boolean(body.tos_accepted ?? body.tosAccepted);
 
-  if (!tosAccepted && body.tos_accepted !== undefined) {
-    res.status(400).json({
-      success: false,
-      error: 'You must accept the Terms of Service to create an account.',
-    });
+  if (!username) {
+    res.status(400).json({ success: false, error: 'Username is required.' });
+    return;
+  }
+  if (!email) {
+    res.status(400).json({ success: false, error: 'Email address is required.' });
+    return;
+  }
+  if (!password) {
+    res.status(400).json({ success: false, error: 'Password is required.' });
+    return;
+  }
+  if (confirm && confirm !== password) {
+    res.status(400).json({ success: false, error: 'Passwords do not match.' });
     return;
   }
 
@@ -58,6 +68,7 @@ module.exports = async function handler(req, res) {
     });
     setAuthCookie(res, token);
 
+    console.log('[AUTH OK]', user.username, 'registered');
     res.status(201).json({
       success: true,
       ...user,

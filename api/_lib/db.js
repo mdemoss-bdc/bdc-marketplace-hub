@@ -514,18 +514,22 @@ function createUser({
   if (!password || String(password).length < 6) {
     throw new Error('Password must be at least 6 characters.');
   }
-  if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+  if (!mail) throw new Error('Email address is required.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
     throw new Error('A valid email address is required.');
   }
 
-  if (mail) {
-    const emailTaken = db
-      .prepare(
-        `SELECT id FROM users WHERE email != '' AND LOWER(email) = ? LIMIT 1`,
-      )
-      .get(mail);
-    if (emailTaken) throw new Error('An account with that email already exists.');
-  }
+  const existingUser = db
+    .prepare('SELECT id FROM users WHERE LOWER(username) = ? LIMIT 1')
+    .get(uname);
+  if (existingUser) throw new Error('Username already exists.');
+
+  const emailTaken = db
+    .prepare(
+      `SELECT id FROM users WHERE email != '' AND LOWER(email) = ? LIMIT 1`,
+    )
+    .get(mail);
+  if (emailTaken) throw new Error('An account with that email already exists.');
 
   const rbac = role === 'Admin' ? 'Admin' : 'Reviewer';
   const tier =

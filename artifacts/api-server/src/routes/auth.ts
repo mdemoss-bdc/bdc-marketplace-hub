@@ -28,6 +28,8 @@ router.get("/auth", (_req: Request, res: Response) => {
     ],
     baseline_accounts: ["mdemoss", "testreviewer", "jdemoss", "jdmoss (alias → jdemoss)"],
     notes: [
+      "POST /api/auth/register creates a scrypt-hashed user and returns a JWT.",
+      "Duplicate username/email returns HTTP 400 with a clear error message.",
       "Baseline seeding is non-destructive (existing password hashes are preserved).",
       "jdemoss / jdmoss both authenticate with password Jdemoss123!.",
       "Login usernames are matched case-insensitively.",

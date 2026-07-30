@@ -284,7 +284,7 @@ interface AuthContextValue {
   switchAccount: (accountId: string) => void;
   setMockRole: (role: MockRole) => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, email: string, tosAccepted: boolean, visitorId?: string, referralCode?: string, orgInvite?: string, accountType?: 'individual' | 'rooftop', dealershipName?: string, extraSeats?: number, billingCycle?: 'monthly' | 'annual' | 'lifetime') => Promise<void>;
+  register: (username: string, password: string, email: string, tosAccepted: boolean, visitorId?: string, referralCode?: string, orgInvite?: string, accountType?: 'individual' | 'rooftop', dealershipName?: string, extraSeats?: number, billingCycle?: 'monthly' | 'annual' | 'lifetime', fullName?: string) => Promise<void>;
   logout: () => Promise<void>;
   authFetch: (input: string, init?: RequestInit) => Promise<Response>;
   refreshUser: () => Promise<void>;
@@ -396,17 +396,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     accountType: 'individual' | 'rooftop' = 'individual',
     dealershipName = '', extraSeats = 0,
     billingCycle: 'monthly' | 'annual' | 'lifetime' = 'monthly',
+    fullName = '',
   ) => {
     if (!username.trim()) throw new Error('Username is required.');
     if (!password) throw new Error('Password is required.');
+    if (!email.trim()) throw new Error('Email address is required.');
 
     const res = await fetch(apiUrl('/api/auth/register'), {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         username: username.trim(),
         password,
-        email,
+        email: email.trim(),
+        full_name: fullName.trim() || username.trim(),
         tos_accepted: tosAccepted,
         visitor_id: visitorId,
         referral_code: referralCode,
@@ -423,14 +427,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         typeof data.error === 'string' ? data.error : 'Registration failed.',
       );
     }
-    const sessionToken = String(data.token || '');
-    if (sessionToken) {
-      try {
-        const me = await fetchMe(sessionToken);
-        applySession(sessionToken, me);
-      } catch {
-        applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
-      }
+    const sessionToken = String(data.token || 'cookie-session');
+    try {
+      const me = await fetchMe(data.token ? String(data.token) : null);
+      applySession(sessionToken, me);
+    } catch {
+      applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
     }
   }, [applySession]);
 

@@ -15,6 +15,16 @@ const FIELD_ERROR =
   'placeholder:text-slate-600 outline-none transition-colors ' +
   'focus:border-red-300/60 focus:ring-2 focus:ring-red-400/25';
 
+type Mode = 'signin' | 'signup';
+
+type FieldErrors = {
+  fullName?: string;
+  email?: string;
+  username?: string;
+  password?: string;
+  confirmPassword?: string;
+};
+
 function PreviewBanner() {
   const [, setLocation] = useLocation();
   return (
@@ -33,21 +43,61 @@ function PreviewBanner() {
 }
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, register } = useAuth();
   const [, setLocation] = useLocation();
   const isPreview = new URLSearchParams(window.location.search).get('preview') === 'true';
 
+  const [mode, setMode] = useState<Mode>('signin');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
-  const [fieldErrors, setFieldErrors] = useState<{ username?: string; password?: string }>({});
+  const [success, setSuccess] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [loading, setLoading] = useState(false);
 
-  const validate = () => {
-    const next: { username?: string; password?: string } = {};
+  const clearFieldError = (key: keyof FieldErrors) => {
+    setFieldErrors((f) => {
+      if (!f[key]) return f;
+      const next = { ...f };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    setError('');
+    setSuccess('');
+    setFieldErrors({});
+    setPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
+  };
+
+  const validateSignIn = () => {
+    const next: FieldErrors = {};
     if (!username.trim()) next.username = 'Username is required.';
     if (!password) next.password = 'Password is required.';
+    setFieldErrors(next);
+    return Object.keys(next).length === 0;
+  };
+
+  const validateSignUp = () => {
+    const next: FieldErrors = {};
+    if (!email.trim()) next.email = 'Email address is required.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      next.email = 'Enter a valid email address.';
+    }
+    if (!username.trim()) next.username = 'Username is required.';
+    else if (username.trim().length < 3) next.username = 'Username must be at least 3 characters.';
+    if (!password) next.password = 'Password is required.';
+    else if (password.length < 6) next.password = 'Password must be at least 6 characters.';
+    if (!confirmPassword) next.confirmPassword = 'Confirm your password.';
+    else if (password !== confirmPassword) next.confirmPassword = 'Passwords do not match.';
     setFieldErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -55,17 +105,50 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!validate()) {
-      setError('Enter both username and password to continue.');
+    setSuccess('');
+
+    if (mode === 'signin') {
+      if (!validateSignIn()) {
+        setError('Enter both username and password to continue.');
+        return;
+      }
+      setLoading(true);
+      try {
+        await login(username.trim(), password);
+        setLocation('/dashboard');
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Sign-in failed.');
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (!validateSignUp()) {
+      setError('Please fix the highlighted fields to create your account.');
       return;
     }
 
     setLoading(true);
     try {
-      await login(username.trim(), password);
+      await register(
+        username.trim(),
+        password,
+        email.trim(),
+        true,
+        '',
+        '',
+        '',
+        'individual',
+        '',
+        0,
+        'monthly',
+        fullName.trim() || undefined,
+      );
+      setSuccess('Account created — welcome aboard.');
       setLocation('/dashboard');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Sign-in failed.');
+      setError(err instanceof Error ? err.message : 'Registration failed.');
     } finally {
       setLoading(false);
     }
@@ -101,15 +184,66 @@ export default function LoginPage() {
             Sales Command Center
           </p>
           <p className="mt-3 text-sm text-slate-400">
-            Sign in with your username and password to open the dashboard.
+            {mode === 'signin'
+              ? 'Sign in with your username and password to open the dashboard.'
+              : 'Create a free account to get started with the desk.'}
           </p>
         </div>
 
         <form
           onSubmit={handleSubmit}
-          className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/90 p-6 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset] backdrop-blur-xl"
+          className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/90 p-6 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset] backdrop-blur-xl"
           noValidate
         >
+          {mode === 'signup' && (
+            <>
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="signup-fullname"
+                  className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400"
+                >
+                  Full Name <span className="normal-case tracking-normal text-slate-600">(optional)</span>
+                </label>
+                <input
+                  id="signup-fullname"
+                  type="text"
+                  autoComplete="name"
+                  placeholder="Your name"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  disabled={loading}
+                  className={FIELD}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="signup-email"
+                  className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400"
+                >
+                  Email Address
+                </label>
+                <input
+                  id="signup-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@dealership.com"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    clearFieldError('email');
+                  }}
+                  disabled={loading}
+                  className={fieldErrors.email ? FIELD_ERROR : FIELD}
+                  aria-invalid={Boolean(fieldErrors.email)}
+                />
+                {fieldErrors.email && (
+                  <p className="text-[11px] text-red-300">{fieldErrors.email}</p>
+                )}
+              </div>
+            </>
+          )}
+
           <div className="space-y-1.5">
             <label
               htmlFor="login-username"
@@ -125,7 +259,7 @@ export default function LoginPage() {
               value={username}
               onChange={(e) => {
                 setUsername(e.target.value);
-                if (fieldErrors.username) setFieldErrors((f) => ({ ...f, username: undefined }));
+                clearFieldError('username');
               }}
               disabled={loading}
               className={fieldErrors.username ? FIELD_ERROR : FIELD}
@@ -147,15 +281,14 @@ export default function LoginPage() {
               <input
                 id="login-password"
                 type={showPassword ? 'text' : 'password'}
-                autoComplete="current-password"
-                placeholder="Enter password"
+                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
+                placeholder={mode === 'signup' ? 'Create a password' : 'Enter password'}
                 value={password}
                 onChange={(e) => {
                   setPassword(e.target.value);
-                  if (fieldErrors.password) setFieldErrors((f) => ({ ...f, password: undefined }));
+                  clearFieldError('password');
                 }}
                 disabled={loading}
-                required
                 className={cn(fieldErrors.password ? FIELD_ERROR : FIELD, 'pr-11')}
                 aria-invalid={Boolean(fieldErrors.password)}
               />
@@ -175,12 +308,49 @@ export default function LoginPage() {
             )}
           </div>
 
+          {mode === 'signup' && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="signup-confirm"
+                className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400"
+              >
+                Confirm Password
+              </label>
+              <input
+                id="signup-confirm"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="new-password"
+                placeholder="Re-enter password"
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  clearFieldError('confirmPassword');
+                }}
+                disabled={loading}
+                className={fieldErrors.confirmPassword ? FIELD_ERROR : FIELD}
+                aria-invalid={Boolean(fieldErrors.confirmPassword)}
+              />
+              {fieldErrors.confirmPassword && (
+                <p className="text-[11px] text-red-300">{fieldErrors.confirmPassword}</p>
+              )}
+            </div>
+          )}
+
           {error && (
             <div
               role="alert"
               className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-sm text-red-200"
             >
               {error}
+            </div>
+          )}
+
+          {success && (
+            <div
+              role="status"
+              className="rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200"
+            >
+              {success}
             </div>
           )}
 
@@ -197,8 +367,42 @@ export default function LoginPage() {
             )}
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {loading ? 'Signing in…' : 'Sign In'}
+            {loading
+              ? mode === 'signup'
+                ? 'Creating account…'
+                : 'Signing in…'
+              : mode === 'signup'
+                ? 'Create Account'
+                : 'Sign In'}
           </button>
+
+          <p className="pt-1 text-center text-sm text-slate-400">
+            {mode === 'signin' ? (
+              <>
+                Don&apos;t have an account?{' '}
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => switchMode('signup')}
+                  className="font-semibold text-amber-300 transition-colors hover:text-amber-200 disabled:opacity-50"
+                >
+                  Sign Up
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{' '}
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => switchMode('signin')}
+                  className="font-semibold text-amber-300 transition-colors hover:text-amber-200 disabled:opacity-50"
+                >
+                  Sign In
+                </button>
+              </>
+            )}
+          </p>
         </form>
       </div>
     </div>
