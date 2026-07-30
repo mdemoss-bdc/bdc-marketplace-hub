@@ -89,6 +89,8 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
     mockRole, effectiveIsMasterAdmin, effectiveOrgRole, setMockRole,
     token,
   } = useAuth();
+  const canAccessAdminConsole =
+    Boolean(effectiveIsMasterAdmin || user?.rbac_role === 'Admin');
   const [profileOpen,    setProfileOpen]    = useState(false);
   const [viewAsOpen,     setViewAsOpen]     = useState(false);
   const [switching,      setSwitching]      = useState(false);
@@ -223,8 +225,8 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         </div>
 
         <nav className="relative flex-1 space-y-0.5 overflow-y-auto px-3 py-4">
-          {/* Admin Console — visible only to the master admin (or master_admin view) */}
-          {effectiveIsMasterAdmin && (
+          {/* Admin Console — Admin RBAC / master admin only (hidden for Reviewer) */}
+          {canAccessAdminConsole && (
             <Link
               href="/admin"
               onClick={onClose}

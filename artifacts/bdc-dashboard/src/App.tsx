@@ -34,6 +34,7 @@ import SuspendedPage from '@/pages/suspended';
 import FormsPage from '@/pages/forms';
 import DashboardHub from '@/pages/dashboard-hub';
 import { activateDevToolsDeterrent } from '@/lib/devtools-deterrent';
+import { AuthGuard } from '@/components/AuthGuard';
 
 const queryClient = new QueryClient();
 
@@ -232,7 +233,11 @@ function Router() {
 
           {/* Root → Dashboard Hub directly (no login / splash / role redirect) */}
           <Route path="/" component={DashboardHub} />
-          <Route path="/dashboard" component={DashboardHub} />
+          <Route path="/dashboard">{() => (
+            <AuthGuard>
+              <DashboardHub />
+            </AuthGuard>
+          )}</Route>
           <Route path="/appointments" component={Appointments} />
           <Route path="/leads" component={Leads} />
           <Route path="/inventory">{() => <Redirect to="/marketplace-hub" />}</Route>
@@ -256,7 +261,11 @@ function Router() {
           <Route path="/team" component={TeamPage} />
           <Route path="/tiktok">{() => <SubscribedRoute component={TikTokHub} />}</Route>
           <Route path="/forms" component={FormsPage} />
-          <Route path="/admin">{() => <AdminRoute component={AdminPage} />}</Route>
+          <Route path="/admin">{() => (
+            <AuthGuard requireRole="Admin">
+              <AdminRoute component={AdminPage} />
+            </AuthGuard>
+          )}</Route>
           <Route path="/suspended" component={SuspendedPage} />
           {/* Authenticated users hitting login/register go straight to the app,
               UNLESS ?preview=true is set (master admin preview shortcut). */}
@@ -276,14 +285,13 @@ function Router() {
 }
 
 /**
- * Session gate — LoginPage when logged out, app shell when signed in.
- * Waits for token restore (/api/auth/me) before deciding.
+ * Session gate — public marketing routes stay open; everything else requires
+ * an authenticated session (cookie JWT / Bearer). Unauthenticated users go to /login.
  */
 function AuthGate() {
   const { user, isAuthenticated, isLoading } = useAuth();
   const [location] = useLocation();
 
-  // Keep a few marketing/legal deep-links public without a sidebar shell.
   if (
     location === '/pricing' ||
     location === '/privacy' ||
@@ -305,6 +313,10 @@ function AuthGate() {
   }
 
   if (!isAuthenticated || !user) {
+    if (location === '/login' || location === '/register') {
+      return <LoginPage />;
+    }
+    // Deep-link to /dashboard or /admin without a session → /login
     return <LoginPage />;
   }
 

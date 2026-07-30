@@ -16,6 +16,8 @@ export interface User {
   username: string;
   is_admin: boolean;
   is_master_admin: boolean;
+  /** RBAC: Admin (full desk) | Reviewer (limited) */
+  rbac_role: 'Admin' | 'Reviewer' | '';
   subscription_status: string;
   subscription_tier: string;
   org_role: string;
@@ -93,15 +95,27 @@ function mapApiUser(raw: Record<string, unknown>): User {
   const username = String(raw.username ?? '');
   const isAdmin = Boolean(raw.is_admin);
   const isMaster = Boolean(raw.is_master_admin);
+  const rbacRaw = String(raw.role ?? raw.rbac_role ?? '').trim();
+  const rbac_role: User['rbac_role'] =
+    rbacRaw === 'Admin' || rbacRaw === 'Reviewer'
+      ? rbacRaw
+      : isMaster || (isAdmin && username.toLowerCase() === 'mdemoss')
+        ? 'Admin'
+        : username.toLowerCase() === 'testreviewer'
+          ? 'Reviewer'
+          : isAdmin
+            ? 'Admin'
+            : 'Reviewer';
   return {
     id: Number(raw.id) || 0,
     username,
-    name: username,
+    name: String(raw.full_name || raw.name || username),
     role: roleFromUser({
       is_master_admin: isMaster,
       is_admin: isAdmin,
       org_role: String(raw.org_role ?? ''),
     }),
+    rbac_role,
     is_admin: isAdmin,
     is_master_admin: isMaster,
     subscription_status: String(raw.subscription_status ?? 'inactive'),
@@ -177,6 +191,7 @@ function buildUser(partial: {
     role: partial.role,
     is_admin: isAdmin,
     is_master_admin: Boolean(partial.is_master_admin),
+    rbac_role: partial.is_master_admin ? 'Admin' : isAdmin ? 'Admin' : 'Reviewer',
     subscription_status: 'active',
     subscription_tier: isAdmin ? 'pro_lifetime' : 'pro_annual',
     org_role: partial.org_role ?? '',
@@ -272,9 +287,15 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-async function fetchMe(token: string): Promise<User> {
+async function fetchMe(token?: string | null): Promise<User> {
+  const headers: HeadersInit = {};
+  if (token && !isClientFallbackToken(token)) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   const res = await fetch(apiUrl('/api/auth/me'), {
-    headers: { Authorization: `Bearer ${token}` },
+    method: 'GET',
+    credentials: 'include',
+    headers,
   });
   if (!res.ok) {
     throw new Error('Session expired. Please sign in again.');
@@ -297,32 +318,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     persistSession(nextToken, nextUser);
   }, []);
 
-  // Restore session on boot via /api/auth/me (Python or Vercel serverless).
+  // Restore session on boot via cookie + /api/auth/me (JWT HttpOnly preferred).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const stored = readStoredToken();
-      if (!stored || isClientFallbackToken(stored)) {
+      if (stored && isClientFallbackToken(stored)) {
         persistSession(null, null);
-        if (!cancelled) {
-          setToken(null);
-          setUser(null);
-          setIsLoading(false);
-        }
-        return;
       }
-
       try {
-        const me = await fetchMe(stored);
-        if (!cancelled) applySession(stored, me);
-      } catch {
-        if (isVercelSessionToken(stored)) {
-          const cached = readStoredUser();
-          if (cached && !cancelled) applySession(stored, cached);
-          else if (!cancelled) applySession(null, null);
-        } else if (!cancelled) {
-          applySession(null, null);
+        // Cookie session first; Bearer token as fallback for local Python.
+        const me = await fetchMe(stored && !isClientFallbackToken(stored) ? stored : null);
+        if (!cancelled) {
+          applySession(stored && !isClientFallbackToken(stored) ? stored : 'cookie-session', me);
         }
+      } catch {
+        if (!cancelled) applySession(null, null);
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -331,7 +342,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [applySession]);
 
   useEffect(() => {
-    setAuthTokenGetter(() => token);
+    setAuthTokenGetter(() => {
+      const t = tokenRef.current;
+      if (!t || t === 'cookie-session' || isClientFallbackToken(t)) return null;
+      return t;
+    });
   }, [token]);
 
   const login = useCallback(async (username: string, password: string) => {
@@ -340,12 +355,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Invalid credentials');
     }
 
-    // Always POST to the auth API — Vercel serverless or local Python.
-    // Passwords are compared server-side only (DASHBOARD_PASSWORD / TESTER_PASSWORD).
     let res: Response;
     try {
       res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: trimmedUser, password }),
       });
@@ -362,13 +376,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     }
 
-    const sessionToken = String(data.token || '');
-    if (!sessionToken) {
-      throw new Error('Invalid credentials');
-    }
-
+    const sessionToken = String(data.token || 'cookie-session');
     try {
-      const me = await fetchMe(sessionToken);
+      const me = await fetchMe(data.token ? String(data.token) : null);
       applySession(sessionToken, me);
     } catch {
       applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
@@ -421,19 +431,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     const tok = tokenRef.current;
-    if (tok && !isClientFallbackToken(tok) && !isVercelSessionToken(tok)) {
-      try {
-        await fetch(apiUrl('/api/auth/logout'), {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${tok}`,
-            'Content-Type': 'application/json',
-          },
-          body: '{}',
-        });
-      } catch {
-        // Still clear local session if the network call fails.
-      }
+    try {
+      await fetch(apiUrl('/api/auth/logout'), {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          ...(tok && tok !== 'cookie-session' && !isClientFallbackToken(tok)
+            ? { Authorization: `Bearer ${tok}` }
+            : {}),
+          'Content-Type': 'application/json',
+        },
+        body: '{}',
+      });
+    } catch {
+      // Still clear local session if the network call fails.
     }
     applySession(null, null);
   }, [applySession]);
@@ -442,29 +453,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (input: string, init: RequestInit = {}): Promise<Response> => {
       const tok = tokenRef.current;
       const headers = new Headers(init.headers);
-      if (tok && !isClientFallbackToken(tok)) {
+      if (tok && tok !== 'cookie-session' && !isClientFallbackToken(tok)) {
         headers.set('Authorization', `Bearer ${tok}`);
       }
       const url =
         typeof input === 'string' && input.startsWith('/api') && VITE_API_URL
           ? `${VITE_API_URL}${input}`
           : input;
-      return fetch(url, { ...init, headers });
+      return fetch(url, { ...init, headers, credentials: 'include' });
     },
     [],
   );
 
   const refreshUser = useCallback(async () => {
     const tok = tokenRef.current;
-    if (!tok) return;
-    if (isClientFallbackToken(tok)) {
-      const cached = readStoredUser();
-      if (cached) applySession(tok, cached);
-      return;
-    }
     try {
-      const me = await fetchMe(tok);
-      applySession(tok, me);
+      const me = await fetchMe(tok && tok !== 'cookie-session' ? tok : null);
+      applySession(tok || 'cookie-session', me);
     } catch {
       applySession(null, null);
     }

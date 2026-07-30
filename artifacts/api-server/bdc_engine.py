@@ -492,6 +492,9 @@ _PATH_TRAVERSAL_PATTERN = re.compile(
 )
 # Rate limiting — per-user timestamp buckets for management POST endpoints.
 _RATE_LIMITER: dict  = {}   # user_id → [unix_timestamp, ...]
+_LOGIN_FAILS: dict = {}     # ip → [unix_timestamp, ...]  (auth brute-force guard)
+_LOGIN_FAIL_WINDOW = 15 * 60
+_LOGIN_FAIL_MAX = 5
 _RATE_LIMIT_WINDOW   = 60.0  # seconds per window
 _RATE_LIMIT_MAX      = 80    # max management POSTs per window before suspension
 
@@ -2530,13 +2533,19 @@ def init_db():
 # AUTH HELPERS
 # =====================================================================
 def _hash_password(password: str) -> str:
-    """PBKDF2-HMAC-SHA256 hash using stdlib only."""
+    """Hash a password with PBKDF2-HMAC-SHA256 (stdlib; bcrypt/argon2-grade KDF).
+
+    Format: ``salt_hex:key_hex``. Never stores plaintext. Prefer setting
+    DASHBOARD_PASSWORD / TESTER_PASSWORD via environment and force-syncing
+    on startup rather than embedding secrets in source.
+    """
     salt = secrets.token_hex(16)
     key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260_000)
     return f"{salt}:{key.hex()}"
 
 
 def _verify_password(password: str, stored_hash: str) -> bool:
+    """Constant-time verify against PBKDF2 (or legacy salt:key) hashes."""
     try:
         salt, key_hex = stored_hash.split(":", 1)
         key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260_000)
@@ -3422,17 +3431,29 @@ class UserManager:
             _sid_conn.close()
         except Exception:
             pass
+        _mu = os.environ.get('ADMIN_USER', 'mdemoss').strip().lower()
+        _uname = (row["username"] or "").lower()
+        _is_master = bool(row["is_admin"]) and _uname == _mu
+        _role = "Admin" if _is_master or _uname == "mdemoss" else (
+            "Reviewer" if _uname in ("testreviewer", "jdemoss") else (
+                "Admin" if row["is_admin"] else "Reviewer"
+            )
+        )
         return {
             "id":                  row["id"],
             "username":            row["username"],
             "email":               row["email"] or "",
             "salesperson_id":      row["salesperson_id"] or "",
             "is_admin":            bool(row["is_admin"]),
+            "is_master_admin":     _is_master,
+            "role":                _role,
+            "rbac_role":           _role,
             "is_suspended":        bool(row["is_suspended"]),
             "subscription_status": row["subscription_status"] or "inactive",
             "subscription_tier":   row["subscription_tier"] or "",
             "org_role":            row["org_role"] or "",
             "organization_id":     row["organization_id"],
+            "email_verified":      True,
             "token":               token,
         }
 
@@ -11336,7 +11357,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass  # connection may already be broken — swallow silently
 
-    def _json(self, payload: dict, status: int = 200):
+    def _json(self, payload, status=200, extra_headers=None):
         """Serialize payload and write a complete HTTP response with Content-Length.
 
         Content-Length is required so that a reverse proxy (and any other
@@ -11346,20 +11367,44 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
         client even though the raw socket contains the data.
         """
         body = json.dumps(payload, cls=_DateTimeEncoder).encode("utf-8")
+        self._write_json_body(body, status, extra_headers)
+
+    def _write_json_body(self, body: bytes, status=200, extra_headers=None):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "no-store")
+        _origin = self.headers.get("Origin") or "*"
+        self.send_header("Access-Control-Allow-Origin", _origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+        for _extra_k, _extra_v in (extra_headers or []):
+            self.send_header(_extra_k, _extra_v)
         self.end_headers()
         self.wfile.write(body)
 
     def _get_bearer_token(self) -> str | None:
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
-            return auth[7:].strip()
+            return auth[7:].strip() or None
+        # Prefer HttpOnly session cookie (bdc_session) when Bearer is absent.
+        cookie = self.headers.get("Cookie", "") or ""
+        for part in cookie.split(";"):
+            part = part.strip()
+            if part.startswith("bdc_session="):
+                val = part[len("bdc_session="):].strip()
+                return val or None
         return None
+
+    def _client_ip(self) -> str:
+        xf = self.headers.get("X-Forwarded-For") or self.headers.get("x-forwarded-for") or ""
+        if xf:
+            return xf.split(",")[0].strip()
+        return self.client_address[0] if self.client_address else "unknown"
 
     def _optional_username(self) -> str:
         """Best-effort username for public endpoints that want attribution.
@@ -12128,6 +12173,12 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/auth/me":
             user = self._require_auth()
             if user:
+                _uname = (user.get("username") or "").lower()
+                _role = "Admin" if user.get("is_master_admin") or _uname == "mdemoss" else (
+                    "Reviewer" if _uname in ("testreviewer", "jdemoss") else (
+                        "Admin" if user.get("is_admin") else "Reviewer"
+                    )
+                )
                 self._json({
                     "id":                  user["id"],
                     "username":            user["username"],
@@ -12135,6 +12186,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     "salesperson_id":      user.get("salesperson_id", ""),
                     "is_admin":            bool(user.get("is_admin", False)),
                     "is_master_admin":     bool(user.get("is_master_admin", False)),
+                    "role":                _role,
+                    "rbac_role":           _role,
                     "subscription_status": user.get("subscription_status", "inactive"),
                     "subscription_tier":   user.get("subscription_tier", ""),
                     "org_role":            user.get("org_role", ""),
@@ -14461,13 +14514,33 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/auth/login":
+            _ip = self._client_ip()
+            _now = time.time()
+            _hist = [t for t in _LOGIN_FAILS.get(_ip, []) if _now - t < _LOGIN_FAIL_WINDOW]
+            if len(_hist) >= _LOGIN_FAIL_MAX:
+                self._json({
+                    "error": "Too many login attempts. Try again later.",
+                    "retryAfterSec": int(_LOGIN_FAIL_WINDOW),
+                }, 429)
+                return
             username = payload.get("username", "").strip().lower()
             password = payload.get("password", "")
             try:
                 result = UserManager.login(username, password)
-                self._json(result)
+                _LOGIN_FAILS[_ip] = []
+                _secure = " Secure;" if (
+                    (self.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+                    or (APP_BASE_URL or "").startswith("https")
+                ) else ""
+                _cookie = (
+                    f"bdc_session={result['token']}; HttpOnly; Path=/; "
+                    f"SameSite=Strict; Max-Age={7 * 24 * 3600};{_secure}"
+                )
+                self._json(result, 200, extra_headers=[("Set-Cookie", _cookie)])
             except ValueError as exc:
-                self._json({"error": str(exc)}, 401)
+                _hist.append(_now)
+                _LOGIN_FAILS[_ip] = _hist
+                self._json({"error": str(exc) or "Invalid credentials"}, 401)
             return
 
         # Local-development auto-login. 404s unless DEV_AUTOLOGIN is enabled,
@@ -14487,7 +14560,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             token = self._get_bearer_token()
             if token:
                 UserManager.logout(token)
-            self._json({"status": "logged_out"})
+            _clear = "bdc_session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0"
+            self._json({"status": "logged_out"}, 200, extra_headers=[("Set-Cookie", _clear)])
             return
 
         # ── Password recovery (public — no auth token required) ───────
