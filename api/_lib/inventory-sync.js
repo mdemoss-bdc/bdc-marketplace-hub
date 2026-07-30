@@ -1,9 +1,10 @@
 /**
  * Inventory sync engine for Vercel / Neon.
  *
- * Scrapes mosescars.com (sitemap + listing pages), sanitizes rows, and upserts
- * into marketplace_inventory. Job state is kept in-memory for polling and
- * mirrored into marketplace_settings for last_sync durability.
+ * Multi-adapter strategy (Dealer.com, DealerOn, DealerSpike, Sincro/Ansira):
+ * detect platform from homepage/SRP HTML → adapter extract → normalize →
+ * upsert into marketplace_inventory by VIN. Moses sitemap remains a DealerOn
+ * supplement when the SRP shell is thin.
  */
 const { randomHex } = require('./random-token');
 const {
@@ -12,11 +13,8 @@ const {
   ensureCoreSchema,
   databaseUrl,
 } = require('./pg');
-const {
-  sanitizeInventoryList,
-  parseInventoryText,
-  scrubRawText,
-} = require('./inventoryParser');
+const { sanitizeInventoryList } = require('./inventoryParser');
+const { parseInventoryPage, detectPlatform } = require('./platform-adapters');
 
 const MOSES_USED_URL =
   process.env.INVENTORY_URL_USED ||
@@ -197,34 +195,72 @@ async function fetchSitemapVehicles() {
 async function fetchListingPageVehicles(url, condition) {
   try {
     const html = await fetchText(url, 30000);
-    const text = scrubRawText(html);
-    // Split on VIN-ish boundaries as a coarse listing extractor
-    const chunks = text.split(/(?=[A-HJ-NPR-Z0-9]{17})/i).slice(0, 400);
-    const rows = [];
-    for (const chunk of chunks) {
-      const parsed = parseInventoryText(chunk);
-      if (!parsed.vin) continue;
-      rows.push({
-        vin: parsed.vin,
-        year: parsed.year || 0,
-        make: parsed.make || '',
-        model: parsed.model || '',
-        trim: '',
-        price: parsed.price || 0,
-        mileage: parsed.mileage || 0,
-        stock_number: parsed.stock_number || '',
-        condition: condition || 'Used',
-        status: 'ACTIVE',
-        location: '',
-        vdp_url: url,
-        dealership_group: 'Moses Auto Group',
-      });
-    }
-    return rows;
+    const { platform, vehicles } = await parseInventoryPage(html, url, condition);
+    console.log(
+      `[inventory-sync] adapter=${platform} url=${url} vehicles=${vehicles.length}`,
+    );
+    return vehicles.map((v) => ({
+      ...v,
+      dealership_group: v.dealership_group || 'Moses Auto Group',
+      condition: condition || v.condition || 'Used',
+    }));
   } catch (err) {
     console.warn('[inventory-sync] listing fetch failed:', url, err.message || err);
     return [];
   }
+}
+
+/**
+ * Probe homepage + inventory URLs to detect the Big-4 platform, then scrape
+ * each inventory source through the matching adapter.
+ */
+async function collectViaAdapters(userId, onProgress) {
+  const sources = [
+    { url: MOSES_USED_URL, condition: 'Used' },
+    { url: MOSES_NEW_URL, condition: 'New' },
+  ];
+
+  // Homepage probe for platform detection (also used as a fallback source).
+  let homepagePlatform = 'unknown';
+  try {
+    const origin = new URL(MOSES_USED_URL).origin;
+    const homeHtml = await fetchText(origin + '/', 20000);
+    homepagePlatform = detectPlatform(homeHtml, origin + '/');
+    console.log(`[inventory-sync] homepage platform=${homepagePlatform}`);
+    onProgress?.({ phase: 'discovering', platform: homepagePlatform });
+  } catch (err) {
+    console.warn('[inventory-sync] homepage probe failed:', err.message || err);
+  }
+
+  const byVin = new Map();
+  for (const src of sources) {
+    const rows = await fetchListingPageVehicles(src.url, src.condition);
+    for (const v of rows) {
+      if (v?.vin) byVin.set(String(v.vin).toUpperCase(), v);
+    }
+    onProgress?.({
+      phase: 'discovering',
+      platform: homepagePlatform,
+      synced: byVin.size,
+      total: byVin.size,
+    });
+  }
+
+  // DealerOn / Moses sitemap supplement when SRP adapters return a thin set.
+  if (byVin.size < 25 || homepagePlatform === 'dealeron' || homepagePlatform === 'unknown') {
+    const sitemapRows = await fetchSitemapVehicles();
+    for (const v of sitemapRows) {
+      const key = String(v.vin || '').toUpperCase();
+      if (!key) continue;
+      const prev = byVin.get(key);
+      byVin.set(key, prev ? { ...v, ...prev, vin: key } : v);
+    }
+  }
+
+  return {
+    platform: homepagePlatform,
+    vehicles: [...byVin.values()],
+  };
 }
 
 async function upsertVehicles(userId, vehicles) {
@@ -317,8 +353,21 @@ async function runInventorySync(userId = 0, sessionId = '') {
     }
     await ensureCoreSchema();
 
-    let vehicles = await fetchSitemapVehicles();
-    patchJob(uid, { total: vehicles.length, synced: vehicles.length, phase: 'discovering' });
+    const collected = await collectViaAdapters(uid, (progress) => {
+      patchJob(uid, {
+        phase: progress.phase || 'discovering',
+        synced: progress.synced || 0,
+        total: progress.total || 0,
+        reason: progress.platform ? `platform:${progress.platform}` : '',
+      });
+    });
+    let vehicles = collected.vehicles;
+    patchJob(uid, {
+      total: vehicles.length,
+      synced: vehicles.length,
+      phase: 'discovering',
+      reason: `platform:${collected.platform || 'unknown'}`,
+    });
 
     if (shouldCancel(uid)) {
       patchJob(uid, {
@@ -329,18 +378,6 @@ async function runInventorySync(userId = 0, sessionId = '') {
         cancel_status: 'cancelled',
       });
       return getJob(uid);
-    }
-
-    // Fallback / supplement from public SRP pages when sitemap is thin.
-    if (vehicles.length < 10) {
-      const used = await fetchListingPageVehicles(MOSES_USED_URL, 'Used');
-      const neu = await fetchListingPageVehicles(MOSES_NEW_URL, 'New');
-      const byVin = new Map();
-      for (const v of [...vehicles, ...used, ...neu]) {
-        if (v.vin) byVin.set(String(v.vin).toUpperCase(), v);
-      }
-      vehicles = [...byVin.values()];
-      patchJob(uid, { total: vehicles.length, synced: vehicles.length });
     }
 
     patchJob(uid, { phase: 'enriching' });

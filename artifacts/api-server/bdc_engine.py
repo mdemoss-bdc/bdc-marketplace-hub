@@ -6166,6 +6166,11 @@ _PLATFORM_SIGS: dict[str, list[str]] = {
     'sincro': [
         'sincrodigital.com', 'cdn.sincrodigital', 'SincroDigital',
         'window.SRP_DATA', 'window.SERVER_DATA', 'sincro-srp',
+        '__NEXT_DATA__', 'ansira',
+    ],
+    'dealerspike': [
+        'dealerspike', 'window.vehicles', 'ds-inventory',
+        'cdn.dealerspike', 'dealerspike.com', 'dsinv',
     ],
     # ── Extended platform signatures ──────────────────────────────────────────
     'edealer': [
@@ -6202,6 +6207,8 @@ _PLATFORM_URL_SIGS: dict[str, list[str]] = {
     # searchused -> /SearchUsed, SearchUsed.aspx, /searchused?…
     # dlron.us   -> short-link / CDN domain used by some DealerOn dealer groups
     'dealeron':     ['.aspx', 'searchnew', 'searchused', 'dlron.us'],
+    'dealerspike':  ['dealerspike'],
+    'sincro':       ['sincro', 'ansira'],
     'edealer':      ['edealer.ca'],
     'homenet':      ['homenet.com'],
     'vinsolutions': ['vinsolutions.com', 'vinconnect.com'],
@@ -7640,19 +7647,41 @@ def _parse_dealerdotcom_sitemap(base: str, condition: str) -> list[dict]:
 
 
 def _parse_sincro(url: str, html: str, condition: str) -> list[dict]:
-    """Extract inventory from Sincro (CDK / ADP Digital) pages."""
+    """Extract inventory from Sincro / Ansira (incl. Next.js __NEXT_DATA__) pages."""
     for pat in (
         r'window\.SRP_DATA\s*=\s*(\{[\s\S]+?\});\s*(?:window|var|//|</script>)',
         r'window\.SERVER_DATA\s*=\s*(\{[\s\S]+?\});\s*(?:window|var|//|</script>)',
         r'window\.initialState\s*=\s*(\{[\s\S]+?\});\s*(?:window|var|//|</script>)',
         r'window\.__NEXT_DATA__\s*=\s*(\{[\s\S]+?\});\s*',
+        r'<script[^>]*id=["\']__NEXT_DATA__["\'][^>]*>([\s\S]+?)</script>',
     ):
-        for m in re.finditer(pat, html, re.DOTALL):
+        for m in re.finditer(pat, html, re.DOTALL | re.IGNORECASE):
             try:
                 data     = json.loads(m.group(1))
                 vehicles = _extract_vehicles_recursive(data, condition)
                 if vehicles:
-                    print(f"[HYBRID] Sincro embedded state ({condition}) "
+                    print(f"[HYBRID] Sincro/Ansira embedded state ({condition}) "
+                          f"-> {len(vehicles)} vehicles")
+                    return vehicles
+            except Exception:
+                pass
+    return []
+
+
+def _parse_dealerspike(url: str, html: str, condition: str) -> list[dict]:
+    """Extract inventory from DealerSpike ``window.vehicles`` / inventory blobs."""
+    for pat in (
+        r'window\.vehicles\s*=\s*(\[[\s\S]+?\])\s*;',
+        r'window\.vehicles\s*=\s*(\{[\s\S]+?\})\s*;',
+        r'window\.DSInventory\s*=\s*(\{[\s\S]+?\})\s*;',
+        r'var\s+vehicles\s*=\s*(\[[\s\S]+?\])\s*;',
+    ):
+        for m in re.finditer(pat, html, re.DOTALL | re.IGNORECASE):
+            try:
+                data = json.loads(m.group(1))
+                vehicles = _extract_vehicles_recursive(data, condition)
+                if vehicles:
+                    print(f"[HYBRID] DealerSpike embedded state ({condition}) "
                           f"-> {len(vehicles)} vehicles")
                     return vehicles
             except Exception:
@@ -8270,6 +8299,15 @@ def _fetch_dealer_page(
         vehicles = _parse_sincro(url, html, condition)
         if not vehicles:
             vehicles = (
+                _parse_json_inventory(html, condition) or
+                _parse_html_inventory(html, condition)
+            )
+
+    elif platform == 'dealerspike':
+        vehicles = _parse_dealerspike(url, html, condition)
+        if not vehicles:
+            vehicles = (
+                _parse_json_ld(html, condition) or
                 _parse_json_inventory(html, condition) or
                 _parse_html_inventory(html, condition)
             )
