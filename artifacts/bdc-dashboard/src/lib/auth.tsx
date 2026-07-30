@@ -47,18 +47,22 @@ export interface LocalAccountPreset {
 const TOKEN_KEY = 'bdc_token';
 const USER_KEY = 'bdc_user';
 const ACTIVE_USER_KEY = 'active_user';
+/**
+ * Server-issued session marker (Vercel serverless HMAC tokens).
+ * Legacy client-only tokens are rejected.
+ */
 const CLIENT_TOKEN_PREFIX = 'client-fallback:';
+const VERCEL_SESSION_PREFIX = 'vs_';
 
 /** Optional absolute API origin for production (e.g. https://api.example.com). */
 const VITE_API_URL = String(import.meta.env.VITE_API_URL ?? '')
   .trim()
   .replace(/\/$/, '');
-const IS_PROD = Boolean(import.meta.env.PROD);
 
 /**
  * Local Vite proxies `/api` → the Python engine.
- * Production uses `VITE_API_URL` when set; otherwise auth falls back to
- * client-side credentials (Vercel static deploy has no Python backend).
+ * On Vercel, same-origin `/api/auth/*` hits serverless functions that read
+ * server-only env vars (DASHBOARD_PASSWORD / TESTER_PASSWORD) — never VITE_*.
  */
 function apiUrl(path: string): string {
   const suffix = path.startsWith('/') ? path : `/${path}`;
@@ -66,14 +70,12 @@ function apiUrl(path: string): string {
   return suffix.startsWith('/api') ? suffix : `/api${suffix}`;
 }
 
-/** True when we should attempt the real backend first. */
-function shouldAttemptApiLogin(): boolean {
-  if (!IS_PROD) return true;
-  return Boolean(VITE_API_URL);
-}
-
 function isClientFallbackToken(token: string | null | undefined): boolean {
   return Boolean(token && token.startsWith(CLIENT_TOKEN_PREFIX));
+}
+
+function isVercelSessionToken(token: string | null | undefined): boolean {
+  return Boolean(token && token.startsWith(VERCEL_SESSION_PREFIX));
 }
 
 function roleFromUser(u: {
@@ -248,54 +250,6 @@ export const LOCAL_ACCOUNTS: LocalAccountPreset[] = [
   },
 ];
 
-/**
- * Permanent static-host credentials for when the Python API is unreachable
- * (e.g. Vercel). Exact string match only — no open bypass.
- */
-const STATIC_CREDENTIALS: Record<string, { password: string; user: User }> = {
-  mdemoss: {
-    password: 'Netsirk115!$',
-    user: buildUser({
-      id: 9,
-      username: 'mdemoss',
-      name: 'Matthew DeMoss',
-      role: 'admin',
-      is_admin: true,
-      is_master_admin: true,
-    }),
-  },
-  testreviewer: {
-    password: 'TestReviewer2026!',
-    user: buildUser({
-      id: 20,
-      username: 'testreviewer',
-      name: 'Test Reviewer',
-      role: 'manager',
-      is_admin: true,
-      is_master_admin: false,
-      org_role: 'admin',
-    }),
-  },
-  jdemoss: {
-    password: 'DeMoss123!$',
-    user: buildUser({
-      id: 22,
-      username: 'jdemoss',
-      name: 'J DeMoss',
-      role: 'rep',
-      is_admin: false,
-      is_master_admin: false,
-    }),
-  },
-};
-
-function tryStaticCredentialLogin(username: string, password: string): User | null {
-  if (!password) return null;
-  const entry = STATIC_CREDENTIALS[username.trim().toLowerCase()];
-  if (!entry || entry.password !== password) return null;
-  return { ...entry.user, mock_role: '' };
-}
-
 interface AuthContextValue {
   user: User | null;
   token: string | null;
@@ -343,12 +297,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     persistSession(nextToken, nextUser);
   }, []);
 
-  // Restore session on boot — client-fallback tokens skip the API.
+  // Restore session on boot via /api/auth/me (Python or Vercel serverless).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const stored = readStoredToken();
-      if (!stored) {
+      if (!stored || isClientFallbackToken(stored)) {
         persistSession(null, null);
         if (!cancelled) {
           setToken(null);
@@ -358,29 +312,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (isClientFallbackToken(stored)) {
-        const cached = readStoredUser();
-        if (cached && STATIC_CREDENTIALS[cached.username.toLowerCase()]) {
-          if (!cancelled) applySession(stored, cached);
-        } else if (!cancelled) {
-          applySession(null, null);
-        }
-        if (!cancelled) setIsLoading(false);
-        return;
-      }
-
-      // Production without a configured API cannot validate server tokens.
-      if (IS_PROD && !VITE_API_URL) {
-        if (!cancelled) applySession(null, null);
-        if (!cancelled) setIsLoading(false);
-        return;
-      }
-
       try {
         const me = await fetchMe(stored);
         if (!cancelled) applySession(stored, me);
       } catch {
-        if (!cancelled) applySession(null, null);
+        if (isVercelSessionToken(stored)) {
+          const cached = readStoredUser();
+          if (cached && !cancelled) applySession(stored, cached);
+          else if (!cancelled) applySession(null, null);
+        } else if (!cancelled) {
+          applySession(null, null);
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -398,51 +340,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Invalid credentials');
     }
 
-    // ── Prefer the live API when reachable (local / VITE_API_URL) ─────
-    if (shouldAttemptApiLogin()) {
-      try {
-        const res = await fetch(apiUrl('/api/auth/login'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: trimmedUser, password }),
-        });
-        const data = await res.json().catch(() => ({}));
-
-        if (res.ok) {
-          const sessionToken = String(data.token || '');
-          if (sessionToken) {
-            try {
-              const me = await fetchMe(sessionToken);
-              applySession(sessionToken, me);
-            } catch {
-              applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
-            }
-            return;
-          }
-        }
-
-        // Reachable API rejected the login — still allow exact static match
-        // for the known production accounts (same passwords as the seed).
-        const staticUser = tryStaticCredentialLogin(trimmedUser, password);
-        if (staticUser) {
-          applySession(`${CLIENT_TOKEN_PREFIX}${staticUser.username}`, staticUser);
-          return;
-        }
-        throw new Error('Invalid credentials');
-      } catch (err) {
-        if (err instanceof Error && err.message === 'Invalid credentials') {
-          throw err;
-        }
-        // Network / unreachable API → fall through to static credentials.
-      }
+    // Always POST to the auth API — Vercel serverless or local Python.
+    // Passwords are compared server-side only (DASHBOARD_PASSWORD / TESTER_PASSWORD).
+    let res: Response;
+    try {
+      res = await fetch(apiUrl('/api/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: trimmedUser, password }),
+      });
+    } catch {
+      throw new Error('Could not reach the authentication server.');
     }
 
-    // ── Static Vercel host (no backend) — exact string match only ─────
-    const staticUser = tryStaticCredentialLogin(trimmedUser, password);
-    if (!staticUser) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        typeof data.error === 'string' && data.error
+          ? data.error
+          : 'Invalid credentials',
+      );
+    }
+
+    const sessionToken = String(data.token || '');
+    if (!sessionToken) {
       throw new Error('Invalid credentials');
     }
-    applySession(`${CLIENT_TOKEN_PREFIX}${staticUser.username}`, staticUser);
+
+    try {
+      const me = await fetchMe(sessionToken);
+      applySession(sessionToken, me);
+    } catch {
+      applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
+    }
   }, [applySession]);
 
   const register = useCallback(async (
@@ -454,10 +384,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   ) => {
     if (!username.trim()) throw new Error('Username is required.');
     if (!password) throw new Error('Password is required.');
-
-    if (!shouldAttemptApiLogin()) {
-      throw new Error('Registration requires a configured API backend.');
-    }
 
     const res = await fetch(apiUrl('/api/auth/register'), {
       method: 'POST',
@@ -495,7 +421,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     const tok = tokenRef.current;
-    if (tok && !isClientFallbackToken(tok) && shouldAttemptApiLogin()) {
+    if (tok && !isClientFallbackToken(tok) && !isVercelSessionToken(tok)) {
       try {
         await fetch(apiUrl('/api/auth/logout'), {
           method: 'POST',
@@ -551,7 +477,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setMockRole = useCallback(async (role: MockRole) => {
     const tok = tokenRef.current;
     if (!tok) return;
-    if (!isClientFallbackToken(tok) && shouldAttemptApiLogin()) {
+    if (!isClientFallbackToken(tok) && !isVercelSessionToken(tok)) {
       try {
         await fetch(apiUrl('/api/admin/impersonate'), {
           method: 'POST',
