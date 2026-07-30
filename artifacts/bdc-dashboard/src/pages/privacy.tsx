@@ -5,7 +5,8 @@
  * Last updated: July 2026
  */
 
-import { Car, ChevronRight } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
+import { BrandLogo } from '@/components/BrandLogo';
 
 const LAST_UPDATED = 'July 25, 2026';
 const SUPPORT_EMAIL = 'support.bdcmanager@gmail.com';
@@ -23,9 +24,7 @@ export default function PrivacyPage() {
       {/* ── Minimal header ─────────────────────────────────────────────────── */}
       <header className="border-b border-border bg-card h-14 flex items-center px-4 sm:px-8">
         <a href="/" className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-md bg-primary flex items-center justify-center">
-            <Car className="w-4 h-4 text-primary-foreground" />
-          </div>
+          <BrandLogo className="h-7 w-7 flex-shrink-0 rounded-md" />
           <span className="font-display font-bold text-sm tracking-tight">BDC Manager Desk</span>
         </a>
         <nav className="ml-auto flex items-center gap-4">

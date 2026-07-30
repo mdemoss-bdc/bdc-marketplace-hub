@@ -19,7 +19,8 @@ import CustomerMail from '@/pages/customer-mail';
 import Wishlist from '@/pages/wishlist';
 import TermsOfService from '@/pages/terms';
 import NotFound from '@/pages/not-found';
-import { Menu, Car, LogOut, Users } from 'lucide-react';
+import { Menu, LogOut, Users } from 'lucide-react';
+import { BrandLogo } from '@/components/BrandLogo';
 import { HelpAssistant } from '@/components/HelpAssistant';
 import { AdminFixTool }  from '@/components/AdminFixTool';
 import { EmailVerificationBanner } from '@/components/EmailVerificationBanner';
@@ -107,9 +108,7 @@ function PublicRouter() {
           <div className="min-h-dvh bg-background flex flex-col">
             <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-800/80 bg-slate-950/85 px-6 backdrop-blur-xl backdrop-saturate-150">
               <a href="/" className="flex items-center gap-2.5">
-                <div className="flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-b from-amber-300 to-amber-600 shadow-[0_0_12px_-2px_rgba(251,191,36,0.5)]">
-                  <Car className="h-4 w-4 text-slate-950" />
-                </div>
+                <BrandLogo className="h-8 w-8 flex-shrink-0 rounded-md" />
                 <span className="font-display text-sm font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400">
                   BDC Manager Desk
                 </span>
@@ -167,6 +166,7 @@ function Router() {
         >
           <Menu className="h-5 w-5" />
         </button>
+        <BrandLogo className="h-8 w-8 flex-shrink-0 rounded-md" />
         <h1 className="font-display text-sm font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400">
           BDC Manager Desk
         </h1>

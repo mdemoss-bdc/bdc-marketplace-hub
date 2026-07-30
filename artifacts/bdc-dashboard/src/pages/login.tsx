@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth';
-import { Car, Eye, EyeOff, Loader2, ArrowLeft } from 'lucide-react';
+import { Eye, EyeOff, Loader2, ArrowLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { BrandLogo } from '@/components/BrandLogo';
 
 const FIELD =
   'h-11 w-full rounded-lg border border-slate-700/70 bg-slate-950/70 px-3 text-sm text-slate-100 ' +
@@ -90,8 +91,8 @@ export default function LoginPage() {
 
       <div className="relative w-full max-w-md">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-b from-amber-300 to-amber-600 shadow-[0_0_20px_-4px_rgba(251,191,36,0.55)]">
-            <Car className="h-6 w-6 text-slate-950" />
+          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center sm:h-20 sm:w-20">
+            <BrandLogo className="h-16 w-16 drop-shadow-[0_0_24px_rgba(251,191,36,0.25)] sm:h-20 sm:w-20" />
           </div>
           <h1 className="bg-gradient-to-b from-white to-slate-400 bg-clip-text font-display text-2xl font-bold tracking-tight text-transparent">
             BDC Manager Desk

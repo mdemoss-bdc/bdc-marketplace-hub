@@ -1,0 +1,17 @@
+{
+  "name": "BDC Manager Desk",
+  "short_name": "BDC Desk",
+  "description": "Automotive lead automation, inventory sync, and social content tools for dealership BDC teams.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#020617",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -4,7 +4,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Car, Loader2, CheckCircle, ArrowLeft, Mail } from 'lucide-react';
+import { Loader2, CheckCircle, ArrowLeft, Mail } from 'lucide-react';
+import { BrandLogo } from '@/components/BrandLogo';
 
 export default function ForgotPassword() {
   const [email, setEmail]     = useState('');
@@ -38,10 +39,8 @@ export default function ForgotPassword() {
 
         {/* Wordmark */}
         <div className="text-center space-y-2">
-          <div className="flex items-center justify-center gap-2">
-            <div className="w-10 h-10 rounded-md bg-primary flex items-center justify-center">
-              <Car className="w-6 h-6 text-primary-foreground" />
-            </div>
+          <div className="flex flex-col items-center gap-3">
+            <BrandLogo className="h-12 w-12 rounded-lg" />
             <h1 className="text-2xl font-display font-bold tracking-tight">BDC Manager Desk</h1>
           </div>
           <p className="text-sm text-muted-foreground">Sales Command Center</p>

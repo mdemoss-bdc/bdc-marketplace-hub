@@ -18,11 +18,12 @@
 
 import { useState } from 'react';
 import {
-  Car, Check, Zap, BarChart3, Mail, Heart, Store,
+  Check, Zap, BarChart3, Mail, Heart, Store,
   Shield, Clock, ChevronRight, Building2, Crown, Infinity as InfinityIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { BrandLogo } from '@/components/BrandLogo';
 import { useLocation } from 'wouter';
 import {
   type BillingCycle,
@@ -105,9 +106,7 @@ export default function LandingPage() {
       <header className="sticky top-0 z-30 border-b border-white/10 bg-black/50 backdrop-blur-md">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <a href="/" className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
-              <Car className="w-4.5 h-4.5 text-primary-foreground" />
-            </div>
+            <BrandLogo className="h-8 w-8 flex-shrink-0 rounded-lg" />
             <span className="font-display font-bold text-base tracking-tight leading-none">
               BDC Manager Desk
             </span>
@@ -402,9 +401,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-md bg-primary flex items-center justify-center">
-                <Car className="w-3.5 h-3.5 text-primary-foreground" />
-              </div>
+              <BrandLogo className="h-6 w-6 flex-shrink-0 rounded-md" />
               <span className="font-display font-bold text-sm">BDC Manager Desk</span>
             </div>
 
