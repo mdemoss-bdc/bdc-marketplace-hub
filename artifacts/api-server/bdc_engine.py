@@ -9350,11 +9350,22 @@ class MarketplaceDB:
     def upsert_vehicles(vehicles: list[dict], user_id: int) -> int:
         if not vehicles:
             return 0
+        try:
+            from inventory_parser import sanitize_vehicle_record as _sanitize_vehicle
+        except ImportError:
+            _sanitize_vehicle = None  # type: ignore[assignment]
         conn = sqlite3.connect(DB_FILE)
         try:
             cursor = conn.cursor()
             count = 0
             for v in vehicles:
+                if _sanitize_vehicle is not None:
+                    try:
+                        v = _sanitize_vehicle(v)
+                    except Exception as _san_exc:
+                        print(f"[INVENTORY] sanitize skipped: {_san_exc}")
+                if not (v.get("vin") or "").strip():
+                    continue
                 cursor.execute(
                     """
                     INSERT INTO marketplace_inventory
@@ -9523,7 +9534,12 @@ class MarketplaceDB:
         )
         rows = cursor.fetchall()
         conn.close()
-        return [dict(r) for r in rows]
+        out = [dict(r) for r in rows]
+        try:
+            from inventory_parser import sanitize_inventory_list as _sanitize_list
+            return _sanitize_list(out)
+        except Exception:
+            return out
 
     @staticmethod
     def get_years(user_id: int) -> list[int]:

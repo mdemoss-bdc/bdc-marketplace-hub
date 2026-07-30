@@ -6,6 +6,11 @@
 const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
+const {
+  sanitizeInventoryList,
+  sanitizeVehicleRecord,
+  parseInventoryText,
+} = require('./inventoryParser');
 
 const DAILY_POST_CAP = 10;
 const VALID_STATUSES = new Set(['scheduled', 'posted', 'failed', 'paused']);
@@ -306,12 +311,14 @@ function listInventory(query = {}) {
     }
 
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const inventory = db
-      .prepare(
-        `SELECT * FROM marketplace_inventory ${where}
-         ORDER BY condition ASC, year DESC, price ASC`,
-      )
-      .all(...params);
+    const inventory = sanitizeInventoryList(
+      db
+        .prepare(
+          `SELECT * FROM marketplace_inventory ${where}
+           ORDER BY condition ASC, year DESC, price ASC`,
+        )
+        .all(...params),
+    );
 
     const makes = db
       .prepare(
@@ -558,4 +565,7 @@ module.exports = {
   setQueueStatus,
   getDailyPostingQueue,
   openMarketplaceDb,
+  sanitizeInventoryList,
+  sanitizeVehicleRecord,
+  parseInventoryText,
 };

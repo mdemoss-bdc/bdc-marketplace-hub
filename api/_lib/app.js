@@ -81,6 +81,12 @@ mount('/api/marketplace/schedule', require('../_routes/marketplace/schedule'));
 mount('/api/marketplace/generate-copy', require('../_routes/marketplace/generate-copy'));
 mount('/api/v1/marketplace/queue', require('../_routes/v1/marketplace/queue'));
 
+// ── Inventory regex sanitizer ───────────────────────────────────────────────
+mount('/api/inventory/parse', require('../_routes/inventory/parse'));
+mount('/api/inventory/sanitize', require('../_routes/inventory/parse'));
+mount('/api/marketplace/parse', require('../_routes/inventory/parse'));
+mount('/api/marketplace/sanitize', require('../_routes/inventory/parse'));
+
 app.get('/api/healthz', (_req, res) => {
   res.status(200).json({ status: 'UP', router: 'api/[[...path]]', success: true });
 });
