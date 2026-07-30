@@ -2,14 +2,14 @@
  * POST /api/auth/login
  * Rate-limited credential check → JWT session cookie + token body.
  */
-const { authenticate } = require('../_lib/users');
-const { signJwt, setAuthCookie } = require('../_lib/jwt');
+const { authenticate } = require('../../_lib/users');
+const { signJwt, setAuthCookie } = require('../../_lib/jwt');
 const {
   checkLoginRateLimit,
   recordLoginFailure,
   clearLoginFailures,
-} = require('../_lib/rate-limit');
-const { applySecurityHeaders } = require('../_lib/security');
+} = require('../../_lib/rate-limit');
+const { applySecurityHeaders } = require('../../_lib/security');
 
 function clientIp(req) {
   const xf = req.headers['x-forwarded-for'] || req.headers['X-Forwarded-For'];

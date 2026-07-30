@@ -2,9 +2,9 @@
  * GET/POST /api/auth/me
  * Validates JWT from cookie or Authorization Bearer.
  */
-const { getUserByUsername } = require('../_lib/users');
-const { verifyJwt, getTokenFromRequest } = require('../_lib/jwt');
-const { applySecurityHeaders } = require('../_lib/security');
+const { getUserByUsername } = require('../../_lib/users');
+const { verifyJwt, getTokenFromRequest } = require('../../_lib/jwt');
+const { applySecurityHeaders } = require('../../_lib/security');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

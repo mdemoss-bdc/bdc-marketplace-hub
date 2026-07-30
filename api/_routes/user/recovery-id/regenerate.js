@@ -1,9 +1,9 @@
 /**
  * POST /api/user/recovery-id/regenerate
  */
-const { getUserByUsername, regenerateRecoveryId } = require('../../_lib/db');
-const { applySecurityHeaders } = require('../../_lib/security');
-const { requireAuthUser } = require('../../_lib/http');
+const { getUserByUsername, regenerateRecoveryId } = require('../../../_lib/db');
+const { applySecurityHeaders } = require('../../../_lib/security');
+const { requireAuthUser } = require('../../../_lib/http');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

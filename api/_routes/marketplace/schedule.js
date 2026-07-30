@@ -2,9 +2,9 @@
  * POST /api/marketplace/schedule
  * Schedule or instantly publish a vehicle to the Marketplace queue.
  */
-const { applySecurityHeaders } = require('../_lib/security');
-const { parseBody } = require('../_lib/http');
-const { scheduleVehicle, emptyPublisherQueue } = require('../_lib/marketplace');
+const { applySecurityHeaders } = require('../../_lib/security');
+const { parseBody } = require('../../_lib/http');
+const { scheduleVehicle, emptyPublisherQueue } = require('../../_lib/marketplace');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

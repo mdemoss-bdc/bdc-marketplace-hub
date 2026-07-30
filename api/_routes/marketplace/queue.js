@@ -2,8 +2,8 @@
  * GET /api/marketplace/queue
  * Returns the Facebook Marketplace publisher queue as JSON.
  */
-const { applySecurityHeaders } = require('../_lib/security');
-const { getPublisherQueue, emptyPublisherQueue } = require('../_lib/marketplace');
+const { applySecurityHeaders } = require('../../_lib/security');
+const { getPublisherQueue, emptyPublisherQueue } = require('../../_lib/marketplace');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

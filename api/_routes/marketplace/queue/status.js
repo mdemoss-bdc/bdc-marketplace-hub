@@ -2,9 +2,9 @@
  * POST /api/marketplace/queue/status
  * Pause / resume / mark failed on a publisher queue row.
  */
-const { applySecurityHeaders } = require('../../_lib/security');
-const { parseBody } = require('../../_lib/http');
-const { setQueueStatus } = require('../../_lib/marketplace');
+const { applySecurityHeaders } = require('../../../_lib/security');
+const { parseBody } = require('../../../_lib/http');
+const { setQueueStatus } = require('../../../_lib/marketplace');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

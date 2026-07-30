@@ -2,12 +2,12 @@
  * GET /api/auth/smtp-verify
  * Runs Nodemailer transporter.verify() and returns diagnostics JSON.
  */
-const { applySecurityHeaders } = require('../_lib/security');
+const { applySecurityHeaders } = require('../../_lib/security');
 const {
   verifyMailTransporter,
   smtpConfigured,
   getSmtpConfig,
-} = require('../_lib/mailer');
+} = require('../../_lib/mailer');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

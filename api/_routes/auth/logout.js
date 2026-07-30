@@ -2,8 +2,8 @@
  * POST /api/auth/logout
  * Clears the bdc_session auth cookie.
  */
-const { clearAuthCookie } = require('../_lib/jwt');
-const { applySecurityHeaders } = require('../_lib/security');
+const { clearAuthCookie } = require('../../_lib/jwt');
+const { applySecurityHeaders } = require('../../_lib/security');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

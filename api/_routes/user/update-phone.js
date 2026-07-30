@@ -1,9 +1,9 @@
 /**
  * POST /api/user/update-phone
  */
-const { getUserByUsername, updatePhone } = require('../_lib/db');
-const { applySecurityHeaders } = require('../_lib/security');
-const { parseBody, requireAuthUser } = require('../_lib/http');
+const { getUserByUsername, updatePhone } = require('../../_lib/db');
+const { applySecurityHeaders } = require('../../_lib/security');
+const { parseBody, requireAuthUser } = require('../../_lib/http');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

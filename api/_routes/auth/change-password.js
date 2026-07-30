@@ -1,9 +1,9 @@
 /**
  * POST /api/auth/change-password
  */
-const { getUserByUsername, changePassword } = require('../_lib/db');
-const { applySecurityHeaders } = require('../_lib/security');
-const { parseBody, requireAuthUser } = require('../_lib/http');
+const { getUserByUsername, changePassword } = require('../../_lib/db');
+const { applySecurityHeaders } = require('../../_lib/security');
+const { parseBody, requireAuthUser } = require('../../_lib/http');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

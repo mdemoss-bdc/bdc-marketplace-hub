@@ -6,14 +6,14 @@
 const {
   getUserByUsername,
   updateProfile,
-} = require('../_lib/db');
-const { applySecurityHeaders } = require('../_lib/security');
-const { parseBody, requireAuthUser } = require('../_lib/http');
+} = require('../../_lib/db');
+const { applySecurityHeaders } = require('../../_lib/security');
+const { parseBody, requireAuthUser } = require('../../_lib/http');
 const {
   dispatchEmailChangeNotifications,
   verifyMailTransporter,
   smtpConfigured,
-} = require('../_lib/mailer');
+} = require('../../_lib/mailer');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

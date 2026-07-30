@@ -3,9 +3,9 @@
  * Lightweight listing-copy stub so the Hub never receives HTML 404 on Vercel.
  * When inventory is available, builds a template description from the row.
  */
-const { applySecurityHeaders } = require('../_lib/security');
-const { parseBody } = require('../_lib/http');
-const { openMarketplaceDb } = require('../_lib/marketplace');
+const { applySecurityHeaders } = require('../../_lib/security');
+const { parseBody } = require('../../_lib/http');
+const { openMarketplaceDb } = require('../../_lib/marketplace');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

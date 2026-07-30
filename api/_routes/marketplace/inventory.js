@@ -2,8 +2,8 @@
  * GET /api/marketplace/inventory
  * Returns scraped marketplace inventory as JSON.
  */
-const { applySecurityHeaders } = require('../_lib/security');
-const { listInventory, emptyInventory } = require('../_lib/marketplace');
+const { applySecurityHeaders } = require('../../_lib/security');
+const { listInventory, emptyInventory } = require('../../_lib/marketplace');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

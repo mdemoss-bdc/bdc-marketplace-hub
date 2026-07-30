@@ -6,9 +6,9 @@ const {
   getUserByUsername,
   requireRole,
   adminDirectoryUsers,
-} = require('../_lib/users');
-const { verifyJwt, getTokenFromRequest } = require('../_lib/jwt');
-const { applySecurityHeaders } = require('../_lib/security');
+} = require('../../_lib/users');
+const { verifyJwt, getTokenFromRequest } = require('../../_lib/jwt');
+const { applySecurityHeaders } = require('../../_lib/security');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);
