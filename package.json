@@ -15,6 +15,9 @@
     "start:api": "python artifacts/api-server/bdc_engine.py"
   },
   "private": true,
+  "dependencies": {
+    "nodemailer": "^7.0.13"
+  },
   "devDependencies": {
     "prettier": "^3.9.5",
     "typescript": "~5.9.3"

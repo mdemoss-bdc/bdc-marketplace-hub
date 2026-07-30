@@ -8,6 +8,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { hashPassword, verifyPassword } = require('./crypto-passwords');
 
@@ -52,6 +53,23 @@ function openDb() {
   `);
   try {
     _db.exec('ALTER TABLE users ADD COLUMN phone TEXT DEFAULT \'\'');
+  } catch {
+    /* already present */
+  }
+  try {
+    _db.exec('ALTER TABLE users ADD COLUMN email_revert_token TEXT DEFAULT NULL');
+  } catch {
+    /* already present */
+  }
+  try {
+    _db.exec(
+      'ALTER TABLE users ADD COLUMN email_revert_expires_at TEXT DEFAULT NULL',
+    );
+  } catch {
+    /* already present */
+  }
+  try {
+    _db.exec('ALTER TABLE users ADD COLUMN old_email_history TEXT DEFAULT \'\'');
   } catch {
     /* already present */
   }
@@ -385,7 +403,8 @@ function updateEmail(userId, newEmail, currentPassword) {
   if (!email || !email.includes('@')) {
     throw new Error('A valid new email address is required.');
   }
-  if (email === String(row.email || '').trim().toLowerCase()) {
+  const oldEmail = String(row.email || '').trim().toLowerCase();
+  if (email === oldEmail) {
     throw new Error('New email address is the same as your current email.');
   }
   const taken = db
@@ -394,23 +413,34 @@ function updateEmail(userId, newEmail, currentPassword) {
   if (taken) {
     throw new Error('That email address is already registered to another account.');
   }
+  const revertToken = crypto.randomBytes(32).toString('base64url');
+  const revertExpires = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
   db.prepare(
-    'UPDATE users SET email = ?, email_verified = 1 WHERE id = ?',
-  ).run(email, userId);
-  return getUserById(userId);
+    `UPDATE users SET email = ?, email_verified = 1,
+      old_email_history = ?, email_revert_token = ?, email_revert_expires_at = ?
+     WHERE id = ?`,
+  ).run(email, oldEmail, revertToken, revertExpires, userId);
+  return {
+    user: getUserById(userId),
+    old_email: oldEmail,
+    new_email: email,
+    revert_token: revertToken,
+  };
 }
 
 function updateProfile(userId, { phone, email, new_email, current_password } = {}) {
   let user = getUserById(userId);
   if (!user) throw new Error('User not found.');
+  let emailChange = null;
   if (phone !== undefined) {
     user = updatePhone(userId, phone);
   }
   const nextEmail = email !== undefined ? email : new_email;
   if (nextEmail !== undefined && nextEmail !== null && String(nextEmail).trim() !== '') {
-    user = updateEmail(userId, nextEmail, current_password);
+    emailChange = updateEmail(userId, nextEmail, current_password);
+    user = emailChange.user;
   }
-  return user;
+  return { user, emailChange };
 }
 
 function regenerateRecoveryId(userId) {

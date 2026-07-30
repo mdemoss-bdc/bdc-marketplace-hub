@@ -2899,16 +2899,23 @@ def _load_email_transporter():
 
 
 def _send_email(to_addr: str, subject: str, body_text: str, body_html: str = '') -> bool:
-    """Route one transactional email through the shared transporter module.
-
-    Providers: Resend -> SendGrid -> SMTP -> console log (dev fallback).
-    Console fallback returns True so local profile security tests still succeed.
-    """
+    """Route one transactional email through the shared transporter module."""
     try:
         return _load_email_transporter().send_email(to_addr, subject, body_text, body_html)
     except Exception as err:
         print(f"[EMAIL] transporter failure: {err}")
+        try:
+            _load_email_transporter()._set_last_send_error(str(err))
+        except Exception:
+            pass
         return False
+
+
+def _last_email_error() -> str:
+    try:
+        return str(_load_email_transporter().get_last_send_error() or "")
+    except Exception:
+        return ""
 
 
 def _check_email_connection() -> None:
@@ -3049,6 +3056,7 @@ def _dispatch_email_change_notifications(
     )
 
     alert_sent = False
+    errors: list[str] = []
     if old_email:
         alert_sent = bool(
             _send_email(
@@ -3058,6 +3066,9 @@ def _dispatch_email_change_notifications(
                 alert_html,
             )
         )
+        if not alert_sent:
+            _err = _last_email_error() or "security alert send failed"
+            errors.append(f"alert: {_err}")
         print(
             f"[AUTH] Email-change security alert -> {old_email!r} "
             f"(user id={user_id}, sent={alert_sent})"
@@ -3073,6 +3084,9 @@ def _dispatch_email_change_notifications(
             confirm_html,
         )
     )
+    if not confirm_sent:
+        _err = _last_email_error() or "confirmation send failed"
+        errors.append(f"confirm: {_err}")
     print(
         f"[AUTH] Email-change confirmation -> {new_email!r} "
         f"(user id={user_id}, sent={confirm_sent})"
@@ -3081,6 +3095,7 @@ def _dispatch_email_change_notifications(
         "alert_sent": alert_sent,
         "confirm_sent": confirm_sent,
         "revert_url": revert_url,
+        "error": " | ".join(errors),
     }
 
 
@@ -15704,16 +15719,17 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 })
             else:
                 self._json({
-                    "success": True,
+                    "success": False,
                     "status": "ok",
                     "email_delivery_failed": True,
+                    "error": _notify.get("error") or "Email notification failed.",
                     "user": _ue_user_out,
                     "message": (
                         "Your email address has been updated, but the confirmation "
                         f"email could not be delivered to {_ue_new_email}. "
                         "Check your spam folder or server logs."
                     ),
-                })
+                }, 502)
             return
 
         # ── Unified profile update (phone and/or email) ────────────────
@@ -15748,6 +15764,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     _up_conn.close()
 
             _msg = "Phone number saved."
+            _notify_err = ""
             if _has_email:
                 # Reuse update-email logic via internal field remap
                 payload = {
@@ -15838,6 +15855,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     old_email=_ue_old_email,
                     revert_token=_ue_revert_tok,
                 )
+                _notify_err = str(_notify.get("error") or "")
                 if _notify.get("confirm_sent"):
                     _msg = (
                         "Email updated. A security alert was sent to your previous "
@@ -15845,8 +15863,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     )
                 else:
                     _msg = (
-                        "Email updated, but confirmation delivery may have failed. "
-                        "Check server logs or your spam folder."
+                        "Email updated, but confirmation delivery failed. "
+                        "See error for SMTP details."
                     )
                 print(
                     f"[AUTH] Profile email updated for user id={user['id']} "
@@ -15866,28 +15884,39 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             _role = (_out["role"] or "").strip() or (
                 "Admin" if user.get("is_master_admin") or _out["is_admin"] else "Reviewer"
             )
+            _user_payload = {
+                "id": _out["id"],
+                "username": _out["username"],
+                "email": _out["email"] or "",
+                "phone": _out["phone"] or "",
+                "is_admin": bool(_out["is_admin"]),
+                "is_master_admin": bool(user.get("is_master_admin")),
+                "role": _role,
+                "rbac_role": _role,
+                "subscription_status": _out["subscription_status"] or "inactive",
+                "subscription_tier": _out["subscription_tier"] or "",
+                "org_role": _out["org_role"] or "",
+                "organization_id": _out["organization_id"],
+                "email_verified": bool(_out["email_verified"]),
+                "is_suspended": bool(_out["is_suspended"]),
+                "created_at": _out["created_at"] or "",
+                "recovery_id": _out["recovery_id"] or "",
+            }
+            if _has_email and locals().get("_notify_err"):
+                self._json({
+                    "success": False,
+                    "status": "ok",
+                    "email_delivery_failed": True,
+                    "error": _notify_err,
+                    "message": _msg,
+                    "user": _user_payload,
+                }, 502)
+                return
             self._json({
                 "success": True,
                 "status": "ok",
                 "message": _msg,
-                "user": {
-                    "id": _out["id"],
-                    "username": _out["username"],
-                    "email": _out["email"] or "",
-                    "phone": _out["phone"] or "",
-                    "is_admin": bool(_out["is_admin"]),
-                    "is_master_admin": bool(user.get("is_master_admin")),
-                    "role": _role,
-                    "rbac_role": _role,
-                    "subscription_status": _out["subscription_status"] or "inactive",
-                    "subscription_tier": _out["subscription_tier"] or "",
-                    "org_role": _out["org_role"] or "",
-                    "organization_id": _out["organization_id"],
-                    "email_verified": bool(_out["email_verified"]),
-                    "is_suspended": bool(_out["is_suspended"]),
-                    "created_at": _out["created_at"] or "",
-                    "recovery_id": _out["recovery_id"] or "",
-                },
+                "user": _user_payload,
             })
             return
 

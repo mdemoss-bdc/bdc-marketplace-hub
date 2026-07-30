@@ -199,28 +199,55 @@ def _build_mime(
     return msg
 
 
+_LAST_SEND_ERROR = ""
+
+
+def get_last_send_error() -> str:
+    return _LAST_SEND_ERROR
+
+
+def _set_last_send_error(msg: str) -> None:
+    global _LAST_SEND_ERROR
+    _LAST_SEND_ERROR = (msg or "").strip()
+
+
 def _send_smtp(
     to_addr: str,
     subject: str,
     body_text: str,
     body_html: str,
 ) -> bool:
+    """SMTP send with Nodemailer-parity options (465 SSL / 587 STARTTLS).
+
+    secure = (SMTP_PORT == "465"); TLS context uses check_hostname=False /
+    verify_mode=CERT_NONE equivalent of rejectUnauthorized:false for serverless.
+    """
     host = _env("SMTP_HOST") or "smtp.gmail.com"
-    port = int(_env("SMTP_PORT") or "465")
+    port_raw = _env("SMTP_PORT") or "465"
+    port = int(port_raw)
     user = _env("SMTP_USER", "EMAIL_USER")
     password = _env("SMTP_PASS", "EMAIL_PASS")
     if not user or not password:
+        _set_last_send_error(
+            "SMTP not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASS."
+        )
         return False
+
+    # Nodemailer: secure: process.env.SMTP_PORT === '465'
+    secure = str(os.environ.get("SMTP_PORT", "465")).strip() == "465" or port == 465
 
     from_full = _env("SMTP_FROM", "EMAIL_FROM") or f"BDC Manager Desk <{user}>"
     msg = _build_mime(to_addr, subject, body_text, body_html, from_full)
-    use_ssl = port == 465 or _env("SMTP_SSL", "1") not in ("0", "false", "False")
+
+    # tls: { rejectUnauthorized: false }
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
 
     last_err: Exception | None = None
     for attempt in range(2):
         try:
-            ctx = ssl.create_default_context()
-            if use_ssl:
+            if secure:
                 with smtplib.SMTP_SSL(host, port, context=ctx, timeout=20) as smtp:
                     smtp.login(user, password)
                     smtp.send_message(msg)
@@ -232,18 +259,22 @@ def _send_smtp(
                     smtp.login(user, password)
                     smtp.send_message(msg)
             print(
-                f"[EMAIL] Sent (SMTP {host}:{port}) '{subject}' -> {to_addr}"
+                f"[EMAIL] Sent (SMTP {host}:{port} secure={secure}) '{subject}' -> {to_addr}"
                 + (f" (attempt {attempt + 1})" if attempt else "")
             )
+            _set_last_send_error("")
             return True
         except smtplib.SMTPServerDisconnected as err:
             last_err = err
             print(f"[EMAIL] SMTP disconnected (attempt {attempt + 1}): {err}")
         except Exception as err:
+            last_err = err
             print(f"[EMAIL] SMTP Connection Error: {err}")
             print(traceback.format_exc())
+            _set_last_send_error(str(err))
             return False
     print(f"[EMAIL] SMTP Connection Error (after retry): {last_err}")
+    _set_last_send_error(str(last_err) if last_err else "SMTP send failed after retry")
     return False
 
 
@@ -264,12 +295,13 @@ def _log_console(
     if body_html:
         print("-" * 72)
         print("[EMAIL] HTML body (truncated):")
-        print(body_html[:1200] + ("…" if len(body_html) > 1200 else ""))
+        print(body_html[:1200] + ("..." if len(body_html) > 1200 else ""))
     print("=" * 72)
     print(
         "[EMAIL] Tip: set RESEND_API_KEY, SENDGRID_API_KEY, or "
         "SMTP_HOST/SMTP_USER/SMTP_PASS (or EMAIL_USER/EMAIL_PASS) in .env"
     )
+    _set_last_send_error("")
     return True
 
 
@@ -279,36 +311,49 @@ def send_email(
     body_text: str,
     body_html: str = "",
 ) -> bool:
-    """Send one transactional email via the best available provider."""
+    """Send one transactional email via the best available provider.
+
+    When SMTP_* credentials are present and send fails, returns False and
+    stores the exact error in ``get_last_send_error()`` (no silent success).
+    """
     to_addr = (to_addr or "").strip().lower()
     if not to_addr or "@" not in to_addr:
         print(f"[EMAIL] Refusing send - invalid recipient: {to_addr!r}")
+        _set_last_send_error(f"Invalid recipient: {to_addr}")
         return False
 
     print(f"[EMAIL] Dispatching '{subject}' -> {to_addr}")
 
     resend_key = _env("RESEND_API_KEY")
     if resend_key:
-        return _send_resend(to_addr, subject, body_text, body_html, resend_key)
+        ok = _send_resend(to_addr, subject, body_text, body_html, resend_key)
+        if not ok:
+            _set_last_send_error("Resend delivery failed")
+        return ok
 
     sendgrid_key = _env("SENDGRID_API_KEY")
     if sendgrid_key:
-        return _send_sendgrid(to_addr, subject, body_text, body_html, sendgrid_key)
+        ok = _send_sendgrid(to_addr, subject, body_text, body_html, sendgrid_key)
+        if not ok:
+            _set_last_send_error("SendGrid delivery failed")
+        return ok
 
-    if _env("SMTP_HOST") or (_env("EMAIL_USER") and _env("EMAIL_PASS")) or (
-        _env("SMTP_USER") and _env("SMTP_PASS")
-    ):
-        if _send_smtp(to_addr, subject, body_text, body_html):
-            return True
-        # If SMTP was configured but failed, still fall through to console so
-        # local profile tests can see the payload.
-        print("[EMAIL] SMTP send failed - falling back to console log.")
+    smtp_ready = bool(
+        (_env("SMTP_HOST") or _env("EMAIL_USER") or _env("SMTP_USER"))
+        and (_env("SMTP_PASS", "EMAIL_PASS"))
+    )
+    if smtp_ready:
+        ok = _send_smtp(to_addr, subject, body_text, body_html)
+        if not ok:
+            # Do NOT console-fallback when live SMTP is configured — surface the error.
+            print("[EMAIL] SMTP send failed - returning failure for API diagnostics.")
+        return ok
 
     return _log_console(to_addr, subject, body_text, body_html)
 
 
 def check_connection() -> None:
-    """Print provider status at startup (never raises)."""
+    """Print provider status at startup (never raises). Nodemailer-parity verify."""
     provider = configured_provider()
     if provider == "resend":
         frm = _env("RESEND_FROM_EMAIL") or "onboarding@resend.dev (shared)"
@@ -320,27 +365,32 @@ def check_connection() -> None:
         return
     if provider in ("smtp", "gmail-smtp"):
         host = _env("SMTP_HOST") or "smtp.gmail.com"
-        port = _env("SMTP_PORT") or "465"
+        port_raw = _env("SMTP_PORT") or "465"
+        port = int(port_raw)
         user = _env("SMTP_USER", "EMAIL_USER")
-        print(f"[EMAIL] Provider: SMTP ({host}:{port}) as {user}")
+        secure = str(os.environ.get("SMTP_PORT", "465")).strip() == "465" or port == 465
+        print(f"[EMAIL] Provider: SMTP ({host}:{port} secure={secure}) as {user}")
         password = _env("SMTP_PASS", "EMAIL_PASS")
         if not password:
             print("[EMAIL] WARNING: SMTP password missing.")
             return
         try:
             ctx = ssl.create_default_context()
-            port_i = int(port)
-            if port_i == 465:
-                with smtplib.SMTP_SSL(host, port_i, context=ctx, timeout=15) as smtp:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            if secure:
+                with smtplib.SMTP_SSL(host, port, context=ctx, timeout=15) as smtp:
                     smtp.login(user, password)
             else:
-                with smtplib.SMTP(host, port_i, timeout=15) as smtp:
+                with smtplib.SMTP(host, port, timeout=15) as smtp:
                     smtp.ehlo()
                     smtp.starttls(context=ctx)
+                    smtp.ehlo()
                     smtp.login(user, password)
-            print(f"[EMAIL] SMTP server ready (authenticated as {user})")
+            print(f"[EMAIL] SMTP verify OK (authenticated as {user})")
         except Exception as err:
-            print(f"[EMAIL] SMTP Connection Error: {err}")
+            print(f"[EMAIL] SMTP verify FAILED: {err}")
+            print(traceback.format_exc())
         return
 
     print(
