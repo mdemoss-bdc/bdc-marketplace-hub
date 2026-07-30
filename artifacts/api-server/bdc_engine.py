@@ -2102,9 +2102,22 @@ def init_db():
         # ── Master admin: force-sync credentials on every startup ─────────────
         # Password hash, email, and admin flags are always written so the account
         # is accessible even after a DB reset or env change.
+        # Password source (first match wins):
+        #   1. LOGIN_PASSWORD  — preferred local override in `.env`
+        #   2. ADMIN_PASSWORD  — alias for the same value
+        #   3. Built-in local default (change via `.env`, never commit secrets)
         _MASTER_USER  = os.environ.get('ADMIN_USER',  'mdemoss').strip().lower()
         _MASTER_EMAIL = os.environ.get('ADMIN_EMAIL', 'support.bdcmanager@gmail.com').strip().lower()
-        _MASTER_PASS  = 'Netsirk115!$'
+        _MASTER_PASS  = (
+            os.environ.get('LOGIN_PASSWORD')
+            or os.environ.get('ADMIN_PASSWORD')
+            or 'BdcManager2026!'
+        ).strip()
+        if not _MASTER_PASS:
+            raise RuntimeError(
+                "LOGIN_PASSWORD (or ADMIN_PASSWORD) is empty — "
+                "set a non-empty password in `.env` for the master admin account."
+            )
         _ma_salt = secrets.token_hex(16)
         _ma_key  = hashlib.pbkdf2_hmac("sha256", _MASTER_PASS.encode(), _ma_salt.encode(), 260_000)
         _ma_hash = f"{_ma_salt}:{_ma_key.hex()}"
