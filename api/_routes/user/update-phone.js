@@ -15,11 +15,11 @@ module.exports = async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed.', success: false });
     return;
   }
-  const user = requireAuthUser(req, res, getUserByUsername);
+  const user = await requireAuthUser(req, res, getUserByUsername);
   if (!user) return;
   const body = parseBody(req);
   try {
-    const updated = updatePhone(user.id, body.phone || '');
+    const updated = await updatePhone(user.id, body.phone || '');
     res.status(200).json({ success: true, status: 'ok', user: updated });
   } catch (err) {
     res.status(400).json({

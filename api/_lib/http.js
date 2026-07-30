@@ -13,7 +13,7 @@ function parseBody(req) {
   return body && typeof body === 'object' ? body : {};
 }
 
-function requireAuthUser(req, res, getUserByUsername) {
+async function requireAuthUser(req, res, getUserByUsername) {
   const { verifyJwt, getTokenFromRequest } = require('./jwt');
   const token = getTokenFromRequest(req);
   const payload = verifyJwt(token);
@@ -21,7 +21,7 @@ function requireAuthUser(req, res, getUserByUsername) {
     res.status(401).json({ error: 'Authorization required.', success: false });
     return null;
   }
-  const user = getUserByUsername(payload.sub);
+  const user = await getUserByUsername(payload.sub);
   if (!user) {
     res.status(401).json({ error: 'Authorization required.', success: false });
     return null;

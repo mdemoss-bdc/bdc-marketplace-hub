@@ -27,7 +27,7 @@ module.exports = async function handler(req, res) {
     const token = getTokenFromRequest(req);
     const payload = verifyJwt(token);
     if (payload?.sub) {
-      const user = getUserByUsername(payload.sub);
+      const user = await getUserByUsername(payload.sub);
       if (user) userId = user.id;
     }
   } catch {

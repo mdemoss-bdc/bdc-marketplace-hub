@@ -11,6 +11,16 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Warm persistent auth store (Postgres schema + baseline seed) on cold start.
+try {
+  const { openDb, backend } = require('./db');
+  Promise.resolve(openDb())
+    .then(() => console.log(`[api] auth store ready (${backend})`))
+    .catch((err) => console.error('[api] auth store warm failed:', err.message || err));
+} catch (err) {
+  console.warn('[api] auth store warm skipped:', err.message || err);
+}
+
 /**
  * Restore the original /api/... path after Vercel rewrites
  * `/api/auth/login` → `/api/index?__route=auth/login`.

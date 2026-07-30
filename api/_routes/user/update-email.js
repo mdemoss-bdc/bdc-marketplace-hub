@@ -16,12 +16,14 @@ module.exports = async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed.', success: false });
     return;
   }
-  const user = requireAuthUser(req, res, getUserByUsername);
+  const user = await requireAuthUser(req, res, getUserByUsername);
   if (!user) return;
   const body = parseBody(req);
   try {
-    const result = await Promise.resolve(
-      updateEmail(user.id, body.new_email || body.email, body.current_password),
+    const result = await updateEmail(
+      user.id,
+      body.new_email || body.email,
+      body.current_password,
     );
     const notify = await dispatchEmailChangeNotifications({
       userId: result.user.id,

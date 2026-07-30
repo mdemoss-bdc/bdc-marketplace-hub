@@ -26,7 +26,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const user = getUserByUsername(payload.sub);
+  const user = await getUserByUsername(payload.sub);
   if (!user) {
     res.status(401).json({ error: 'Authorization required.' });
     return;

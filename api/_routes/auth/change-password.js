@@ -15,7 +15,7 @@ module.exports = async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed.', success: false });
     return;
   }
-  const user = requireAuthUser(req, res, getUserByUsername);
+  const user = await requireAuthUser(req, res, getUserByUsername);
   if (!user) return;
   const body = parseBody(req);
   if (body.new_password !== body.confirm_password) {
@@ -23,7 +23,7 @@ module.exports = async function handler(req, res) {
     return;
   }
   try {
-    changePassword(user.id, body.current_password, body.new_password);
+    await changePassword(user.id, body.current_password, body.new_password);
     res.status(200).json({ success: true, status: 'ok' });
   } catch (err) {
     res.status(400).json({

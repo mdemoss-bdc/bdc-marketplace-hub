@@ -23,7 +23,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const user = requireAuthUser(req, res, getUserByUsername);
+  const user = await requireAuthUser(req, res, getUserByUsername);
   if (!user) return;
 
   if (req.method === 'GET') {
@@ -51,7 +51,7 @@ module.exports = async function handler(req, res) {
 
   const body = parseBody(req);
   try {
-    const { user: updated, emailChange } = updateProfile(user.id, {
+    const { user: updated, emailChange } = await updateProfile(user.id, {
       phone: body.phone,
       email: body.email,
       new_email: body.new_email,

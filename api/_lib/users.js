@@ -1,29 +1,33 @@
 /**
- * Account profiles + credential verification backed by persistent SQLite
- * (api/_lib/db.js). Passwords are scrypt-hashed; bootstrap accounts are
- * seeded from ADMIN_PASSWORD / TESTER_PASSWORD on cold start.
+ * Account profiles + credential verification.
+ * Backed by PostgreSQL when DATABASE_URL/POSTGRES_URL is set, else SQLite.
  */
 const {
   authenticate: dbAuthenticate,
   getUserByUsername: dbGetUserByUsername,
-  createUser,
+  createUser: dbCreateUser,
   listUsersForAdmin,
   openDb,
 } = require('./db');
 
 /** Ensure schema + seed run before any auth call. */
-function ensureReady() {
-  openDb();
+async function ensureReady() {
+  await openDb();
 }
 
-function getUserByUsername(username) {
-  ensureReady();
+async function getUserByUsername(username) {
+  await ensureReady();
   return dbGetUserByUsername(username);
 }
 
-function authenticate(username, password) {
-  ensureReady();
+async function authenticate(username, password) {
+  await ensureReady();
   return dbAuthenticate(username, password);
+}
+
+async function createUser(payload) {
+  await ensureReady();
+  return dbCreateUser(payload);
 }
 
 function requireRole(user, roles) {
@@ -32,8 +36,8 @@ function requireRole(user, roles) {
   return roles.map(String).includes(role);
 }
 
-function adminDirectoryUsers() {
-  ensureReady();
+async function adminDirectoryUsers() {
+  await ensureReady();
   return listUsersForAdmin();
 }
 

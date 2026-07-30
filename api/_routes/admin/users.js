@@ -1,6 +1,7 @@
 /**
  * GET /api/admin/users
- * Admin-only directory loaded from the SQLite users table. No passwords.
+ * Admin-only directory loaded from the persistent users table (Postgres when
+ * DATABASE_URL is set). No passwords.
  */
 const {
   getUserByUsername,
@@ -30,7 +31,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const user = getUserByUsername(payload.sub);
+  const user = await getUserByUsername(payload.sub);
   const effective = user
     ? { ...user, role: user.role || payload.role }
     : {
@@ -45,5 +46,5 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  res.status(200).json({ users: adminDirectoryUsers() });
+  res.status(200).json({ users: await adminDirectoryUsers() });
 };

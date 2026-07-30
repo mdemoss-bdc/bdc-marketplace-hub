@@ -15,10 +15,10 @@ module.exports = async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed.', success: false });
     return;
   }
-  const user = requireAuthUser(req, res, getUserByUsername);
+  const user = await requireAuthUser(req, res, getUserByUsername);
   if (!user) return;
   try {
-    const updated = regenerateRecoveryId(user.id);
+    const updated = await regenerateRecoveryId(user.id);
     res.status(200).json({
       success: true,
       status: 'ok',

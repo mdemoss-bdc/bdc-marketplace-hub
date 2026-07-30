@@ -66,7 +66,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  const user = authenticate(username, password);
+  const user = await authenticate(username, password);
   if (!user) {
     // authenticate() already logs [AUTH FAIL] with a specific reason
     recordLoginFailure(ip);
