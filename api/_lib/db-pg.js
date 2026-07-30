@@ -8,6 +8,7 @@
 const { Pool } = require('pg');
 const { hashPassword, verifyPassword, looksLikePasswordHash, needsRehash } = require('./crypto-passwords');
 const { ensureCoreSchema, databaseUrl: sharedDatabaseUrl } = require('./pg');
+const { randomHex, randomRecoveryId } = require('./random-token');
 
 const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
 const DEFAULT_TESTER_PASSWORD = 'TestReviewer123!';
@@ -461,10 +462,7 @@ async function createUser({
     subscription_tier ||
     (account_type === 'rooftop' ? 'rooftop_pending' : '');
   const hash = hashPassword(password);
-  const recovery = `REC-${crypto.randomBytes(3).toString('hex').toUpperCase()}-${crypto
-    .randomBytes(3)
-    .toString('hex')
-    .toUpperCase()}`;
+  const recovery = randomRecoveryId();
 
   try {
     const inserted = await queryOne(
@@ -564,7 +562,7 @@ async function updateEmail(userId, newEmail, currentPassword) {
     throw new Error('That email address is already registered to another account.');
   }
   const oldEmail = String(row.email || '').trim().toLowerCase();
-  const revertToken = crypto.randomBytes(24).toString('hex');
+  const revertToken = randomHex(24);
   const expires = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
   const history = [row.old_email_history, oldEmail].filter(Boolean).join(',').slice(0, 2000);
   await query(

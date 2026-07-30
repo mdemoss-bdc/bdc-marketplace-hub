@@ -7,7 +7,7 @@
  *   - pbkdf2:salt:key         (prefixed PBKDF2)
  *   - salt:key                (Python stdlib PBKDF2 without prefix)
  */
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const bcrypt = require('bcryptjs');
 
 const BCRYPT_ROUNDS = 10;

@@ -7,9 +7,9 @@
  */
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { hashPassword, verifyPassword, looksLikePasswordHash, needsRehash } = require('./crypto-passwords');
+const { randomHex, randomRecoveryId } = require('./random-token');
 
 /** Bootstrap password for mdemoss when no env secret is configured. */
 const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
@@ -547,10 +547,7 @@ function createUser({
     subscription_tier ||
     (account_type === 'rooftop' ? 'rooftop_pending' : '');
   const hash = hashPassword(password);
-  const recovery = `REC-${crypto.randomBytes(3).toString('hex').toUpperCase()}-${crypto
-    .randomBytes(3)
-    .toString('hex')
-    .toUpperCase()}`;
+  const recovery = randomRecoveryId();
 
   try {
     const info = db
@@ -653,7 +650,7 @@ function updateEmail(userId, newEmail, currentPassword) {
     throw new Error('That email address is already registered to another account.');
   }
   const oldEmail = String(row.email || '').trim().toLowerCase();
-  const revertToken = crypto.randomBytes(24).toString('hex');
+  const revertToken = randomHex(24);
   const expires = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
   const history = [row.old_email_history, oldEmail].filter(Boolean).join(',').slice(0, 2000);
   db.prepare(

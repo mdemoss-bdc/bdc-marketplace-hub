@@ -2,7 +2,7 @@
  * HMAC-SHA256 JWT helpers for BDC Marketplace Hub serverless auth.
  * Secret: AUTH_SESSION_SECRET or DASHBOARD_PASSWORD.
  */
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 
 const COOKIE_NAME = 'bdc_session';
 const BDC_COOKIE = COOKIE_NAME;
