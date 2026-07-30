@@ -153,6 +153,11 @@ mount('/api/marketplace/toggle-auto', require('../_routes/marketplace/toggle-aut
 mount('/api/marketplace/generate-copy', require('../_routes/marketplace/generate-copy'));
 mount('/api/v1/marketplace/queue', require('../_routes/v1/marketplace/queue'));
 
+// ── Meta Commerce Manager catalog feed (public — Meta crawler) ──────────────
+mount('/api/catalog/feed', require('../_routes/catalog/feed'));
+mount('/api/feeds/meta', require('../_routes/catalog/feed'));
+mount('/api/feeds/catalog', require('../_routes/catalog/feed'));
+
 // ── Inventory regex sanitizer ───────────────────────────────────────────────
 mount('/api/inventory/parse', require('../_routes/inventory/parse'));
 mount('/api/inventory/sanitize', require('../_routes/inventory/parse'));
@@ -178,6 +183,8 @@ app.all(['/api', '/api/index', '/'], (_req, res) => {
       '/api/marketplace/toggle-auto',
       '/api/sync',
       '/api/sync/status',
+      '/api/catalog/feed',
+      '/api/feeds/meta',
       '/api/admin/users',
     ],
   });

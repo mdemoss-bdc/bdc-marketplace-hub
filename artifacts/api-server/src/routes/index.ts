@@ -5,10 +5,12 @@ import authRouter from "./auth";
 import facebookRouter from "./facebook";
 import marketplaceRouter from "./marketplace";
 import syncRouter from "./sync";
+import catalogRouter from "./catalog";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(catalogRouter);
 router.use(syncRouter);
 router.use(facebookRouter);
 router.use(authRouter);
