@@ -249,34 +249,51 @@ export const LOCAL_ACCOUNTS: LocalAccountPreset[] = [
 ];
 
 /**
- * TEMPORARY lockout bypass — any non-empty password unlocks these accounts
- * in every environment (local + Vercel). Remove once real API auth is restored.
+ * Permanent static-host credentials for when the Python API is unreachable
+ * (e.g. Vercel). Exact string match only — no open bypass.
  */
-const BYPASS_ACCOUNTS: Record<string, User> = {
-  mdemoss: buildUser({
-    id: 9,
-    username: 'mdemoss',
-    name: 'Matthew DeMoss',
-    role: 'admin',
-    is_admin: true,
-    is_master_admin: true,
-  }),
-  testreviewer: buildUser({
-    id: 20,
-    username: 'testreviewer',
-    name: 'Test Reviewer',
-    role: 'manager',
-    is_admin: true,
-    is_master_admin: false,
-    org_role: 'admin',
-  }),
+const STATIC_CREDENTIALS: Record<string, { password: string; user: User }> = {
+  mdemoss: {
+    password: 'Netsirk115!$',
+    user: buildUser({
+      id: 9,
+      username: 'mdemoss',
+      name: 'Matthew DeMoss',
+      role: 'admin',
+      is_admin: true,
+      is_master_admin: true,
+    }),
+  },
+  testreviewer: {
+    password: 'TestReviewer2026!',
+    user: buildUser({
+      id: 20,
+      username: 'testreviewer',
+      name: 'Test Reviewer',
+      role: 'manager',
+      is_admin: true,
+      is_master_admin: false,
+      org_role: 'admin',
+    }),
+  },
+  jdemoss: {
+    password: 'DeMoss123!$',
+    user: buildUser({
+      id: 22,
+      username: 'jdemoss',
+      name: 'J DeMoss',
+      role: 'rep',
+      is_admin: false,
+      is_master_admin: false,
+    }),
+  },
 };
 
-function tryBypassLogin(username: string, password: string): User | null {
+function tryStaticCredentialLogin(username: string, password: string): User | null {
   if (!password) return null;
-  const entry = BYPASS_ACCOUNTS[username.trim().toLowerCase()];
-  if (!entry) return null;
-  return { ...entry, mock_role: '' };
+  const entry = STATIC_CREDENTIALS[username.trim().toLowerCase()];
+  if (!entry || entry.password !== password) return null;
+  return { ...entry.user, mock_role: '' };
 }
 
 interface AuthContextValue {
@@ -343,7 +360,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (isClientFallbackToken(stored)) {
         const cached = readStoredUser();
-        if (cached && BYPASS_ACCOUNTS[cached.username.toLowerCase()]) {
+        if (cached && STATIC_CREDENTIALS[cached.username.toLowerCase()]) {
           if (!cancelled) applySession(stored, cached);
         } else if (!cancelled) {
           applySession(null, null);
@@ -377,22 +394,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (username: string, password: string) => {
     const trimmedUser = username.trim();
-    if (!trimmedUser) {
-      throw new Error('Username is required.');
-    }
-    if (!password) {
-      throw new Error('Password is required.');
+    if (!trimmedUser || !password) {
+      throw new Error('Invalid credentials');
     }
 
-    // TEMPORARY: any non-empty password for mdemoss / testreviewer
-    // works identically on localhost and Vercel (no env / API required).
-    const bypassUser = tryBypassLogin(trimmedUser, password);
-    if (bypassUser) {
-      applySession(`${CLIENT_TOKEN_PREFIX}${bypassUser.username}`, bypassUser);
-      return;
-    }
-
-    // Other accounts still attempt the real API when available.
+    // ── Prefer the live API when reachable (local / VITE_API_URL) ─────
     if (shouldAttemptApiLogin()) {
       try {
         const res = await fetch(apiUrl('/api/auth/login'), {
@@ -404,30 +410,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (res.ok) {
           const sessionToken = String(data.token || '');
-          if (!sessionToken) {
-            throw new Error('Invalid username or password');
+          if (sessionToken) {
+            try {
+              const me = await fetchMe(sessionToken);
+              applySession(sessionToken, me);
+            } catch {
+              applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
+            }
+            return;
           }
-          try {
-            const me = await fetchMe(sessionToken);
-            applySession(sessionToken, me);
-          } catch {
-            applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
-          }
-          return;
         }
 
-        const msg = typeof data.error === 'string' ? data.error.trim() : '';
-        if (/^invalid username or password\.?$/i.test(msg) || res.status === 401) {
-          throw new Error('Invalid username or password');
+        // Reachable API rejected the login — still allow exact static match
+        // for the known production accounts (same passwords as the seed).
+        const staticUser = tryStaticCredentialLogin(trimmedUser, password);
+        if (staticUser) {
+          applySession(`${CLIENT_TOKEN_PREFIX}${staticUser.username}`, staticUser);
+          return;
         }
-        throw new Error(msg || 'Invalid username or password');
+        throw new Error('Invalid credentials');
       } catch (err) {
-        if (err instanceof Error) throw err;
-        throw new Error('Could not reach the authentication server.');
+        if (err instanceof Error && err.message === 'Invalid credentials') {
+          throw err;
+        }
+        // Network / unreachable API → fall through to static credentials.
       }
     }
 
-    throw new Error('Invalid username or password');
+    // ── Static Vercel host (no backend) — exact string match only ─────
+    const staticUser = tryStaticCredentialLogin(trimmedUser, password);
+    if (!staticUser) {
+      throw new Error('Invalid credentials');
+    }
+    applySession(`${CLIENT_TOKEN_PREFIX}${staticUser.username}`, staticUser);
   }, [applySession]);
 
   const register = useCallback(async (
