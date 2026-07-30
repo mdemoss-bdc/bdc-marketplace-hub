@@ -39,7 +39,9 @@ export default defineConfig({
   },
   root: path.resolve(import.meta.dirname),
   build: {
-    outDir: path.resolve(import.meta.dirname, 'dist/public'),
+    // Emit static assets at the repository root so Vercel / `pnpm run build`
+    // can serve `./dist/index.html` without an extra copy step.
+    outDir: path.resolve(import.meta.dirname, '..', '..', 'dist'),
     emptyOutDir: true,
     // Never emit source maps in production builds.
     // Eliminates the /dist/*.js.map files that expose original TS source.
