@@ -55,7 +55,8 @@ module.exports = async function handler(req, res) {
   }
 
   const body = parseBody(req);
-  const username = String(body.username || body.email || '').trim();
+  // Case-insensitive lookup — authenticate() also lowercases + maps aliases (jdmoss→jdemoss).
+  const username = String(body.username || body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
 
   if (!username || !password) {

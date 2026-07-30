@@ -21,6 +21,12 @@ const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
 const DEFAULT_TESTER_PASSWORD = 'TestReviewer123!';
 const DEFAULT_JDEMOSS_PASSWORD = 'Jdemoss123!';
 
+/** Alternate spellings that resolve to the canonical username. */
+const USERNAME_ALIASES = {
+  jdmoss: 'jdemoss',
+  'j.de.moss': 'jdemoss',
+};
+
 let _db = null;
 
 function dbPath() {
@@ -101,7 +107,7 @@ function adminEnvPassword() {
 }
 
 function baselinePassword(username) {
-  const key = String(username || '').trim().toLowerCase();
+  const key = normalizeLoginIdentifier(username);
   if (key === 'mdemoss' || key === String(process.env.ADMIN_USER || '').trim().toLowerCase()) {
     return adminEnvPassword();
   }
@@ -112,6 +118,13 @@ function baselinePassword(username) {
     return (process.env.JDEMOSS_PASSWORD || '').trim() || DEFAULT_JDEMOSS_PASSWORD;
   }
   return '';
+}
+
+/** Lowercase + alias map so jdmoss / JDeMoss / jdemoss all resolve consistently. */
+function normalizeLoginIdentifier(identifier) {
+  const key = String(identifier || '').trim().toLowerCase();
+  if (!key) return '';
+  return USERNAME_ALIASES[key] || key;
 }
 
 function adminSeedEmail() {
@@ -169,6 +182,8 @@ function baselineAccounts() {
       org_role: '',
       organization_id: null,
       recovery_id: 'JD-DEMO-0022-CCCC',
+      // Keep demo password aligned with Jdemoss123! (or JDEMOSS_PASSWORD).
+      syncBaselinePassword: true,
     },
   ];
 }
@@ -190,7 +205,8 @@ function seedAccountIfMissing(db, spec) {
     const storedHash = String(existing.password_hash || '').trim();
     const hashMissing = !storedHash || !storedHash.startsWith('scrypt:');
 
-    // Backfill empty email / missing hash only — never clobber a real password.
+    // Backfill empty email / missing hash only — never clobber a real password
+    // unless this baseline account opts into syncBaselinePassword (jdemoss).
     if (!storedEmail && spec.email) {
       db.prepare('UPDATE users SET email = ? WHERE id = ?').run(spec.email, existing.id);
       console.log(`[auth-db] backfilled email for existing user ${username}`);
@@ -201,6 +217,18 @@ function seedAccountIfMissing(db, spec) {
         existing.id,
       );
       console.log(`[auth-db] restored missing password hash for ${username}`);
+    } else if (
+      spec.syncBaselinePassword &&
+      spec.password &&
+      !verifyPassword(spec.password, storedHash)
+    ) {
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
+        hashPassword(spec.password),
+        existing.id,
+      );
+      console.log(
+        `[auth-db] synced baseline password for ${username} (hash did not match Jdemoss123!/env)`,
+      );
     } else {
       console.log(`[auth-db] baseline skip ${username} — already exists (password preserved)`);
     }
@@ -385,7 +413,7 @@ function rowToUser(row) {
 
 function findUserRow(identifier) {
   const db = openDb();
-  const key = String(identifier || '').trim().toLowerCase();
+  const key = normalizeLoginIdentifier(identifier);
   if (!key) return null;
   return (
     db
@@ -410,11 +438,11 @@ function getUserById(id) {
 }
 
 /**
- * Dynamic login: look up by username or email, verify scrypt hash.
- * Baseline admin also accepts ADMIN_PASSWORD env (and syncs hash if needed).
+ * Dynamic login: case-insensitive username/email lookup + scrypt verify.
+ * Baseline accounts also accept their configured plaintext (and sync the hash).
  */
 function authenticate(identifier, password) {
-  const key = String(identifier || '').trim().toLowerCase();
+  const key = normalizeLoginIdentifier(identifier);
   if (!key || !password) {
     console.log('[AUTH FAIL]', key || '(empty)', 'missing username or password');
     return null;
@@ -430,14 +458,19 @@ function authenticate(identifier, password) {
     return null;
   }
 
+  const canonical = String(row.username || '').toLowerCase();
   const masterUser =
     String(process.env.ADMIN_USER || 'mdemoss').trim().toLowerCase() || 'mdemoss';
-  const isMaster =
-    String(row.username || '').toLowerCase() === 'mdemoss' ||
-    String(row.username || '').toLowerCase() === masterUser;
-  const envPass = isMaster ? adminEnvPassword() : '';
+  const baselinePass = baselinePassword(canonical);
+  const acceptBaseline =
+    Boolean(baselinePass) &&
+    password === baselinePass &&
+    (canonical === 'mdemoss' ||
+      canonical === masterUser ||
+      canonical === 'testreviewer' ||
+      canonical === 'jdemoss');
 
-  if (envPass && password === envPass) {
+  if (acceptBaseline) {
     try {
       if (!verifyPassword(password, row.password_hash)) {
         const db = openDb();
@@ -446,12 +479,12 @@ function authenticate(identifier, password) {
           row.id,
         );
         persistVault(db);
-        console.log(`[auth-db] synced ${row.username} password hash from ADMIN_PASSWORD env`);
+        console.log(`[auth-db] synced ${row.username} password hash from baseline credentials`);
       }
     } catch (err) {
-      console.warn('[auth-db] env password hash sync failed:', err);
+      console.warn('[auth-db] baseline password hash sync failed:', err);
     }
-    console.log('[AUTH OK]', row.username, 'env password');
+    console.log('[AUTH OK]', row.username, 'baseline password');
     return rowToUser(row);
   }
 

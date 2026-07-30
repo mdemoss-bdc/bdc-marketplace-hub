@@ -2,8 +2,8 @@
  * Compatibility Express entry for `artifacts/api-server`.
  *
  * Production Vercel traffic is handled by root `api/index.js` (rewritten from
- * `/api/*` via root vercel.json). This module mounts the same auth paths with
- * and without the `/api` prefix for local Node runs of the TS api-server.
+ * `/api/*` via root vercel.json). Auth credentials (including jdemoss / jdmoss
+ * alias → password Jdemoss123!) are resolved case-insensitively in api/_lib/db.js.
  */
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";

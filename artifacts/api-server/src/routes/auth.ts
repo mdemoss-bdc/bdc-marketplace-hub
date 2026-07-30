@@ -26,9 +26,11 @@ router.get("/auth", (_req: Request, res: Response) => {
       "POST /api/auth/logout",
       "GET|POST /api/auth/me",
     ],
-    baseline_accounts: ["mdemoss", "testreviewer", "jdemoss"],
+    baseline_accounts: ["mdemoss", "testreviewer", "jdemoss", "jdmoss (alias → jdemoss)"],
     notes: [
       "Baseline seeding is non-destructive (existing password hashes are preserved).",
+      "jdemoss / jdmoss both authenticate with password Jdemoss123!.",
+      "Login usernames are matched case-insensitively.",
       "New signups persist to SQLite + auth vault mirror.",
     ],
   });

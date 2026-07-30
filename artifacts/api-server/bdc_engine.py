@@ -2463,7 +2463,7 @@ def init_db():
                     "force-synced (org already provisioned)."
                 )
 
-        # ── Seed: Jdemoss — permanent Pro account (non-destructive) ───────────
+        # ── Seed: Jdemoss — permanent Pro account (non-destructive + alias) ───
         _JD_USER  = 'jdemoss'
         _JD_EMAIL = (
             os.environ.get('JDEMOSS_EMAIL')
@@ -2506,7 +2506,7 @@ def init_db():
                 )
             print(
                 f"[INIT] Seeded 'jdemoss' (id={_jd_uid}, email={_JD_EMAIL!r}) — "
-                "password set once (non-destructive thereafter)."
+                "password set to Jdemoss123! (alias login: jdmoss)."
             )
         else:
             _jd_stored_email = str(_jd_existing['email'] or '').strip()
@@ -2516,18 +2516,27 @@ def init_db():
                     "UPDATE users SET email = ? WHERE id = ?",
                     (_JD_EMAIL, _jd_existing['id']),
                 )
-            if not _jd_stored_hash:
+            # Keep demo password aligned with Jdemoss123! when hash is missing or stale.
+            if (not _jd_stored_hash) or (not _verify_password(_JD_PASS, _jd_stored_hash)):
                 conn.execute(
                     "UPDATE users SET password_hash = ? WHERE id = ?",
                     (_hash_password(_JD_PASS), _jd_existing['id']),
                 )
+                print(
+                    "[INIT] 'jdemoss' password hash synced to Jdemoss123!/JDEMOSS_PASSWORD."
+                )
+            else:
+                print(
+                    "[INIT] 'jdemoss' already exists — password hash already matches baseline."
+                )
             conn.execute(
                 "UPDATE users SET subscription_status = 'active', "
-                "subscription_tier = 'pro_annual' WHERE id = ?",
-                (_jd_existing['id'],),
+                "subscription_tier = 'pro_annual', email = COALESCE(NULLIF(email, ''), ?) "
+                "WHERE id = ?",
+                (_JD_EMAIL, _jd_existing['id']),
             )
             print(
-                "[INIT] 'jdemoss' already exists — password preserved (non-destructive)."
+                "[INIT] 'jdemoss' ready (case-insensitive login; alias 'jdmoss' also accepted on Node)."
             )
         # ── Startup seat-counter sync ─────────────────────────────────────────
         # Recalculate used_seats for every org from the actual user count so any
