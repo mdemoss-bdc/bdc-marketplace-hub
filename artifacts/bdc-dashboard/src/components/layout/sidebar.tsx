@@ -210,10 +210,10 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
 
         <div className="relative flex items-start justify-between gap-2 border-b border-slate-800/80 px-5 py-5">
           <div className="flex min-w-0 items-center gap-3">
-            <BrandLogo className="h-9 w-9 flex-shrink-0 rounded-lg" />
+            <BrandLogo className="h-9 w-9 flex-shrink-0 rounded-lg ring-1 ring-white/10 bg-slate-900/40 p-0.5" />
             <div className="min-w-0">
               <h1 className="font-display text-[17px] font-bold leading-none tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400">
-                BDC Manager Desk
+                BDC Manager
               </h1>
               <p className={cn(META_LABEL, 'mt-2')}>Sales Command Center</p>
             </div>

@@ -108,9 +108,9 @@ function PublicRouter() {
           <div className="min-h-dvh bg-background flex flex-col">
             <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-800/80 bg-slate-950/85 px-6 backdrop-blur-xl backdrop-saturate-150">
               <a href="/" className="flex items-center gap-2.5">
-                <BrandLogo className="h-8 w-8 flex-shrink-0 rounded-md" />
+                <BrandLogo className="h-8 w-8 flex-shrink-0 rounded-md ring-1 ring-white/10" />
                 <span className="font-display text-sm font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400">
-                  BDC Manager Desk
+                  BDC Manager
                 </span>
               </a>
               <div className="flex items-center gap-5">
@@ -166,9 +166,9 @@ function Router() {
         >
           <Menu className="h-5 w-5" />
         </button>
-        <BrandLogo className="h-8 w-8 flex-shrink-0 rounded-md" />
+        <BrandLogo className="h-8 w-8 flex-shrink-0 rounded-md ring-1 ring-white/10" />
         <h1 className="font-display text-sm font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-white to-slate-400">
-          BDC Manager Desk
+          BDC Manager
         </h1>
         <div className="ml-auto flex min-w-0 items-center gap-2">
           <span className="min-w-0 truncate text-right">

@@ -8,7 +8,7 @@ type BrandLogoProps = {
 /** High-res app mark from /public/logo.png (1024×1024). */
 export function BrandLogo({
   className = 'h-8 w-8',
-  alt = 'BDC Manager Desk',
+  alt = 'BDC Manager | Sales Command Center',
 }: BrandLogoProps) {
   return (
     <img
@@ -17,7 +17,11 @@ export function BrandLogo({
       width={1024}
       height={1024}
       decoding="async"
-      className={cn('object-contain select-none', className)}
+      fetchPriority="high"
+      className={cn(
+        'object-contain object-center select-none',
+        className,
+      )}
     />
   );
 }

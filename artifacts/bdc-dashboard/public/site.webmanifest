@@ -1,7 +1,7 @@
 {
-  "name": "BDC Manager Desk",
-  "short_name": "BDC Desk",
-  "description": "Automotive lead automation, inventory sync, and social content tools for dealership BDC teams.",
+  "name": "BDC Manager | Sales Command Center",
+  "short_name": "BDC Manager",
+  "description": "Automotive lead automation, inventory sync, and Marketplace publishing for dealership BDC teams.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#020617",
