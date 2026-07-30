@@ -2,7 +2,8 @@
  * Auth routes for the local TypeScript api-server.
  *
  * Uses the shared Node auth store (api/_lib/db.js) which prefers persistent
- * PostgreSQL when DATABASE_URL / POSTGRES_URL is set.
+ * PostgreSQL when DATABASE_URL / POSTGRES_URL is set. Register/login both use
+ * bcrypt (cost 10) via crypto-passwords.js and case-insensitive usernames.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { createRequire } from "node:module";
@@ -13,30 +14,41 @@ const router: IRouter = Router();
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function loadAuthStore(): {
-  authenticate: (u: string, p: string) => Promise<Record<string, unknown> | null>;
-  createUser: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  getUserByUsername: (u: string) => Promise<Record<string, unknown> | null>;
+type AuthUser = Record<string, unknown> & {
+  id?: number;
+  username?: string;
+  role?: string;
+  is_admin?: boolean;
+  is_master_admin?: boolean;
+};
+
+function loadAuthModules(): {
+  authenticate: (u: string, p: string) => Promise<AuthUser | null>;
+  createUser: (payload: Record<string, unknown>) => Promise<AuthUser>;
+  getUserByUsername: (u: string) => Promise<AuthUser | null>;
   adminDirectoryUsers: () => Promise<unknown[]>;
   openDb: () => Promise<unknown>;
+  signJwt: (claims: Record<string, unknown>) => string;
+  setAuthCookie: (res: Response, token: string) => void;
   backend?: string;
 } {
-  const candidates = [
-    path.resolve(__dirname, "../../../../api/_lib/users.js"),
-    path.resolve(process.cwd(), "api/_lib/users.js"),
+  const bases = [
+    path.resolve(__dirname, "../../../../api/_lib"),
+    path.resolve(process.cwd(), "api/_lib"),
   ];
-  for (const file of candidates) {
+  for (const base of bases) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const users = require(file) as Record<string, unknown>;
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const db = require(file.replace(/users\.js$/, "db.js")) as Record<string, unknown>;
+      const users = require(path.join(base, "users.js")) as Record<string, unknown>;
+      const db = require(path.join(base, "db.js")) as Record<string, unknown>;
+      const jwt = require(path.join(base, "jwt.js")) as Record<string, unknown>;
       return {
         authenticate: users.authenticate as never,
         createUser: users.createUser as never,
         getUserByUsername: users.getUserByUsername as never,
         adminDirectoryUsers: users.adminDirectoryUsers as never,
         openDb: db.openDb as never,
+        signJwt: jwt.signJwt as never,
+        setAuthCookie: jwt.setAuthCookie as never,
         backend: String(db.backend || ""),
       };
     } catch {
@@ -49,19 +61,28 @@ function loadAuthStore(): {
 let _warmed = false;
 async function warmStore() {
   if (_warmed) return;
-  const store = loadAuthStore();
+  const store = loadAuthModules();
   await store.openDb();
   _warmed = true;
+}
+
+function sessionPayload(user: AuthUser, token: string) {
+  return {
+    success: true,
+    ...user,
+    role: user.role,
+    token,
+  };
 }
 
 router.get("/auth", async (_req: Request, res: Response) => {
   try {
     await warmStore();
-    const store = loadAuthStore();
+    const store = loadAuthModules();
     res.status(200).json({
       success: true,
       backend: store.backend || "unknown",
-      message: "Auth routes persist users to PostgreSQL when DATABASE_URL is set.",
+      message: "Auth uses bcrypt password hashes + case-insensitive usernames.",
       endpoints: [
         "POST /api/auth/login",
         "POST /api/auth/register",
@@ -80,7 +101,7 @@ router.get("/auth", async (_req: Request, res: Response) => {
 router.post(["/auth/register", "/auth/signup"], async (req: Request, res: Response) => {
   try {
     await warmStore();
-    const store = loadAuthStore();
+    const store = loadAuthModules();
     const body = (req.body || {}) as Record<string, unknown>;
     const username = String(body.username || "").trim().toLowerCase();
     const password = String(body.password || "");
@@ -97,7 +118,20 @@ router.post(["/auth/register", "/auth/signup"], async (req: Request, res: Respon
       subscription_status: "inactive",
       role: "Reviewer",
     });
-    res.status(201).json({ success: true, ...user, message: "Account created." });
+
+    const token = store.signJwt({
+      sub: user.username,
+      id: user.id,
+      role: user.role,
+      is_admin: user.is_admin,
+      is_master_admin: user.is_master_admin,
+    });
+    store.setAuthCookie(res, token);
+    console.log("[AUTH OK]", user.username, "registered + session issued");
+    res.status(201).json({
+      ...sessionPayload(user, token),
+      message: "Account created.",
+    });
   } catch (err) {
     res.status(400).json({
       success: false,
@@ -109,16 +143,27 @@ router.post(["/auth/register", "/auth/signup"], async (req: Request, res: Respon
 router.post("/auth/login", async (req: Request, res: Response) => {
   try {
     await warmStore();
-    const store = loadAuthStore();
+    const store = loadAuthModules();
     const body = (req.body || {}) as Record<string, unknown>;
     const username = String(body.username || body.email || "").trim().toLowerCase();
     const password = String(body.password || "");
+
+    console.log("[LOGIN CHECK]", { inputUsername: username, hasPassword: Boolean(password) });
     const user = await store.authenticate(username, password);
+    console.log("[LOGIN CHECK]", { inputUsername: username, userFound: !!user });
     if (!user) {
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
-    res.status(200).json({ success: true, ...user });
+    const token = store.signJwt({
+      sub: user.username,
+      id: user.id,
+      role: user.role,
+      is_admin: user.is_admin,
+      is_master_admin: user.is_master_admin,
+    });
+    store.setAuthCookie(res, token);
+    res.status(200).json(sessionPayload(user, token));
   } catch (err) {
     res.status(500).json({
       success: false,
@@ -130,9 +175,7 @@ router.post("/auth/login", async (req: Request, res: Response) => {
 router.get("/admin/users", async (req: Request, res: Response) => {
   try {
     await warmStore();
-    const store = loadAuthStore();
-    // Lightweight gate: require Authorization header presence for desk builds;
-    // production Vercel route enforces Admin RBAC via JWT.
+    const store = loadAuthModules();
     const auth = String(req.headers.authorization || "");
     if (!auth) {
       res.status(401).json({ error: "Authorization required." });

@@ -355,7 +355,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [token]);
 
   const login = useCallback(async (username: string, password: string) => {
-    const trimmedUser = username.trim();
+    const trimmedUser = username.trim().toLowerCase();
     if (!trimmedUser || !password) {
       throw new Error('Invalid credentials');
     }
@@ -407,9 +407,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        username: username.trim(),
+        username: username.trim().toLowerCase(),
         password,
-        email: email.trim(),
+        email: email.trim().toLowerCase(),
         full_name: fullName.trim() || username.trim(),
         tos_accepted: tosAccepted,
         visitor_id: visitorId,

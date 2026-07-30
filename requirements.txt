@@ -13,5 +13,8 @@ stripe>=15.3.1
 # Required only when DATABASE_URL points at PostgreSQL.
 psycopg2-binary>=2.9.9
 
+# Password hashing for register/login (aligns with Node bcryptjs).
+bcrypt>=4.2.0
+
 # Test suite
 pytest>=9.1.1

@@ -7,7 +7,7 @@
  */
 const crypto = require('crypto');
 const { Pool } = require('pg');
-const { hashPassword, verifyPassword } = require('./crypto-passwords');
+const { hashPassword, verifyPassword, looksLikePasswordHash, needsRehash } = require('./crypto-passwords');
 
 const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
 const DEFAULT_TESTER_PASSWORD = 'TestReviewer123!';
@@ -233,7 +233,7 @@ async function seedAccountIfMissing(spec) {
   if (existing) {
     const storedEmail = String(existing.email || '').trim();
     const storedHash = String(existing.password_hash || '').trim();
-    const hashMissing = !storedHash || !storedHash.startsWith('scrypt:');
+    const hashMissing = !looksLikePasswordHash(storedHash);
 
     if (!storedEmail && spec.email) {
       await query('UPDATE users SET email = $1 WHERE id = $2', [spec.email, existing.id]);
@@ -400,6 +400,7 @@ async function authenticate(identifier, password) {
   }
 
   const row = await findUserRow(key);
+  console.log('[LOGIN CHECK]', { inputUsername: key, userFound: !!row });
   if (!row) {
     console.log('[AUTH FAIL]', key, 'user not found');
     return null;
@@ -423,7 +424,7 @@ async function authenticate(identifier, password) {
 
   if (acceptBaseline) {
     try {
-      if (!verifyPassword(password, row.password_hash)) {
+      if (!verifyPassword(password, row.password_hash) || needsRehash(row.password_hash)) {
         await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
           hashPassword(password),
           row.id,
@@ -438,8 +439,22 @@ async function authenticate(identifier, password) {
   }
 
   if (!verifyPassword(password, row.password_hash)) {
+    console.log('[LOGIN FAIL] Password mismatch for:', key);
     console.log('[AUTH FAIL]', key, 'password mismatch');
     return null;
+  }
+
+  // Transparently upgrade legacy scrypt/pbkdf2 hashes to bcrypt on successful login.
+  if (needsRehash(row.password_hash)) {
+    try {
+      await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
+        hashPassword(password),
+        row.id,
+      ]);
+      console.log(`[auth-pg] upgraded ${row.username} hash to bcrypt`);
+    } catch (err) {
+      console.warn('[auth-pg] bcrypt upgrade skipped:', err.message || err);
+    }
   }
 
   console.log('[AUTH OK]', row.username, 'hash verified');

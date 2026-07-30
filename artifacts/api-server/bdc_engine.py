@@ -2615,21 +2615,68 @@ def init_db():
 # AUTH HELPERS
 # =====================================================================
 def _hash_password(password: str) -> str:
-    """Hash a password with PBKDF2-HMAC-SHA256 (stdlib; bcrypt/argon2-grade KDF).
+    """Hash a password with bcrypt (cost 10). Falls back to PBKDF2 if bcrypt
+    is unavailable.
 
-    Format: ``salt_hex:key_hex``. Never stores plaintext. Prefer setting
-    DASHBOARD_PASSWORD / TESTER_PASSWORD via environment and force-syncing
-    on startup rather than embedding secrets in source.
+    Formats:
+      • bcrypt  — ``$2b$10$...`` (preferred; matches Node bcryptjs)
+      • pbkdf2  — ``pbkdf2:salt_hex:key_hex`` (stdlib fallback)
     """
-    salt = secrets.token_hex(16)
-    key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260_000)
-    return f"{salt}:{key.hex()}"
+    try:
+        import bcrypt as _bcrypt  # type: ignore
+        return _bcrypt.hashpw(
+            password.encode("utf-8"),
+            _bcrypt.gensalt(rounds=10),
+        ).decode("utf-8")
+    except Exception:
+        salt = secrets.token_hex(16)
+        key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260_000)
+        return f"pbkdf2:{salt}:{key.hex()}"
 
 
 def _verify_password(password: str, stored_hash: str) -> bool:
-    """Constant-time verify against PBKDF2 (or legacy salt:key) hashes."""
+    """Verify bcrypt, scrypt, or PBKDF2 hashes (Node + Python compatibility)."""
+    if not password or not stored_hash:
+        return False
+    stored = str(stored_hash).strip()
+    if not stored:
+        return False
+
+    # bcrypt (Node bcryptjs + Python bcrypt)
+    if stored.startswith(("$2a$", "$2b$", "$2y$")):
+        try:
+            import bcrypt as _bcrypt  # type: ignore
+            return bool(
+                _bcrypt.checkpw(password.encode("utf-8"), stored.encode("utf-8"))
+            )
+        except Exception:
+            return False
+
+    # Legacy Node scrypt:saltHex:hashHex
+    if stored.startswith("scrypt:"):
+        try:
+            _scheme, salt_hex, hash_hex = stored.split(":", 2)
+            salt = bytes.fromhex(salt_hex)
+            expected = bytes.fromhex(hash_hex)
+            # Node used scrypt with N=16384,r=8,p=1,keylen=64
+            actual = hashlib.scrypt(
+                password.encode("utf-8"),
+                salt=salt,
+                n=16384,
+                r=8,
+                p=1,
+                dklen=len(expected),
+            )
+            return secrets.compare_digest(actual, expected)
+        except Exception:
+            return False
+
+    # Prefixed PBKDF2 or legacy bare salt:key
     try:
-        salt, key_hex = stored_hash.split(":", 1)
+        body = stored[7:] if stored.startswith("pbkdf2:") else stored
+        salt, key_hex = body.split(":", 1)
+        if ":" in key_hex and not stored.startswith("pbkdf2:"):
+            return False
         key = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260_000)
         return secrets.compare_digest(key.hex(), key_hex)
     except Exception:
@@ -3470,6 +3517,7 @@ class UserManager:
             (normalized, normalized),
         )
         row = cursor.fetchone()
+        print(f"[LOGIN CHECK] {{'inputUsername': {normalized!r}, 'userFound': {bool(row)}}}")
         conn.close()
         if not row:
             print(f"[AUTH] Login failed — no account for identifier: {normalized!r}")
@@ -3487,6 +3535,7 @@ class UserManager:
         )
         _env_ok = bool(_is_master and _env_pass and password == _env_pass)
         if not _env_ok and not _verify_password(password, row["password_hash"]):
+            print(f"[LOGIN FAIL] Password mismatch for: {normalized}")
             print(f"[AUTH] Login failed — password mismatch "
                   f"(user id={row['id']}, username={row['username']!r})")
             raise ValueError("Invalid username or password.")
@@ -3506,6 +3555,22 @@ class UserManager:
                     _sync.close()
             except Exception as _sync_exc:
                 print(f"[AUTH] Env password hash sync failed: {_sync_exc}")
+        elif _verify_password(password, row["password_hash"]):
+            _stored = str(row["password_hash"] or "")
+            if not _stored.startswith(("$2a$", "$2b$", "$2y$")):
+                try:
+                    _up = sqlite3.connect(DB_FILE)
+                    try:
+                        _up.execute(
+                            "UPDATE users SET password_hash = ? WHERE id = ?",
+                            (_hash_password(password), row["id"]),
+                        )
+                        _up.commit()
+                        print(f"[AUTH] Upgraded user id={row['id']} hash to bcrypt")
+                    finally:
+                        _up.close()
+                except Exception as _up_exc:
+                    print(f"[AUTH] bcrypt upgrade skipped: {_up_exc}")
         if row["is_suspended"]:
             print(f"[AUTH] Login blocked — account suspended (user id={row['id']})")
             raise ValueError("This account has been suspended. Please contact support.")

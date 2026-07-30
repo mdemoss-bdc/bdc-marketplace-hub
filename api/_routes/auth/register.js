@@ -2,9 +2,9 @@
  * POST /api/auth/register
  * POST /api/auth/signup (alias)
  *
- * Creates a new user with a scrypt password hash, persists to PostgreSQL
- * (DATABASE_URL / POSTGRES_URL) or the local SQLite+vault fallback, and returns
- * a JWT session token for immediate sign-in.
+ * Creates a new user with a bcrypt password hash (cost 10), persists to
+ * PostgreSQL (DATABASE_URL / POSTGRES_URL) or the local SQLite fallback, and
+ * returns the same JWT/session payload as login for immediate sign-in.
  */
 const { createUser } = require('../../_lib/users');
 const { signJwt, setAuthCookie } = require('../../_lib/jwt');
@@ -69,10 +69,12 @@ module.exports = async function handler(req, res) {
     });
     setAuthCookie(res, token);
 
-    console.log('[AUTH OK]', user.username, 'registered');
+    console.log('[AUTH OK]', user.username, 'registered + session issued');
+    // Same payload shape as POST /api/auth/login so the client can stay signed in.
     res.status(201).json({
       success: true,
       ...user,
+      role: user.role,
       token,
       message: 'Account created.',
     });

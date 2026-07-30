@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
-const { hashPassword, verifyPassword } = require('./crypto-passwords');
+const { hashPassword, verifyPassword, looksLikePasswordHash, needsRehash } = require('./crypto-passwords');
 
 /** Bootstrap password for mdemoss when no env secret is configured. */
 const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
@@ -198,7 +198,7 @@ function seedAccountIfMissing(db, spec) {
   if (existing) {
     const storedEmail = String(existing.email || '').trim();
     const storedHash = String(existing.password_hash || '').trim();
-    const hashMissing = !storedHash || !storedHash.startsWith('scrypt:');
+    const hashMissing = !looksLikePasswordHash(storedHash);
 
     // Backfill empty email / missing hash only — never clobber a real password
     // unless this baseline account opts into syncBaselinePassword (jdemoss).
@@ -444,6 +444,7 @@ function authenticate(identifier, password) {
   }
 
   const row = findUserRow(key);
+  console.log('[LOGIN CHECK]', { inputUsername: key, userFound: !!row });
   if (!row) {
     console.log('[AUTH FAIL]', key, 'user not found');
     return null;
@@ -467,7 +468,7 @@ function authenticate(identifier, password) {
 
   if (acceptBaseline) {
     try {
-      if (!verifyPassword(password, row.password_hash)) {
+      if (!verifyPassword(password, row.password_hash) || needsRehash(row.password_hash)) {
         const db = openDb();
         db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
           hashPassword(password),
@@ -484,8 +485,23 @@ function authenticate(identifier, password) {
   }
 
   if (!verifyPassword(password, row.password_hash)) {
+    console.log('[LOGIN FAIL] Password mismatch for:', key);
     console.log('[AUTH FAIL]', key, 'password mismatch');
     return null;
+  }
+
+  if (needsRehash(row.password_hash)) {
+    try {
+      const db = openDb();
+      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
+        hashPassword(password),
+        row.id,
+      );
+      persistVault(db);
+      console.log(`[auth-db] upgraded ${row.username} hash to bcrypt`);
+    } catch (err) {
+      console.warn('[auth-db] bcrypt upgrade skipped:', err.message || err);
+    }
   }
 
   console.log('[AUTH OK]', row.username, 'hash verified');

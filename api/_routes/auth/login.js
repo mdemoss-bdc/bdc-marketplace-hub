@@ -1,6 +1,6 @@
 /**
  * POST /api/auth/login
- * Dynamic credential check against the persistent users table → JWT session.
+ * Case-insensitive username/email + bcrypt (with legacy hash verify) → JWT.
  */
 const { authenticate } = require('../../_lib/users');
 const { signJwt, setAuthCookie } = require('../../_lib/jwt');
@@ -55,9 +55,13 @@ module.exports = async function handler(req, res) {
   }
 
   const body = parseBody(req);
-  // Case-insensitive lookup — authenticate() also lowercases + maps aliases (jdmoss→jdemoss).
   const username = String(body.username || body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
+
+  console.log('[LOGIN CHECK]', {
+    inputUsername: username,
+    hasPassword: Boolean(password),
+  });
 
   if (!username || !password) {
     console.log('[AUTH FAIL]', username || '(empty)', 'missing username or password');
@@ -67,8 +71,8 @@ module.exports = async function handler(req, res) {
   }
 
   const user = await authenticate(username, password);
+  console.log('[LOGIN CHECK]', { inputUsername: username, userFound: !!user });
   if (!user) {
-    // authenticate() already logs [AUTH FAIL] with a specific reason
     recordLoginFailure(ip);
     res.status(401).json({ error: 'Invalid credentials' });
     return;
@@ -84,6 +88,7 @@ module.exports = async function handler(req, res) {
     });
     setAuthCookie(res, token);
     clearLoginFailures(ip);
+    console.log('[AUTH OK]', user.username, 'login session issued');
     res.status(200).json({
       success: true,
       ...user,
