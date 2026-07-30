@@ -2,13 +2,13 @@
  * POST /api/inventory/parse | /api/inventory/sanitize
  * Also aliases under /api/marketplace/parse for the Hub.
  */
-const { applySecurityHeaders } = require('../_lib/security');
-const { parseBody } = require('../_lib/http');
+const { applySecurityHeaders } = require('../../_lib/security');
+const { parseBody } = require('../../_lib/http');
 const {
   parseInventoryText,
   sanitizeInventoryList,
   sanitizeVehicleRecord,
-} = require('../_lib/inventoryParser');
+} = require('../../_lib/inventoryParser');
 
 module.exports = async function handler(req, res) {
   applySecurityHeaders(res);

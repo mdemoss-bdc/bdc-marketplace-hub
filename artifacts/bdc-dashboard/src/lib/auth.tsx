@@ -57,14 +57,19 @@ const CLIENT_TOKEN_PREFIX = 'client-fallback:';
 const VERCEL_SESSION_PREFIX = 'vs_';
 
 /** Optional absolute API origin for production (e.g. https://api.example.com). */
-const VITE_API_URL = String(import.meta.env.VITE_API_URL ?? '')
+const VITE_API_URL = String(
+  import.meta.env.VITE_API_BASE_URL ??
+    import.meta.env.VITE_API_URL ??
+    import.meta.env.NEXT_PUBLIC_API_URL ??
+    '',
+)
   .trim()
   .replace(/\/$/, '');
 
 /**
- * Local Vite proxies `/api` → the Python engine.
- * On Vercel, same-origin `/api/auth/*` hits serverless functions that read
- * server-only env vars (DASHBOARD_PASSWORD / TESTER_PASSWORD) — never VITE_*.
+ * Local Vite proxies `/api` → the Python engine (or Node catch-all).
+ * On Vercel, same-origin `/api/auth/*` is rewritten to `api/index.js`.
+ * Set VITE_API_BASE_URL / VITE_API_URL only when the API is on another origin.
  */
 function apiUrl(path: string): string {
   const suffix = path.startsWith('/') ? path : `/${path}`;

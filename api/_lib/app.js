@@ -1,5 +1,8 @@
 /**
- * Express app shared by the Vercel catch-all function (api/[[...path]].js).
+ * Express app shared by the Vercel serverless entry (api/index.js).
+ *
+ * Routes are mounted both with and without the `/api` prefix so requests still
+ * match when a rewrite strips or preserves the prefix.
  */
 const express = require('express');
 
@@ -9,30 +12,50 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 /**
- * Normalize request URL so Express routes always see /api/...
- * Optional catch-all invocations may present /auth/login instead of /api/auth/login.
+ * Restore the original /api/... path after Vercel rewrites
+ * `/api/auth/login` → `/api/index?__route=auth/login`.
  */
 app.use((req, _res, next) => {
+  try {
+    const url = new URL(req.url || '/', 'http://local');
+    const routed = url.searchParams.get('__route');
+    if (routed) {
+      url.searchParams.delete('__route');
+      const qs = url.searchParams.toString();
+      const pathPart = routed.startsWith('/') ? routed.slice(1) : routed;
+      req.url = `/api/${pathPart}${qs ? `?${qs}` : ''}`;
+    }
+  } catch {
+    /* keep req.url */
+  }
+
   const candidates = [
     req.headers['x-invoke-path'],
     req.headers['x-forwarded-uri'],
     req.headers['x-vercel-original-path'],
+    req.headers['x-matched-path'],
   ];
   for (const raw of candidates) {
     if (typeof raw !== 'string') continue;
-    if (!raw.startsWith('/api')) continue;
-    req.url = raw;
-    break;
+    if (!raw.includes('auth') && !raw.startsWith('/api')) continue;
+    if (raw.startsWith('/api/') || raw === '/api') {
+      req.url = raw;
+      break;
+    }
+    if (raw.startsWith('/auth/') || raw.startsWith('/users/') || raw.startsWith('/marketplace/')) {
+      req.url = `/api${raw}`;
+      break;
+    }
   }
 
   const current = req.url || '/';
-  if (!current.startsWith('/api')) {
+  if (!current.startsWith('/api') && current !== '/') {
     const q = current.includes('?') ? current.slice(current.indexOf('?')) : '';
     const p = current.split('?')[0] || '/';
-    if (p === '/' || p === '') {
-      req.url = '/api' + q;
-    } else {
-      req.url = '/api' + (p.startsWith('/') ? p : `/${p}`) + q;
+    if (p === '/index' || p === '/api/index') {
+      req.url = `/api${q}`;
+    } else if (p && p !== '/') {
+      req.url = `/api${p.startsWith('/') ? p : `/${p}`}${q}`;
     }
   }
   next();
@@ -52,8 +75,13 @@ function wrap(handler) {
   };
 }
 
-function mount(path, handler) {
-  app.all(path, wrap(handler));
+/** Mount the same handler on `/api/...` and bare `/...` paths. */
+function mount(apiPath, handler) {
+  const wrapped = wrap(handler);
+  app.all(apiPath, wrapped);
+  if (apiPath.startsWith('/api/')) {
+    app.all(apiPath.slice(4), wrapped); // /auth/login etc.
+  }
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -89,16 +117,17 @@ mount('/api/inventory/sanitize', require('../_routes/inventory/parse'));
 mount('/api/marketplace/parse', require('../_routes/inventory/parse'));
 mount('/api/marketplace/sanitize', require('../_routes/inventory/parse'));
 
-app.get('/api/healthz', (_req, res) => {
-  res.status(200).json({ status: 'UP', router: 'api/[[...path]]', success: true });
+app.get(['/api/healthz', '/healthz'], (_req, res) => {
+  res.status(200).json({ status: 'UP', router: 'api/index', success: true });
 });
 
-app.all('/api', (_req, res) => {
+app.all(['/api', '/api/index', '/'], (_req, res) => {
   res.status(200).json({
     success: true,
     message: 'BDC Marketplace Hub API catch-all router',
     endpoints: [
       '/api/auth/login',
+      '/api/auth/register',
       '/api/auth/me',
       '/api/users/me',
       '/api/marketplace/queue',
@@ -110,9 +139,11 @@ app.all('/api', (_req, res) => {
 });
 
 app.use((req, res) => {
+  console.log('[api] 404', req.method, req.url, 'path=', req.path);
   res.status(404).json({
     success: false,
     error: `No route for ${req.method} ${req.path}`,
+    url: req.url,
   });
 });
 
