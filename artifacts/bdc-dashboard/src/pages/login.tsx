@@ -4,8 +4,6 @@ import { useAuth } from '@/lib/auth';
 import { Car, Eye, EyeOff, Loader2, ArrowLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-const QUICK_USERS = ['mdemoss', 'mdemoss1', 'jdemoss'] as const;
-
 const FIELD =
   'h-11 w-full rounded-lg border border-slate-700/70 bg-slate-950/70 px-3 text-sm text-slate-100 ' +
   'placeholder:text-slate-600 outline-none transition-colors ' +
@@ -122,7 +120,7 @@ export default function LoginPage() {
               id="login-username"
               type="text"
               autoComplete="username"
-              placeholder="mdemoss, jdemoss, mdemoss1…"
+              placeholder="Enter username"
               value={username}
               onChange={(e) => {
                 setUsername(e.target.value);
@@ -200,32 +198,6 @@ export default function LoginPage() {
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             {loading ? 'Signing in…' : 'Sign In'}
           </button>
-
-          <div className="border-t border-slate-800/80 pt-4">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-              Quick fill username
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {QUICK_USERS.map((u) => (
-                <button
-                  key={u}
-                  type="button"
-                  disabled={loading}
-                  onClick={() => {
-                    setUsername(u);
-                    setFieldErrors((f) => ({ ...f, username: undefined }));
-                  }}
-                  className="rounded-md border border-slate-700/70 bg-white/[0.03] px-2.5 py-1.5 font-mono text-[11px] text-slate-400 transition-colors hover:border-amber-300/30 hover:text-amber-200"
-                >
-                  {u}
-                </button>
-              ))}
-            </div>
-            <p className="mt-3 text-[11px] leading-relaxed text-slate-600">
-              Local session only — password must be entered; any non-empty password signs you in and routes to{' '}
-              <span className="font-mono text-slate-500">/dashboard</span>.
-            </p>
-          </div>
         </form>
       </div>
     </div>
