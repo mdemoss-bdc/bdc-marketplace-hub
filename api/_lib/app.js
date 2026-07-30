@@ -130,6 +130,20 @@ mount('/api/user/recovery-id/regenerate', require('../_routes/user/recovery-id/r
 // ── Admin ───────────────────────────────────────────────────────────────────
 mount('/api/admin/users', require('../_routes/admin/users'));
 
+// ── Inventory sync / scrape (Marketplace Hub "Sync All Inventory") ──────────
+mount('/api/sync/status', require('../_routes/sync/status'));
+mount('/api/scrape/status', require('../_routes/sync/status'));
+mount('/api/v1/sync/status', require('../_routes/sync/status'));
+mount('/api/v1/scrape/status', require('../_routes/sync/status'));
+mount('/api/scrape/cancel', require('../_routes/scrape/cancel'));
+mount('/api/sync/cancel', require('../_routes/scrape/cancel'));
+mount('/api/v1/scrape/cancel', require('../_routes/scrape/cancel'));
+mount('/api/v1/sync/cancel', require('../_routes/scrape/cancel'));
+mount('/api/sync', require('../_routes/sync'));
+mount('/api/scrape', require('../_routes/sync'));
+mount('/api/v1/sync', require('../_routes/sync'));
+mount('/api/v1/scrape', require('../_routes/sync'));
+
 // ── Marketplace publisher / inventory ───────────────────────────────────────
 mount('/api/marketplace/queue/status', require('../_routes/marketplace/queue/status'));
 mount('/api/marketplace/queue', require('../_routes/marketplace/queue'));
@@ -162,6 +176,8 @@ app.all(['/api', '/api/index', '/'], (_req, res) => {
       '/api/marketplace/inventory',
       '/api/marketplace/schedule',
       '/api/marketplace/toggle-auto',
+      '/api/sync',
+      '/api/sync/status',
       '/api/admin/users',
     ],
   });

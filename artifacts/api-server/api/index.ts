@@ -23,6 +23,7 @@ import inventoryRouter from "../src/routes/inventory";
 import authRouter from "../src/routes/auth";
 import facebookRouter from "../src/routes/facebook";
 import marketplaceRouter from "../src/routes/marketplace";
+import syncRouter from "../src/routes/sync";
 import { logger } from "../src/lib/logger";
 
 const require = createRequire(import.meta.url);
@@ -110,7 +111,11 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
       p.startsWith("/auth") ||
       p.startsWith("/inventory") ||
       p.startsWith("/health") ||
-      p.startsWith("/marketplace")
+      p.startsWith("/marketplace") ||
+      p.startsWith("/sync") ||
+      p.startsWith("/scrape") ||
+      p.startsWith("/v1/sync") ||
+      p.startsWith("/v1/scrape")
     ) {
       req.url = `/api${p}${q}`;
     }
@@ -125,12 +130,14 @@ app.use(["/api/marketplace", "/marketplace"], (_req, res, next) => {
 });
 
 app.use("/api", healthRouter);
+app.use("/api", syncRouter);
 app.use("/api", facebookRouter);
 app.use("/api", authRouter);
 app.use("/api", inventoryRouter);
 app.use("/api", marketplaceRouter);
 // Bare mounts (no /api prefix) for rewrite edge cases
 app.use(healthRouter);
+app.use(syncRouter);
 app.use(facebookRouter);
 app.use(authRouter);
 app.use(inventoryRouter);
@@ -153,6 +160,8 @@ app.get(["/api", "/"], (_req, res) => {
       "/api/auth/login",
       "/api/auth/facebook",
       "/api/auth/facebook/callback",
+      "/api/sync",
+      "/api/sync/status",
     ],
     baseline_accounts: ["mdemoss", "jdemoss", "testreviewer"],
   });
