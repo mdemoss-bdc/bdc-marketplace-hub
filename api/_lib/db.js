@@ -80,7 +80,7 @@ function envPassword(username) {
 function seedAccount(db, spec) {
   const username = spec.username.toLowerCase();
   const existing = db
-    .prepare('SELECT id, password_hash FROM users WHERE LOWER(username) = ?')
+    .prepare('SELECT id, password_hash, email FROM users WHERE LOWER(username) = ?')
     .get(username);
   const password = envPassword(username);
   if (!password && !existing) {
@@ -112,9 +112,15 @@ function seedAccount(db, spec) {
       spec.organization_id,
       spec.recovery_id,
     );
-    console.log(`[auth-db] seeded user ${username} (${spec.role})`);
+    console.log(`[auth-db] seeded user ${username} (${spec.role}, email=${spec.email})`);
     return;
   }
+
+  // Cold-start re-seed: sync password/flags, but never overwrite a profile email
+  // the user already saved (empty email may be backfilled from seed defaults).
+  const storedEmail = String(existing.email || '').trim();
+  const nextEmail = storedEmail || spec.email || '';
+
   if (hash) {
     db.prepare(
       `UPDATE users SET password_hash = ?, role = ?, email = ?, full_name = ?,
@@ -125,7 +131,7 @@ function seedAccount(db, spec) {
     ).run(
       hash,
       spec.role,
-      spec.email,
+      nextEmail,
       spec.full_name,
       spec.is_admin ? 1 : 0,
       spec.is_master_admin ? 1 : 0,
@@ -144,7 +150,7 @@ function seedAccount(db, spec) {
        WHERE LOWER(username) = ?`,
     ).run(
       spec.role,
-      spec.email,
+      nextEmail,
       spec.full_name,
       spec.is_admin ? 1 : 0,
       spec.is_master_admin ? 1 : 0,
@@ -155,12 +161,27 @@ function seedAccount(db, spec) {
       username,
     );
   }
+  if (storedEmail && storedEmail !== String(spec.email || '').trim()) {
+    console.log(
+      `[auth-db] preserved profile email for ${username}: ${storedEmail}`,
+    );
+  }
+}
+
+function adminSeedEmail() {
+  return (
+    process.env.ADMIN_EMAIL ||
+    process.env.MASTER_ADMIN_EMAIL ||
+    'support.bdcmanager@gmail.com'
+  )
+    .trim()
+    .toLowerCase();
 }
 
 /**
  * If the users table is empty (or missing bootstrap accounts), seed
  * mdemoss / testreviewer from DASHBOARD_PASSWORD / TESTER_PASSWORD.
- * Safe to call on every cold start.
+ * Safe to call on every cold start — does not clobber saved profile emails.
  */
 function ensureSeeded(db) {
   const countRow = db.prepare('SELECT COUNT(*) AS cnt FROM users').get();
@@ -172,7 +193,7 @@ function ensureSeeded(db) {
   seedAccount(db, {
     username: 'mdemoss',
     role: 'Admin',
-    email: 'mdemoss@local.dev',
+    email: adminSeedEmail(),
     full_name: 'Matthew DeMoss',
     is_admin: true,
     is_master_admin: true,

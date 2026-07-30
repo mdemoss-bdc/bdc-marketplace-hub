@@ -2122,15 +2122,19 @@ def init_db():
             print(f"[INIT] Backfilled location on {inv_backfilled} existing "
                   f"demo inventory row(s).")
 
-        # ── Master admin: force-sync credentials on every startup ─────────────
-        # Password hash, email, and admin flags are always written so the account
-        # is accessible even after a DB reset or env change.
-        # Password source (first match wins):
-        #   1. DASHBOARD_PASSWORD — Vercel / production server-side secret
-        #   2. LOGIN_PASSWORD / ADMIN_PASSWORD — local aliases
-        # Never store plaintext; only a PBKDF2 hash is written to the DB.
+        # ── Master admin: seed / sync on every startup ────────────────────────
+        # Password + admin flags may re-sync from env so the account stays
+        # reachable after DB resets. Email is set from ADMIN_EMAIL only when
+        # creating the account (or when the stored email is blank) — never
+        # overwrite a profile email the user already saved.
         _MASTER_USER  = os.environ.get('ADMIN_USER',  'mdemoss').strip().lower()
-        _MASTER_EMAIL = os.environ.get('ADMIN_EMAIL', 'support.bdcmanager@gmail.com').strip().lower()
+        _MASTER_EMAIL = (os.environ.get('ADMIN_EMAIL') or '').strip().lower()
+        if not _MASTER_EMAIL:
+            _MASTER_EMAIL = 'support.bdcmanager@gmail.com'
+            print(
+                "[INIT] ADMIN_EMAIL unset — using default "
+                f"{_MASTER_EMAIL!r} for new master-admin seed only."
+            )
         _MASTER_PASS  = (
             os.environ.get('DASHBOARD_PASSWORD')
             or os.environ.get('LOGIN_PASSWORD')
@@ -2145,7 +2149,7 @@ def init_db():
             )
 
         _ma_existing = conn.execute(
-            "SELECT id FROM users WHERE LOWER(username) = ?", (_MASTER_USER,)
+            "SELECT id, email FROM users WHERE LOWER(username) = ?", (_MASTER_USER,)
         ).fetchone()
         if not _ma_existing:
             if _ma_hash:
@@ -2165,30 +2169,58 @@ def init_db():
                         secrets.token_urlsafe(16),
                     ),
                 )
-                print(f"[INIT] Master admin {_MASTER_USER!r} created with synced credentials.")
+                print(
+                    f"[INIT] Master admin {_MASTER_USER!r} created "
+                    f"(email={_MASTER_EMAIL!r})."
+                )
             else:
                 print(f"[INIT] Master admin {_MASTER_USER!r} NOT created — set DASHBOARD_PASSWORD.")
-        elif _ma_hash:
-            conn.execute(
-                "UPDATE users SET password_hash = ?, email = ?, "
-                "is_admin = 1, subscription_status = 'active', "
-                "subscription_tier = 'pro_lifetime', email_verified = 1, "
-                "role = 'Admin' "
-                "WHERE LOWER(username) = ?",
-                (_ma_hash, _MASTER_EMAIL, _MASTER_USER),
-            )
-            print(f"[INIT] Master admin {_MASTER_USER!r} credentials force-synced (password + email + pro_lifetime).")
         else:
-            conn.execute(
-                "UPDATE users SET email = ?, "
-                "is_admin = 1, subscription_status = 'active', "
-                "subscription_tier = 'pro_lifetime', email_verified = 1, "
-                "role = 'Admin' "
-                "WHERE LOWER(username) = ?",
-                (_MASTER_EMAIL, _MASTER_USER),
-            )
-            print(f"[INIT] Master admin {_MASTER_USER!r} flags synced (password unchanged — no env secret).")
+            _ma_stored_email = str(_ma_existing['email'] or '').strip().lower()
 
+            # Preserve profile email updates across cold starts. Only backfill
+            # when the column is empty so a fresh migrate still gets ADMIN_EMAIL.
+            _ma_email_sql = ''
+            _ma_email_args: list = []
+            if not _ma_stored_email and _MASTER_EMAIL:
+                _ma_email_sql = 'email = ?, '
+                _ma_email_args = [_MASTER_EMAIL]
+                print(
+                    f"[INIT] Master admin {_MASTER_USER!r} email backfilled "
+                    f"from ADMIN_EMAIL={_MASTER_EMAIL!r}."
+                )
+            else:
+                print(
+                    f"[INIT] Master admin {_MASTER_USER!r} email preserved "
+                    f"({_ma_stored_email or '(empty)'})."
+                )
+
+            if _ma_hash:
+                conn.execute(
+                    f"UPDATE users SET password_hash = ?, {_ma_email_sql}"
+                    "is_admin = 1, subscription_status = 'active', "
+                    "subscription_tier = 'pro_lifetime', email_verified = 1, "
+                    "role = 'Admin' "
+                    "WHERE LOWER(username) = ?",
+                    [_ma_hash, *_ma_email_args, _MASTER_USER],
+                )
+                print(
+                    f"[INIT] Master admin {_MASTER_USER!r} credentials synced "
+                    "(password + flags; email not overwritten)."
+                )
+            else:
+                conn.execute(
+                    f"UPDATE users SET {_ma_email_sql}"
+                    "is_admin = 1, subscription_status = 'active', "
+                    "subscription_tier = 'pro_lifetime', email_verified = 1, "
+                    "role = 'Admin' "
+                    "WHERE LOWER(username) = ?",
+                    [*_ma_email_args, _MASTER_USER],
+                )
+                print(
+                    f"[INIT] Master admin {_MASTER_USER!r} flags synced "
+                    "(password unchanged — no env secret)."
+                )
         # ── Seed: testreviewer — Rooftop Dealership Admin demo account ───────────
         # This account is automatically re-created/force-synced on every startup so
         # it survives database resets and future schema migrations.
