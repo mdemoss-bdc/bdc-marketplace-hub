@@ -5682,10 +5682,15 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
     """Extract vehicle entries from dealer HTML using data-vin attributes
     and common dealership card class names (.srp-vehicle-card, .vehicle-card,
     .inventory-item, etc.).
+
+    Phase 2: explicitly skips <script>/<style>/<header>/<footer>/<nav> noise
+    before capturing card text for inventory_parser regex sanitization.
     """
 
     _VOID = frozenset({'area','base','br','col','embed','hr','img','input',
                        'link','meta','param','source','track','wbr'})
+    _NOISE = frozenset({'script', 'style', 'noscript', 'svg', 'iframe',
+                        'template', 'header', 'footer', 'nav', 'aside'})
     _CARD_CLASS_RE = re.compile(
         r'(?:^|[\s_-])(?:srp-vehicle-card|vehicle-card|inventory-item|'
         r'inventory-card|vehicle-listing|srp-card|listing-card)(?:$|[\s_-])',
@@ -5697,12 +5702,23 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
         super().__init__()
         self.vehicles: list[dict] = []
         self._depth = 0
+        self._skip_depth = 0
         self._cur: dict | None = None
         self._cur_depth = -1
         self._capture_text = False
         self._text_buf: list[str] = []
 
     def handle_starttag(self, tag, attrs):
+        low = (tag or '').lower()
+        if self._skip_depth:
+            if low not in self._VOID:
+                self._skip_depth += 1
+            return
+        if low in self._NOISE:
+            if low not in self._VOID:
+                self._skip_depth = 1
+            return
+
         self._depth += 1
         d = dict(attrs)
         vin = d.get('data-vin', '')
@@ -5747,26 +5763,37 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
                 ),
             }
             self._cur_depth = self._depth
-            self._capture_text = not bool(vin)
+            # Always capture card text so inventory_parser can fill gaps.
+            self._capture_text = True
             self._text_buf = []
-        if self._cur and tag == 'img':
+        if self._cur and low == 'img':
             src = d.get('src') or d.get('data-src') or d.get('data-lazy', '')
             if src and not src.startswith('data:') and not self._cur.get('image_url'):
                 self._cur['image_url'] = src
-        if tag in self._VOID:
+        if low in self._VOID:
             self._depth -= 1
 
     def handle_data(self, data):
+        if self._skip_depth:
+            return
         if self._cur and self._capture_text and data and data.strip():
             self._text_buf.append(data.strip())
 
     def handle_endtag(self, tag):
+        low = (tag or '').lower()
+        if self._skip_depth:
+            self._skip_depth = max(0, self._skip_depth - 1)
+            return
+        if low in self._NOISE or low in self._VOID:
+            return
         if self._cur and self._depth == self._cur_depth:
-            if not self._cur.get('vin') and self._text_buf:
-                blob = ' '.join(self._text_buf)
+            blob = ' '.join(self._text_buf)
+            if not self._cur.get('vin') and blob:
                 m = self._VIN_RE.search(blob)
                 if m:
                     self._cur['vin'] = m.group(1).upper()
+            if blob:
+                self._cur['raw_text'] = blob
             if self._cur.get('vin') and (self._cur.get('make') or len(self._cur['vin']) == 17):
                 self.vehicles.append(dict(self._cur))
             self._cur = None
@@ -5934,13 +5961,47 @@ def _parse_json_inventory(html_text: str, condition: str) -> list[dict]:
 
 
 def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
-    """Parse vehicle data from HTML data-vin / common card class attributes."""
+    """Parse vehicle data from HTML after DOM noise strip + card isolation.
+
+    Phase 2 pipeline:
+      1. dom_inventory.parse_inventory_html (strip script/style/header/footer/nav,
+         isolate listing cards, run inventory_parser regex sanitization)
+      2. Legacy _VehicleHTMLParser fallback (also noise-aware)
+      3. Regex card-window fallback
+    """
+    # Preferred path — full DOM strip → card isolate → regex sanitize
+    try:
+        from dom_inventory import parse_inventory_html as _dom_parse
+        dom_vehicles = _dom_parse(html_text, condition=condition)
+        if dom_vehicles:
+            vehicles = [v for v in (_normalize_scraped(r, condition) for r in dom_vehicles) if v]
+            if vehicles:
+                return vehicles
+    except Exception as _dom_exc:
+        print(f"[INVENTORY] dom_inventory parse skipped: {_dom_exc}")
+
     parser = _VehicleHTMLParser()
     try:
         parser.feed(html_text)
     except Exception:
         pass
-    vehicles = [v for v in (_normalize_scraped(r, condition) for r in parser.vehicles) if v]
+
+    try:
+        from inventory_parser import sanitize_vehicle_record as _sanitize_vehicle
+    except ImportError:
+        _sanitize_vehicle = None  # type: ignore[assignment]
+
+    raw_rows = []
+    for r in parser.vehicles:
+        raw_text = r.pop('raw_text', '') if isinstance(r, dict) else ''
+        if _sanitize_vehicle is not None:
+            try:
+                r = _sanitize_vehicle(r, raw_text)
+            except Exception:
+                pass
+        raw_rows.append(r)
+
+    vehicles = [v for v in (_normalize_scraped(r, condition) for r in raw_rows) if v]
     if vehicles:
         return vehicles
 
@@ -5956,9 +6017,15 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
     vin_re = re.compile(r'\b([A-HJ-NPR-Z0-9]{17})\b')
     results: list[dict] = []
     seen: set[str] = set()
-    for m in card_re.finditer(html_text):
+    # Strip noise before window scans so header/footer text cannot pollute fields.
+    try:
+        from dom_inventory import strip_dom_noise as _strip_noise
+        scan_html = _strip_noise(html_text)
+    except Exception:
+        scan_html = html_text
+    for m in card_re.finditer(scan_html):
         start = m.start()
-        chunk = html_text[start: start + 2500]
+        chunk = scan_html[start: start + 2500]
         vin = (m.group(1) or '').upper()
         if not vin:
             vm = vin_re.search(chunk)
@@ -5988,6 +6055,11 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
             'price': price_m.group(1) if price_m else 0,
             'image_url': img_m.group(1) if img_m else '',
         }
+        if _sanitize_vehicle is not None:
+            try:
+                raw = _sanitize_vehicle(raw, chunk)
+            except Exception:
+                pass
         norm = _normalize_scraped(raw, condition)
         if norm:
             results.append(norm)

@@ -918,8 +918,14 @@ def fetch_with_playwright(url: str, condition: str) -> list[dict]:
                             }
                             const vinRe = /\\b([A-HJ-NPR-Z0-9]{17})\\b/i;
                             return nodes.map(el => {
-                              const text = (el.innerText || el.textContent || '');
-                              const html = el.outerHTML || '';
+                              // Phase 2: strip script/style/header/footer/nav
+                              // before raw text extraction from each card.
+                              const clone = el.cloneNode(true);
+                              clone.querySelectorAll(
+                                'script,style,noscript,svg,iframe,header,footer,nav,aside'
+                              ).forEach(n => n.remove());
+                              const text = (clone.innerText || clone.textContent || '');
+                              const html = clone.outerHTML || '';
                               const vinAttr = el.getAttribute('data-vin') || '';
                               const vinMatch = vinAttr || (text.match(vinRe) || html.match(vinRe) || [])[0] || '';
                               const img = el.querySelector('img');
@@ -927,7 +933,7 @@ def fetch_with_playwright(url: str, condition: str) -> list[dict]:
                               // Text fallbacks: most SRP cards render a heading
                               // like "2025 Hyundai Santa Fe Hybrid Calligraphy"
                               // and carry no data-* attributes at all.
-                              const heading = (el.querySelector(
+                              const heading = (clone.querySelector(
                                 'h1,h2,h3,h4,[class*="title"],[class*="Title"],[class*="heading"]'
                               ) || {});
                               const headText = (heading.innerText || heading.textContent || '').trim();
@@ -957,14 +963,18 @@ def fetch_with_playwright(url: str, condition: str) -> list[dict]:
                                 link: (anchor && anchor.getAttribute('href')) || '',
                                 image: (img && (img.getAttribute('src')
                                   || img.getAttribute('data-src') || '')) || '',
-                                text: text.slice(0, 500),
+                                text: text.slice(0, 800),
                               };
                             }).filter(v => v.vin && v.vin.length === 17);
                         }"""
                     )
                     if isinstance(card_payload, list):
+                        try:
+                            from inventory_parser import sanitize_vehicle_record as _san_v
+                        except ImportError:
+                            _san_v = None  # type: ignore[assignment]
                         for row in card_payload:
-                            results.append({
+                            raw_card = {
                                 'vin':          str(row.get('vin', '')).upper(),
                                 'stock_number': _stock_safe(row.get('stock')),
                                 'year':         str(row.get('year') or ''),
@@ -984,7 +994,15 @@ def fetch_with_playwright(url: str, condition: str) -> list[dict]:
                                 'vdp_url':      _absolutise(
                                     str(row.get('link') or ''), page_origin
                                 ),
-                            })
+                            }
+                            if _san_v is not None:
+                                try:
+                                    raw_card = _san_v(
+                                        raw_card, str(row.get('text') or '')
+                                    )
+                                except Exception:
+                                    pass
+                            results.append(raw_card)
                 except Exception:
                     pass
                 if results:
@@ -996,17 +1014,26 @@ def fetch_with_playwright(url: str, condition: str) -> list[dict]:
                             deduped_cards.append(v)
                     return deduped_cards
 
-                # ── Fallback: raw VIN scan of HTML ───────────────────────
-                vins_in_html = _VIN_RE.findall(html)
+                # ── Fallback: raw VIN scan of noise-stripped HTML ────────
+                try:
+                    from dom_inventory import strip_dom_noise as _strip_noise
+                    scan_html = _strip_noise(html)
+                except Exception:
+                    scan_html = html
+                vins_in_html = _VIN_RE.findall(scan_html)
+                try:
+                    from inventory_parser import sanitize_vehicle_record as _san_fb
+                except ImportError:
+                    _san_fb = None  # type: ignore[assignment]
                 for vin in vins_in_html:
                     stock = 'N/A'
                     # Try to find a nearby stock number in a small window
-                    idx = html.find(vin)
-                    window = html[max(0, idx - 200): idx + 200]
+                    idx = scan_html.find(vin)
+                    window = scan_html[max(0, idx - 200): idx + 200]
                     sm = _STOCK_RE.search(window)
                     if sm:
                         stock = sm.group(1)
-                    results.append({
+                    raw_fb = {
                         'vin':          vin.upper(),
                         'stock_number': _stock_safe(stock),
                         'year':         '',
@@ -1020,7 +1047,13 @@ def fetch_with_playwright(url: str, condition: str) -> list[dict]:
                         'image_url':    '',
                         'location':     '',
                         'vdp_url':      '',
-                    })
+                    }
+                    if _san_fb is not None:
+                        try:
+                            raw_fb = _san_fb(raw_fb, window)
+                        except Exception:
+                            pass
+                    results.append(raw_fb)
                 # Deduplicate in case the same VIN appeared multiple times
                 seen: set[str] = set()
                 deduped = []
@@ -1259,9 +1292,22 @@ def _apply_safety_pw(vehicles: list[dict], condition: str) -> list[dict]:
     savings) are coerced through the appropriate helper so no empty string,
     text suffix, or None value can trigger an "invalid input syntax for type
     integer" crash.
+
+    Phase 2: also runs inventory_parser.sanitize_vehicle_record so regex
+    VIN / price / mileage / YMM fills land as pure integers before upsert.
     """
+    try:
+        from inventory_parser import sanitize_vehicle_record as _sanitize_vehicle
+    except ImportError:
+        _sanitize_vehicle = None  # type: ignore[assignment]
+
     out = []
     for v in vehicles:
+        if _sanitize_vehicle is not None:
+            try:
+                v = _sanitize_vehicle(v)
+            except Exception:
+                pass
         v['condition']    = condition
         v['stock_number'] = _stock_safe(v.get('stock_number'))
 

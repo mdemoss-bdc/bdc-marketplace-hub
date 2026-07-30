@@ -1,8 +1,11 @@
 """
 inventory_parser.py — Regex inventory sanitizer & parser (Python mirror).
 
-Extracts VIN / year / price / mileage / stock number from raw scraped text or
-HTML and normalizes vehicle dicts before MarketplaceDB upserts.
+Extracts VIN / year / price / mileage / stock / year-make-model from raw
+scraped text or HTML and normalizes vehicle dicts before MarketplaceDB upserts.
+
+All scraper text should pass through scrub_raw_text / sanitize_vehicle_record
+(or parse_inventory_html via dom_inventory) before persistence.
 """
 
 from __future__ import annotations
@@ -12,7 +15,8 @@ from typing import Any
 
 VIN_RE = re.compile(r"[A-HJ-NPR-Z0-9]{17}", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
-PRICE_RE = re.compile(r"\$?\b\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b")
+# Optional leading $; sanitize to pure integers (e.g. 29995).
+PRICE_RE = re.compile(r"\$?\b\d{1,3}(?:,\d{3})*\b")
 PRICE_DOLLAR_RE = re.compile(r"\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b")
 MILEAGE_RE = re.compile(r"\b(\d{1,3}(?:,\d{3})*)\s*(?:mi|miles)\b", re.IGNORECASE)
 STOCK_LABELED_RE = re.compile(
@@ -21,12 +25,33 @@ STOCK_LABELED_RE = re.compile(
 STOCK_RE = re.compile(
     r"\b(?:STK|STOCK|ID)?\s*#?\s*([A-Z0-9]{4,10})\b", re.IGNORECASE
 )
+# Year Make Model — standard keyword extraction from SRP headings.
+YMM_RE = re.compile(
+    r"\b((?:19|20)\d{2})\s+([A-Za-z][A-Za-z0-9\-]+)\s+([A-Za-z0-9][A-Za-z0-9 \-/]{1,40})"
+)
 HTML_TAG_RE = re.compile(r"<[^>]+>")
+# Strip script/style/header/nav/footer before tag scrub when HTML is passed in.
+DOM_NOISE_RE = re.compile(
+    r"<(script|style|noscript|header|footer|nav|aside)\b[^>]*>[\s\S]*?</\1>",
+    re.IGNORECASE,
+)
 WHITESPACE_RE = re.compile(r"\s+")
+
+_KNOWN_MAKES = frozenset({
+    "acura", "alfa", "aston", "audi", "bentley", "bmw", "buick", "cadillac",
+    "chevrolet", "chevy", "chrysler", "dodge", "ferrari", "fiat", "ford",
+    "genesis", "gmc", "honda", "hyundai", "infiniti", "jaguar", "jeep", "kia",
+    "lamborghini", "land", "lexus", "lincoln", "lotus", "maserati", "mazda",
+    "mclaren", "mercedes", "mercury", "mini", "mitsubishi", "nissan",
+    "porsche", "ram", "rivian", "rolls", "subaru", "suzuki", "tesla",
+    "toyota", "volkswagen", "vw", "volvo",
+})
 
 
 def scrub_raw_text(raw: str | None) -> str:
     text = str(raw or "")
+    if "<" in text and ">" in text:
+        text = DOM_NOISE_RE.sub(" ", text)
     text = HTML_TAG_RE.sub(" ", text)
     text = (
         text.replace("&nbsp;", " ")
@@ -113,11 +138,56 @@ def extract_stock_number(text: str) -> str | None:
     return candidate
 
 
+def extract_year_make_model(text: str) -> dict[str, Any]:
+    """Standard keyword extraction for Year / Make / Model from SRP text."""
+    scrubbed = scrub_raw_text(text)
+    m = YMM_RE.search(scrubbed)
+    if not m:
+        return {"year": None, "make": None, "model": None}
+    year = int(m.group(1))
+    make = m.group(2).strip()
+    model_raw = m.group(3).strip()
+    # Trim trailing price / mileage / stock noise from the model token.
+    model_raw = re.split(
+        r"\s+(?:\$|\d{1,3}(?:,\d{3})+\s*(?:mi|miles)|stock|stk|vin)\b",
+        model_raw,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" -|/")
+    make_l = make.lower()
+    # Prefer known OEM tokens; allow multi-word makes like "Land Rover".
+    if make_l == "land" and model_raw.lower().startswith("rover"):
+        parts = model_raw.split(None, 1)
+        make = "Land Rover"
+        model_raw = parts[1] if len(parts) > 1 else "Rover"
+    elif make_l == "alfa" and model_raw.lower().startswith("romeo"):
+        parts = model_raw.split(None, 1)
+        make = "Alfa Romeo"
+        model_raw = parts[1] if len(parts) > 1 else "Romeo"
+    elif make_l not in _KNOWN_MAKES and make_l not in {"mercedes-benz", "rolls-royce"}:
+        # Still accept unknown makes from YMM pattern — dealer sites vary.
+        pass
+    model = " ".join(model_raw.split()[:4]).strip()
+    from datetime import datetime
+
+    now = datetime.now().year + 2
+    if year < 1980 or year > now:
+        return {"year": None, "make": None, "model": None}
+    return {
+        "year": year,
+        "make": make.title() if make.islower() else make,
+        "model": model,
+    }
+
+
 def parse_inventory_text(raw: str) -> dict[str, Any]:
     text = scrub_raw_text(raw)
+    ymm = extract_year_make_model(text)
     return {
         "vin": extract_vin(text),
-        "year": extract_year(text),
+        "year": ymm["year"] or extract_year(text),
+        "make": ymm["make"],
+        "model": ymm["model"],
         "price": extract_price(text),
         "mileage": extract_mileage(text),
         "stock_number": extract_stock_number(text),
@@ -144,7 +214,10 @@ def sanitize_vehicle_record(
     vehicle: dict[str, Any],
     raw_text: str | None = None,
 ) -> dict[str, Any]:
-    """Fill missing VIN/year/price/mileage/stock from regex parses."""
+    """Fill missing VIN/year/make/model/price/mileage/stock from regex parses.
+
+    Price and mileage are always coerced to pure integers (e.g. 29995, 45210).
+    """
     blob = raw_text or " ".join(
         _as_str(vehicle.get(k))
         for k in (
@@ -156,6 +229,8 @@ def sanitize_vehicle_record(
             "vin",
             "stock_number",
             "year",
+            "make",
+            "model",
             "price",
             "mileage",
         )
@@ -171,6 +246,9 @@ def sanitize_vehicle_record(
     price = _as_int(vehicle.get("price")) or parsed["price"] or 0
     mileage = _as_int(vehicle.get("mileage")) or parsed["mileage"] or 0
 
+    make = _as_str(vehicle.get("make")) or _as_str(parsed.get("make"))
+    model = _as_str(vehicle.get("model")) or _as_str(parsed.get("model"))
+
     stock = _as_str(vehicle.get("stock_number")).upper()
     if not stock or (len(stock) == 17 and VIN_RE.fullmatch(stock)):
         stock = parsed["stock_number"] or stock
@@ -182,6 +260,8 @@ def sanitize_vehicle_record(
     out = dict(vehicle)
     out["vin"] = vin
     out["year"] = int(year or 0)
+    out["make"] = make
+    out["model"] = model
     out["price"] = int(price or 0)
     out["mileage"] = int(mileage or 0)
     out["stock_number"] = stock or ""
@@ -192,3 +272,17 @@ def sanitize_inventory_list(rows: list[dict[str, Any]] | None) -> list[dict[str,
     if not rows:
         return []
     return [sanitize_vehicle_record(r) for r in rows if isinstance(r, dict)]
+
+
+def parse_vehicles_from_html(
+    html_text: str,
+    *,
+    condition: str = "",
+) -> list[dict[str, Any]]:
+    """DOM strip + card isolate + regex sanitize (preferred scraper entry)."""
+    try:
+        from dom_inventory import parse_inventory_html
+    except ImportError:
+        # Minimal fallback when dom_inventory is unavailable.
+        return [sanitize_vehicle_record({}, html_text)]
+    return parse_inventory_html(html_text, condition=condition)
