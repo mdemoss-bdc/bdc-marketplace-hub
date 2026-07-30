@@ -1,8 +1,12 @@
 /**
- * GET/POST /api/auth/me
- * Validates JWT from cookie or Authorization Bearer.
+ * GET /api/admin/users
+ * Admin-only directory (profiles + mock extras). No passwords.
  */
-const { getUserByUsername } = require('../_lib/users');
+const {
+  getUserByUsername,
+  requireRole,
+  adminDirectoryUsers,
+} = require('../_lib/users');
 const { verifyJwt, getTokenFromRequest } = require('../_lib/jwt');
 const { applySecurityHeaders } = require('../_lib/security');
 
@@ -14,7 +18,7 @@ module.exports = async function handler(req, res) {
     return;
   }
 
-  if (req.method !== 'GET' && req.method !== 'POST') {
+  if (req.method !== 'GET') {
     res.status(405).json({ error: 'Method not allowed.' });
     return;
   }
@@ -27,16 +31,19 @@ module.exports = async function handler(req, res) {
   }
 
   const user = getUserByUsername(payload.sub);
-  if (!user) {
-    res.status(401).json({ error: 'Authorization required.' });
+  const effective = user
+    ? { ...user, role: user.role || payload.role }
+    : {
+        username: payload.sub,
+        role: payload.role,
+        is_admin: payload.is_admin,
+        is_master_admin: payload.is_master_admin,
+      };
+
+  if (!requireRole(effective, ['Admin'])) {
+    res.status(403).json({ error: 'Admin role required.' });
     return;
   }
 
-  // Prefer live profile; keep JWT role claims if profile missing role
-  res.status(200).json({
-    ...user,
-    role: user.role || payload.role,
-    is_admin: user.is_admin,
-    is_master_admin: user.is_master_admin,
-  });
+  res.status(200).json({ users: adminDirectoryUsers() });
 };
