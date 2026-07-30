@@ -305,6 +305,10 @@ async function openDb() {
 function rowToUser(row) {
   if (!row) return null;
   const role = String(row.role || '').trim() || (row.is_admin ? 'Admin' : 'Reviewer');
+  const fbPageId = String(row.fb_page_id || '').trim();
+  const fbToken = String(row.fb_access_token || '').trim();
+  const fbPageName = String(row.fb_page_name || '').trim();
+  const catalogId = String(row.commerce_catalog_id || '').trim();
   return {
     id: row.id,
     username: row.username,
@@ -328,7 +332,62 @@ function rowToUser(row) {
     pending_extra_seats: 0,
     full_name: row.full_name || row.username,
     recovery_id: row.recovery_id || '',
+    // Facebook / Meta — never expose raw access tokens on /auth/me
+    facebook_connected: Boolean(fbPageId && fbToken),
+    fb_page_id: fbPageId,
+    fb_page_name: fbPageName,
+    commerce_catalog_id: catalogId,
+    fb_catalog_name: String(row.fb_catalog_name || '').trim(),
+    facebook_connected_at: row.facebook_connected_at
+      ? String(row.facebook_connected_at)
+      : '',
   };
+}
+
+async function saveFacebookConnection(userId, connection) {
+  await openDb();
+  const id = Number(userId);
+  if (!id) throw new Error('userId is required.');
+  await query(
+    `UPDATE users SET
+       fb_page_id = $1,
+       fb_page_name = $2,
+       fb_access_token = $3,
+       fb_user_access_token = $4,
+       commerce_catalog_id = $5,
+       fb_catalog_name = $6,
+       facebook_connected_at = CURRENT_TIMESTAMP
+     WHERE id = $7`,
+    [
+      String(connection.fb_page_id || '').trim(),
+      String(connection.fb_page_name || '').trim(),
+      String(connection.fb_access_token || '').trim(),
+      String(connection.fb_user_access_token || '').trim(),
+      String(connection.commerce_catalog_id || '').trim(),
+      String(connection.fb_catalog_name || '').trim(),
+      id,
+    ],
+  );
+  return getUserById(id);
+}
+
+async function clearFacebookConnection(userId) {
+  await openDb();
+  const id = Number(userId);
+  if (!id) throw new Error('userId is required.');
+  await query(
+    `UPDATE users SET
+       fb_page_id = '',
+       fb_page_name = '',
+       fb_access_token = '',
+       fb_user_access_token = '',
+       commerce_catalog_id = '',
+       fb_catalog_name = '',
+       facebook_connected_at = NULL
+     WHERE id = $1`,
+    [id],
+  );
+  return getUserById(id);
 }
 
 async function findUserRow(identifier) {
@@ -647,6 +706,8 @@ module.exports = {
   updateProfile,
   regenerateRecoveryId,
   changePassword,
+  saveFacebookConnection,
+  clearFacebookConnection,
   dbPath,
   persistVault,
   databaseUrl,

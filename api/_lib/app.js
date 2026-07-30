@@ -117,6 +117,8 @@ mount('/api/auth/register', require('../_routes/auth/register'));
 mount('/api/auth/signup', require('../_routes/auth/register'));
 mount('/api/auth/change-password', require('../_routes/auth/change-password'));
 mount('/api/auth/smtp-verify', require('../_routes/auth/smtp-verify'));
+mount('/api/auth/facebook/callback', require('../_routes/auth/facebook/callback'));
+mount('/api/auth/facebook', require('../_routes/auth/facebook'));
 
 // ── Users / profile ─────────────────────────────────────────────────────────
 mount('/api/users/me', require('../_routes/users/me'));

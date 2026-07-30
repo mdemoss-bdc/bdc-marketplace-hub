@@ -190,6 +190,25 @@ async function ensureCoreSchema() {
         ON users (LOWER(email))
     `);
 
+    // Facebook / Meta OAuth fields (idempotent for existing Neon schemas)
+    const fbAlters = [
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS fb_page_id TEXT DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS fb_page_name TEXT DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS fb_access_token TEXT DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS fb_user_access_token TEXT DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS commerce_catalog_id TEXT DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS fb_catalog_name TEXT DEFAULT ''",
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS catalog_token TEXT DEFAULT ''",
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS facebook_connected_at TIMESTAMPTZ DEFAULT NULL',
+    ];
+    for (const ddl of fbAlters) {
+      try {
+        await query(ddl);
+      } catch (err) {
+        console.warn('[pg] facebook alter skipped:', err.message || err);
+      }
+    }
+
     console.log('[pg] core schema ready (users, marketplace_inventory, marketplace_queue)');
   })().catch((err) => {
     _schemaReady = null;

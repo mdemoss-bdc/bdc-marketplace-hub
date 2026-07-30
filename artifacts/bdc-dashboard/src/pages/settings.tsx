@@ -169,6 +169,11 @@ export default function Settings() {
   const [reactivating, setReactivating]       = useState(false);
   const [billingActionMsg, setBillingActionMsg] = useState('');
 
+  // ── Facebook Business OAuth ────────────────────────────────────────
+  const [fbConnecting, setFbConnecting] = useState(false);
+  const [fbOAuthMsg, setFbOAuthMsg] = useState('');
+  const [fbOAuthMsgOk, setFbOAuthMsgOk] = useState(false);
+
   // ── TikTok Integration ─────────────────────────────────────────────
   const [tiktokConnecting, setTiktokConnecting] = useState(false);
   const [tiktokMsg,        setTiktokMsg]        = useState('');
@@ -274,10 +279,22 @@ export default function Settings() {
     }
   }, [authFetch, loadBillingStatus]);
 
-  // Handle TikTok OAuth callback query params on page load
+  // Handle Facebook / TikTok OAuth callback query params on page load
   useEffect(() => {
-    const params     = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(window.location.search);
+    const facebookParam = params.get('facebook');
     const tiktokParam = params.get('tiktok');
+    if (facebookParam === 'connected') {
+      setFbOAuthMsgOk(true);
+      setFbOAuthMsg('Facebook Business connected successfully!');
+      refreshUser();
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (facebookParam === 'error') {
+      const reason = params.get('reason') || 'unknown';
+      setFbOAuthMsgOk(false);
+      setFbOAuthMsg(`Facebook connection failed (${reason}). Please try again.`);
+      window.history.replaceState({}, '', window.location.pathname);
+    }
     if (tiktokParam === 'connected') {
       setTiktokMsgOk(true);
       setTiktokMsg('TikTok account connected successfully!');
@@ -290,6 +307,49 @@ export default function Settings() {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleConnectFacebook = useCallback(async () => {
+    setFbConnecting(true);
+    setFbOAuthMsg('');
+    try {
+      // Prefer JSON so we can surface config errors before leaving the page.
+      const res = await authFetch('/api/auth/facebook?format=json');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          data.message || data.error || 'Failed to start Facebook auth.',
+        );
+      }
+      if (data.auth_url) {
+        window.location.href = data.auth_url;
+        return;
+      }
+      // Fallback: full-page navigate into the redirect flow
+      window.location.href = '/api/auth/facebook';
+    } catch (err: unknown) {
+      setFbOAuthMsgOk(false);
+      setFbOAuthMsg(err instanceof Error ? err.message : 'Connection failed.');
+      setFbConnecting(false);
+    }
+  }, [authFetch]);
+
+  const handleDisconnectFacebook = useCallback(async () => {
+    setFbConnecting(true);
+    setFbOAuthMsg('');
+    try {
+      const res = await authFetch('/api/auth/facebook', { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Disconnect failed.');
+      setFbOAuthMsgOk(true);
+      setFbOAuthMsg('Facebook Business disconnected.');
+      refreshUser();
+    } catch (err: unknown) {
+      setFbOAuthMsgOk(false);
+      setFbOAuthMsg(err instanceof Error ? err.message : 'Disconnect failed.');
+    } finally {
+      setFbConnecting(false);
+    }
+  }, [authFetch, refreshUser]);
 
   const handleConnectTikTok = useCallback(async () => {
     setTiktokConnecting(true);
@@ -578,8 +638,8 @@ export default function Settings() {
             Facebook / Meta Integration
           </CardTitle>
           <CardDescription>
-            Automotive catalog feed for Meta Commerce Manager, your Facebook Page ID,
-            and API access token for posting and catalog management.
+            Connect Facebook Business via Meta OAuth, or paste credentials manually.
+            Powers Marketplace posting and the automotive catalog feed.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -588,6 +648,85 @@ export default function Settings() {
               <Loader2 className="w-4 h-4 animate-spin" />Loading…
             </div>
           ) : (
+            <div className="space-y-6">
+              {/* Connect Facebook Business (OAuth) */}
+              <div className="space-y-3">
+                <SectionLabel>Connect Facebook Business</SectionLabel>
+                {fbOAuthMsg && (
+                  <StatusBanner ok={fbOAuthMsgOk} message={fbOAuthMsg} />
+                )}
+                {user?.facebook_connected || user?.fb_page_id ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3 rounded-lg border bg-muted/30 px-4 py-3">
+                      <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center flex-shrink-0">
+                        <Link2 className="w-4 h-4 text-blue-500" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium">
+                          {user?.fb_page_name
+                            ? `Connected as ${user.fb_page_name}`
+                            : user?.fb_page_id
+                              ? `Connected as Page ${user.fb_page_id}`
+                              : 'Connected'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {user?.commerce_catalog_id
+                            ? `Catalog ${user.fb_catalog_name || user.commerce_catalog_id}`
+                            : 'Page access token stored for posting & catalog management.'}
+                        </p>
+                      </div>
+                      <Badge className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-0 text-xs">
+                        ✓ Connected
+                      </Badge>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={handleConnectFacebook}
+                        disabled={fbConnecting}
+                        className="gap-2"
+                      >
+                        {fbConnecting
+                          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Redirecting…</>
+                          : <><RefreshCw className="w-3.5 h-3.5" /> Reconnect Facebook</>}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={handleDisconnectFacebook}
+                        disabled={fbConnecting}
+                        className="gap-2 text-destructive border-destructive/30 hover:bg-destructive/5"
+                      >
+                        {fbConnecting
+                          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Working…</>
+                          : <><XCircle className="w-3.5 h-3.5" /> Disconnect</>}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <p className="text-sm text-muted-foreground leading-relaxed">
+                      Status: <span className="font-medium text-foreground">Not Connected</span>
+                      {' — '}authorize Meta to link your Facebook Page and Commerce Catalog.
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleConnectFacebook}
+                      disabled={fbConnecting}
+                      className="gap-2 bg-[#1877F2] hover:bg-[#166FE5] text-white border-0"
+                    >
+                      {fbConnecting
+                        ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Redirecting…</>
+                        : <><Link2 className="w-3.5 h-3.5" /> Connect Facebook</>}
+                    </Button>
+                  </div>
+                )}
+              </div>
+
             <form onSubmit={handleSaveFacebook} className="space-y-5">
 
               {/* Catalog Feed */}
@@ -671,6 +810,7 @@ export default function Settings() {
                   : 'Save Facebook Settings'}
               </Button>
             </form>
+            </div>
           )}
         </CardContent>
       </Card>

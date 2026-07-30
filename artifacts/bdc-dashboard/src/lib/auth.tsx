@@ -32,6 +32,12 @@ export interface User {
   tiktok_token_expires_at: string;
   tiktok_privacy_level: string;
   pending_extra_seats: number;
+  /** Meta / Facebook Business Page connection (OAuth). */
+  facebook_connected: boolean;
+  fb_page_id: string;
+  fb_page_name: string;
+  commerce_catalog_id: string;
+  fb_catalog_name: string;
   /** Display name for the account switcher / header. */
   name: string;
   /** Short role label: admin | rep | manager */
@@ -140,6 +146,11 @@ function mapApiUser(raw: Record<string, unknown>): User {
     tiktok_token_expires_at: String(raw.tiktok_token_expires_at ?? ''),
     tiktok_privacy_level: String(raw.tiktok_privacy_level ?? 'SELF_ONLY'),
     pending_extra_seats: Number(raw.pending_extra_seats) || 0,
+    facebook_connected: Boolean(raw.facebook_connected),
+    fb_page_id: String(raw.fb_page_id ?? ''),
+    fb_page_name: String(raw.fb_page_name ?? ''),
+    commerce_catalog_id: String(raw.commerce_catalog_id ?? ''),
+    fb_catalog_name: String(raw.fb_catalog_name ?? ''),
   };
 }
 
@@ -210,6 +221,11 @@ function buildUser(partial: {
     tiktok_token_expires_at: '',
     tiktok_privacy_level: 'SELF_ONLY',
     pending_extra_seats: 0,
+    facebook_connected: false,
+    fb_page_id: '',
+    fb_page_name: '',
+    commerce_catalog_id: '',
+    fb_catalog_name: '',
   };
 }
 

@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import healthRouter from "../src/routes/health";
 import inventoryRouter from "../src/routes/inventory";
 import authRouter from "../src/routes/auth";
+import facebookRouter from "../src/routes/facebook";
 import marketplaceRouter from "../src/routes/marketplace";
 import { logger } from "../src/lib/logger";
 
@@ -124,11 +125,13 @@ app.use(["/api/marketplace", "/marketplace"], (_req, res, next) => {
 });
 
 app.use("/api", healthRouter);
+app.use("/api", facebookRouter);
 app.use("/api", authRouter);
 app.use("/api", inventoryRouter);
 app.use("/api", marketplaceRouter);
 // Bare mounts (no /api prefix) for rewrite edge cases
 app.use(healthRouter);
+app.use(facebookRouter);
 app.use(authRouter);
 app.use(inventoryRouter);
 app.use(marketplaceRouter);
@@ -148,6 +151,8 @@ app.get(["/api", "/"], (_req, res) => {
       "/api/marketplace/toggle-auto",
       "/api/inventory/parse",
       "/api/auth/login",
+      "/api/auth/facebook",
+      "/api/auth/facebook/callback",
     ],
     baseline_accounts: ["mdemoss", "jdemoss", "testreviewer"],
   });

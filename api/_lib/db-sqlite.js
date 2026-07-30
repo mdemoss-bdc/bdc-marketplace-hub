@@ -78,6 +78,14 @@ function openDb() {
     'ALTER TABLE users ADD COLUMN email_revert_token TEXT DEFAULT NULL',
     'ALTER TABLE users ADD COLUMN email_revert_expires_at TEXT DEFAULT NULL',
     "ALTER TABLE users ADD COLUMN old_email_history TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN fb_page_id TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN fb_page_name TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN fb_access_token TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN fb_user_access_token TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN commerce_catalog_id TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN fb_catalog_name TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN catalog_token TEXT DEFAULT ''",
+    'ALTER TABLE users ADD COLUMN facebook_connected_at TEXT DEFAULT NULL',
   ]) {
     try {
       _db.exec(ddl);
@@ -380,6 +388,8 @@ function restoreVault(db) {
 function rowToUser(row) {
   if (!row) return null;
   const role = String(row.role || '').trim() || (row.is_admin ? 'Admin' : 'Reviewer');
+  const fbPageId = String(row.fb_page_id || '').trim();
+  const fbToken = String(row.fb_access_token || '').trim();
   return {
     id: row.id,
     username: row.username,
@@ -403,7 +413,61 @@ function rowToUser(row) {
     pending_extra_seats: 0,
     full_name: row.full_name || row.username,
     recovery_id: row.recovery_id || '',
+    facebook_connected: Boolean(fbPageId && fbToken),
+    fb_page_id: fbPageId,
+    fb_page_name: String(row.fb_page_name || '').trim(),
+    commerce_catalog_id: String(row.commerce_catalog_id || '').trim(),
+    fb_catalog_name: String(row.fb_catalog_name || '').trim(),
+    facebook_connected_at: row.facebook_connected_at
+      ? String(row.facebook_connected_at)
+      : '',
   };
+}
+
+function saveFacebookConnection(userId, connection) {
+  const db = openDb();
+  const id = Number(userId);
+  if (!id) throw new Error('userId is required.');
+  db.prepare(
+    `UPDATE users SET
+       fb_page_id = ?,
+       fb_page_name = ?,
+       fb_access_token = ?,
+       fb_user_access_token = ?,
+       commerce_catalog_id = ?,
+       fb_catalog_name = ?,
+       facebook_connected_at = datetime('now')
+     WHERE id = ?`,
+  ).run(
+    String(connection.fb_page_id || '').trim(),
+    String(connection.fb_page_name || '').trim(),
+    String(connection.fb_access_token || '').trim(),
+    String(connection.fb_user_access_token || '').trim(),
+    String(connection.commerce_catalog_id || '').trim(),
+    String(connection.fb_catalog_name || '').trim(),
+    id,
+  );
+  persistVault(db);
+  return getUserById(id);
+}
+
+function clearFacebookConnection(userId) {
+  const db = openDb();
+  const id = Number(userId);
+  if (!id) throw new Error('userId is required.');
+  db.prepare(
+    `UPDATE users SET
+       fb_page_id = '',
+       fb_page_name = '',
+       fb_access_token = '',
+       fb_user_access_token = '',
+       commerce_catalog_id = '',
+       fb_catalog_name = '',
+       facebook_connected_at = NULL
+     WHERE id = ?`,
+  ).run(id);
+  persistVault(db);
+  return getUserById(id);
 }
 
 function findUserRow(identifier) {
@@ -729,6 +793,8 @@ module.exports = {
   updateProfile,
   regenerateRecoveryId,
   changePassword,
+  saveFacebookConnection,
+  clearFacebookConnection,
   dbPath,
   persistVault,
 };
