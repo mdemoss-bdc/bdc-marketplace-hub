@@ -12204,10 +12204,23 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     "Admin" if user.get("is_master_admin") or user.get("is_admin")
                     else "Reviewer"
                 )
+                _phone = ""
+                try:
+                    _pc = sqlite3.connect(DB_FILE)
+                    _pc.row_factory = sqlite3.Row
+                    _pr = _pc.execute(
+                        "SELECT phone FROM users WHERE id = ?", (user["id"],)
+                    ).fetchone()
+                    _pc.close()
+                    if _pr:
+                        _phone = _pr["phone"] or ""
+                except Exception:
+                    pass
                 self._json({
                     "id":                  user["id"],
                     "username":            user["username"],
                     "email":               user.get("email", ""),
+                    "phone":               _phone,
                     "salesperson_id":      user.get("salesperson_id", ""),
                     "is_admin":            bool(user.get("is_admin", False)),
                     "is_master_admin":     bool(user.get("is_master_admin", False)),
@@ -12230,6 +12243,53 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     "tiktok_token_expires_at": user.get("tiktok_token_expires_at", ""),
                     "tiktok_privacy_level":    user.get("tiktok_privacy_level", "SELF_ONLY"),
                 })
+            return
+
+        # ── Profile: current user (GET) ───────────────────────────────
+        if path == "/api/users/me":
+            user = self._require_auth()
+            if not user:
+                return
+            _role = (user.get("role") or user.get("rbac_role") or "").strip() or (
+                "Admin" if user.get("is_master_admin") or user.get("is_admin")
+                else "Reviewer"
+            )
+            _phone = ""
+            try:
+                _pc = sqlite3.connect(DB_FILE)
+                _pc.row_factory = sqlite3.Row
+                _pr = _pc.execute(
+                    "SELECT phone FROM users WHERE id = ?", (user["id"],)
+                ).fetchone()
+                _pc.close()
+                if _pr:
+                    _phone = _pr["phone"] or ""
+            except Exception:
+                pass
+            self._json({
+                "success": True,
+                "user": {
+                    "id":                  user["id"],
+                    "username":            user["username"],
+                    "email":               user.get("email", ""),
+                    "phone":               _phone,
+                    "is_admin":            bool(user.get("is_admin", False)),
+                    "is_master_admin":     bool(user.get("is_master_admin", False)),
+                    "role":                _role,
+                    "rbac_role":           _role,
+                    "subscription_status": user.get("subscription_status", "inactive"),
+                    "subscription_tier":   user.get("subscription_tier", ""),
+                    "org_role":            user.get("org_role", ""),
+                    "organization_id":     user.get("organization_id"),
+                    "email_verified":      bool(
+                        user.get("email_verified", False) or user.get("is_admin", False)
+                    ),
+                    "is_suspended":        bool(user.get("is_suspended", False)),
+                    "created_at":          user.get("created_at", ""),
+                    "recovery_id":         user.get("recovery_id", ""),
+                },
+                "phone": _phone,
+            })
             return
 
         # ── Auth: verify email via one-time token (public — no session needed) ──
@@ -15535,17 +15595,17 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             _ue_cur_pw    = payload.get("current_password", "")
 
             if not _ue_new_email or "@" not in _ue_new_email:
-                self._json({"error": "A valid new email address is required."}, 400)
+                self._json({"error": "A valid new email address is required.", "success": False}, 400)
                 return
             if not _ue_cur_pw:
-                self._json({"error": "Current password is required to confirm this change."}, 400)
+                self._json({"error": "Current password is required to confirm this change.", "success": False}, 400)
                 return
 
             # Validate format / not webmail / not disposable
             try:
                 _ue_new_email = _validate_email(_ue_new_email)
             except ValueError as _ue_exc:
-                self._json({"error": str(_ue_exc)}, 400)
+                self._json({"error": str(_ue_exc), "success": False}, 400)
                 return
 
             _ue_conn = sqlite3.connect(DB_FILE)
@@ -15557,14 +15617,14 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
 
             if not _ue_row or not _verify_password(_ue_cur_pw, _ue_row["password_hash"]):
                 _ue_conn.close()
-                self._json({"error": "Incorrect current password."}, 400)
+                self._json({"error": "Incorrect current password.", "success": False}, 400)
                 return
 
             _ue_old_email = (_ue_row["email"] or "").strip().lower()
 
             if _ue_new_email == _ue_old_email:
                 _ue_conn.close()
-                self._json({"error": "New email address is the same as your current email."}, 400)
+                self._json({"error": "New email address is the same as your current email.", "success": False}, 400)
                 return
 
             # Reject if new email is already registered to a different account
@@ -15573,7 +15633,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 (_ue_new_email, user["id"]),
             ).fetchone():
                 _ue_conn.close()
-                self._json({"error": "That email address is already registered to another account."}, 400)
+                self._json({"error": "That email address is already registered to another account.", "success": False}, 400)
                 return
 
             # Generate 48-hour emergency revocation token. Email verification is
@@ -15739,9 +15799,17 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             )
 
             print(f"[AUTH] Email updated for user id={user['id']} → {_ue_new_email!r}")
+            _ue_user_out = {
+                "id": user["id"],
+                "username": user["username"],
+                "email": _ue_new_email,
+                "email_verified": True,
+            }
             if _ue_confirm_sent:
                 self._json({
+                    "success": True,
                     "status": "ok",
+                    "user": _ue_user_out,
                     "message": (
                         "Email updated. Check both inboxes — a security alert was sent "
                         "to your previous address."
@@ -15755,8 +15823,10 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     f"id={user['id']} → {_ue_new_email!r}; DB update was committed."
                 )
                 self._json({
+                    "success": True,
                     "status": "ok",
                     "email_delivery_failed": True,
+                    "user": _ue_user_out,
                     "message": (
                         "Your email address has been updated, but the confirmation "
                         f"email could not be delivered to {_ue_new_email}. "
@@ -15764,6 +15834,149 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                         "app to request a new link."
                     ),
                 })
+            return
+
+        # ── Unified profile update (phone and/or email) ────────────────
+        if path in ("/api/users/me", "/api/users/update-profile"):
+            _has_phone = "phone" in payload
+            _has_email = bool(
+                str(payload.get("new_email") or payload.get("email") or "").strip()
+            )
+            if not _has_phone and not _has_email:
+                self._json(
+                    {"error": "Provide phone and/or email fields to update.", "success": False},
+                    400,
+                )
+                return
+
+            if _has_phone:
+                _up_phone = str(payload.get("phone") or "").strip()
+                _up_conn = sqlite3.connect(DB_FILE)
+                try:
+                    _up_conn.execute(
+                        "UPDATE users SET phone = ? WHERE id = ?",
+                        (_up_phone, user["id"]),
+                    )
+                    _up_conn.commit()
+                except Exception:
+                    try:
+                        _up_conn.rollback()
+                    except Exception:
+                        pass
+                    raise
+                finally:
+                    _up_conn.close()
+
+            _msg = "Phone number saved."
+            if _has_email:
+                # Reuse update-email logic via internal field remap
+                payload = {
+                    **payload,
+                    "new_email": str(
+                        payload.get("new_email") or payload.get("email") or ""
+                    ).strip().lower(),
+                }
+                # Fall through by recursively handling email on this request:
+                # call the same validation path by setting path temporarily.
+                _ue_new_email = payload.get("new_email", "").strip().lower()
+                _ue_cur_pw = payload.get("current_password", "")
+                if not _ue_new_email or "@" not in _ue_new_email:
+                    self._json({"error": "A valid new email address is required.", "success": False}, 400)
+                    return
+                if not _ue_cur_pw:
+                    self._json(
+                        {"error": "Current password is required to confirm this change.", "success": False},
+                        400,
+                    )
+                    return
+                try:
+                    _ue_new_email = _validate_email(_ue_new_email)
+                except ValueError as _ue_exc:
+                    self._json({"error": str(_ue_exc), "success": False}, 400)
+                    return
+                _ue_conn = sqlite3.connect(DB_FILE)
+                _ue_conn.row_factory = sqlite3.Row
+                _ue_row = _ue_conn.execute(
+                    "SELECT id, email, password_hash, phone FROM users WHERE id = ?",
+                    (user["id"],),
+                ).fetchone()
+                if not _ue_row or not _verify_password(_ue_cur_pw, _ue_row["password_hash"]):
+                    _ue_conn.close()
+                    self._json({"error": "Incorrect current password.", "success": False}, 400)
+                    return
+                _ue_old_email = (_ue_row["email"] or "").strip().lower()
+                if _ue_new_email == _ue_old_email:
+                    _ue_conn.close()
+                    self._json(
+                        {"error": "New email address is the same as your current email.", "success": False},
+                        400,
+                    )
+                    return
+                if _ue_conn.execute(
+                    "SELECT id FROM users WHERE email = ? AND email != '' AND id != ?",
+                    (_ue_new_email, user["id"]),
+                ).fetchone():
+                    _ue_conn.close()
+                    self._json(
+                        {
+                            "error": "That email address is already registered to another account.",
+                            "success": False,
+                        },
+                        400,
+                    )
+                    return
+                try:
+                    _ue_conn.execute(
+                        "UPDATE users SET email = ?, email_verified = 1, "
+                        "verification_token = NULL WHERE id = ?",
+                        (_ue_new_email, user["id"]),
+                    )
+                    _ue_conn.commit()
+                except Exception:
+                    try:
+                        _ue_conn.rollback()
+                    except Exception:
+                        pass
+                    raise
+                finally:
+                    _ue_conn.close()
+                _msg = "Email updated."
+
+            _out_conn = sqlite3.connect(DB_FILE)
+            _out_conn.row_factory = sqlite3.Row
+            _out = _out_conn.execute(
+                "SELECT id, username, email, phone, is_admin, subscription_status, "
+                "subscription_tier, org_role, organization_id, email_verified, "
+                "is_suspended, created_at, recovery_id, role FROM users WHERE id = ?",
+                (user["id"],),
+            ).fetchone()
+            _out_conn.close()
+            _role = (_out["role"] or "").strip() or (
+                "Admin" if user.get("is_master_admin") or _out["is_admin"] else "Reviewer"
+            )
+            self._json({
+                "success": True,
+                "status": "ok",
+                "message": _msg,
+                "user": {
+                    "id": _out["id"],
+                    "username": _out["username"],
+                    "email": _out["email"] or "",
+                    "phone": _out["phone"] or "",
+                    "is_admin": bool(_out["is_admin"]),
+                    "is_master_admin": bool(user.get("is_master_admin")),
+                    "role": _role,
+                    "rbac_role": _role,
+                    "subscription_status": _out["subscription_status"] or "inactive",
+                    "subscription_tier": _out["subscription_tier"] or "",
+                    "org_role": _out["org_role"] or "",
+                    "organization_id": _out["organization_id"],
+                    "email_verified": bool(_out["email_verified"]),
+                    "is_suspended": bool(_out["is_suspended"]),
+                    "created_at": _out["created_at"] or "",
+                    "recovery_id": _out["recovery_id"] or "",
+                },
+            })
             return
 
         # ── Update phone number (authenticated) ───────────────────────────
@@ -15785,7 +15998,35 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             finally:
                 _up_conn.close()
             print(f"[AUTH] Phone updated for user id={user['id']}")
-            self._json({"status": "ok"})
+            _out_conn = sqlite3.connect(DB_FILE)
+            _out_conn.row_factory = sqlite3.Row
+            _out = _out_conn.execute(
+                "SELECT id, username, email, phone, is_admin, role, "
+                "subscription_status, email_verified, recovery_id "
+                "FROM users WHERE id = ?",
+                (user["id"],),
+            ).fetchone()
+            _out_conn.close()
+            _role = (_out["role"] or "").strip() or (
+                "Admin" if user.get("is_master_admin") or _out["is_admin"] else "Reviewer"
+            )
+            self._json({
+                "success": True,
+                "status": "ok",
+                "user": {
+                    "id": _out["id"],
+                    "username": _out["username"],
+                    "email": _out["email"] or "",
+                    "phone": _out["phone"] or "",
+                    "is_admin": bool(_out["is_admin"]),
+                    "is_master_admin": bool(user.get("is_master_admin")),
+                    "role": _role,
+                    "rbac_role": _role,
+                    "subscription_status": _out["subscription_status"] or "inactive",
+                    "email_verified": bool(_out["email_verified"]),
+                    "recovery_id": _out["recovery_id"] or "",
+                },
+            })
             return
 
         # ── Regenerate own recovery ID ─────────────────────────────────────
@@ -15807,7 +16048,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             finally:
                 _rid_conn.close()
             print(f"[AUTH] Recovery ID regenerated for user id={user['id']}")
-            self._json({"status": "ok", "recovery_id": _new_rid})
+            self._json({"success": True, "status": "ok", "recovery_id": _new_rid})
             return
 
         if path in ["/api/v1/lead", "/api/v1/twilio/inbound"]:
@@ -17108,6 +17349,10 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
 # =====================================================================
 # APPLICATION ENTRY POINT
 # =====================================================================
+    def do_PUT(self):
+        """Profile updates accept PUT /api/users/me (same body as POST)."""
+        return self.do_POST()
+
     def do_PATCH(self):
         """Handle PATCH — admin user management (toggle-pro, toggle-suspend)."""
         path = self.path.split("?")[0]

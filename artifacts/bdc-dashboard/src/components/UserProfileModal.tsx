@@ -19,6 +19,42 @@ import {
 
 // ── Local helpers ────────────────────────────────────────────────────────────
 
+/** Parse JSON safely — HTML 404/500 pages must not throw Unexpected token. */
+async function readApiJson(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+    return {};
+  }
+  const looksJson =
+    ct.includes('application/json') ||
+    trimmed.startsWith('{') ||
+    trimmed.startsWith('[');
+  if (!looksJson) {
+    const snippet = trimmed.replace(/\s+/g, ' ').slice(0, 140);
+    if (res.status === 404) {
+      throw new Error('Profile update endpoint not found. Please refresh and try again.');
+    }
+    throw new Error(
+      snippet
+        ? `Server error (${res.status}): ${snippet}`
+        : `Request failed (${res.status}).`,
+    );
+  }
+  try {
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Invalid JSON from server (${res.status}).`);
+  }
+}
+
+function apiErrorMessage(data: Record<string, unknown>, fallback: string): string {
+  const err = data.error ?? data.message;
+  return typeof err === 'string' && err.trim() ? err : fallback;
+}
+
 function PasswordInput({
   id, value, onChange, placeholder = '••••••••', disabled = false,
 }: {
@@ -129,9 +165,15 @@ export function UserProfileModal({ open, onOpenChange }: UserProfileModalProps) 
   useEffect(() => {
     if (!open) return;
     setLoadingPhone(true);
-    authFetch('/api/v1/settings')
-      .then(r => r.json())
-      .then(data => setPhone(data.phone || ''))
+    authFetch('/api/users/me')
+      .then(async (r) => {
+        const data = await readApiJson(r);
+        const u = (data.user && typeof data.user === 'object')
+          ? (data.user as Record<string, unknown>)
+          : data;
+        const nextPhone = String(u.phone ?? data.phone ?? '');
+        setPhone(nextPhone);
+      })
       .catch(() => {})
       .finally(() => setLoadingPhone(false));
     // Refresh user to pull latest recovery_id from the server
@@ -158,15 +200,15 @@ export function UserProfileModal({ open, onOpenChange }: UserProfileModalProps) 
     setSavingPhone(true);
     setPhoneStatus('idle');
     try {
-      const res = await authFetch('/api/user/update-phone', {
-        method: 'POST',
+      const res = await authFetch('/api/users/me', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to save phone.');
+      const data = await readApiJson(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to save phone.'));
       setPhoneStatus('success');
-      setPhoneMsg('Phone number saved.');
+      setPhoneMsg(String(data.message || 'Phone number saved.'));
     } catch (err: unknown) {
       setPhoneStatus('error');
       setPhoneMsg(err instanceof Error ? err.message : 'Something went wrong.');
@@ -189,8 +231,8 @@ export function UserProfileModal({ open, onOpenChange }: UserProfileModalProps) 
           confirm_password: pwConfirm,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update password.');
+      const data = await readApiJson(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to update password.'));
       setPwStatus('success');
       setPwMsg('Password updated successfully.');
       setPwCurrent(''); setPwNew(''); setPwConfirm('');
@@ -207,18 +249,18 @@ export function UserProfileModal({ open, onOpenChange }: UserProfileModalProps) 
     setEmailStatus('idle');
     setEmailLoading(true);
     try {
-      const res = await authFetch('/api/user/update-email', {
-        method: 'POST',
+      const res = await authFetch('/api/users/me', {
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           new_email:        emailNew.trim().toLowerCase(),
           current_password: emailPw,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to update email.');
+      const data = await readApiJson(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to update email.'));
       setEmailStatus('success');
-      setEmailMsg(data.message || 'Email updated. Check both inboxes for confirmation.');
+      setEmailMsg(String(data.message || 'Email updated. Check both inboxes for confirmation.'));
       setEmailNew(''); setEmailPw('');
       await refreshUser();
     } catch (err: unknown) {
@@ -246,8 +288,8 @@ export function UserProfileModal({ open, onOpenChange }: UserProfileModalProps) 
     setRidRegenStatus('idle');
     try {
       const res = await authFetch('/api/user/recovery-id/regenerate', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to regenerate Recovery ID.');
+      const data = await readApiJson(res);
+      if (!res.ok) throw new Error(apiErrorMessage(data, 'Failed to regenerate Recovery ID.'));
       setRidRegenConfirm(false);
       setRidRevealed(false);
       await refreshUser(); // pull the new recovery_id into context

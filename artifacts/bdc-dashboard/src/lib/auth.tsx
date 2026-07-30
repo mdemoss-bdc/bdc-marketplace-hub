@@ -457,8 +457,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         headers.set('Authorization', `Bearer ${tok}`);
       }
       const url =
-        typeof input === 'string' && input.startsWith('/api') && VITE_API_URL
-          ? `${VITE_API_URL}${input}`
+        typeof input === 'string'
+          ? (input.startsWith('http://') || input.startsWith('https://')
+              ? input
+              : apiUrl(input))
           : input;
       return fetch(url, { ...init, headers, credentials: 'include' });
     },

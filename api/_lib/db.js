@@ -34,6 +34,7 @@ function openDb() {
       role TEXT NOT NULL DEFAULT 'Reviewer',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       email TEXT DEFAULT '',
+      phone TEXT DEFAULT '',
       full_name TEXT DEFAULT '',
       is_admin INTEGER NOT NULL DEFAULT 0,
       is_master_admin INTEGER NOT NULL DEFAULT 0,
@@ -49,6 +50,11 @@ function openDb() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower
       ON users (LOWER(username));
   `);
+  try {
+    _db.exec('ALTER TABLE users ADD COLUMN phone TEXT DEFAULT \'\'');
+  } catch {
+    /* already present */
+  }
   ensureSeeded(_db);
   return _db;
 }
@@ -229,6 +235,7 @@ function rowToUser(row) {
     email_verified: Boolean(row.email_verified),
     is_suspended: Boolean(row.is_suspended),
     created_at: row.created_at || '',
+    phone: row.phone || '',
     mock_role: row.mock_role || '',
     tiktok_connected: false,
     tiktok_token_expires_at: '',
@@ -337,6 +344,81 @@ function listUsersForAdmin() {
   }));
 }
 
+function updatePhone(userId, phone) {
+  const db = openDb();
+  db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(
+    String(phone || '').trim(),
+    userId,
+  );
+  return getUserById(userId);
+}
+
+function updateEmail(userId, newEmail, currentPassword) {
+  const db = openDb();
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!row) throw new Error('User not found.');
+  if (!currentPassword || !verifyPassword(currentPassword, row.password_hash)) {
+    throw new Error('Incorrect current password.');
+  }
+  const email = String(newEmail || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) {
+    throw new Error('A valid new email address is required.');
+  }
+  if (email === String(row.email || '').trim().toLowerCase()) {
+    throw new Error('New email address is the same as your current email.');
+  }
+  const taken = db
+    .prepare('SELECT id FROM users WHERE LOWER(email) = ? AND email != \'\' AND id != ?')
+    .get(email, userId);
+  if (taken) {
+    throw new Error('That email address is already registered to another account.');
+  }
+  db.prepare(
+    'UPDATE users SET email = ?, email_verified = 1 WHERE id = ?',
+  ).run(email, userId);
+  return getUserById(userId);
+}
+
+function updateProfile(userId, { phone, email, new_email, current_password } = {}) {
+  let user = getUserById(userId);
+  if (!user) throw new Error('User not found.');
+  if (phone !== undefined) {
+    user = updatePhone(userId, phone);
+  }
+  const nextEmail = email !== undefined ? email : new_email;
+  if (nextEmail !== undefined && nextEmail !== null && String(nextEmail).trim() !== '') {
+    user = updateEmail(userId, nextEmail, current_password);
+  }
+  return user;
+}
+
+function regenerateRecoveryId(userId) {
+  const db = openDb();
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const seg = () =>
+    Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  const rid = `REC-${seg()}-${seg()}-${seg()}`;
+  db.prepare('UPDATE users SET recovery_id = ? WHERE id = ?').run(rid, userId);
+  return getUserById(userId);
+}
+
+function changePassword(userId, currentPassword, newPassword) {
+  const db = openDb();
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!row) throw new Error('User not found.');
+  if (!verifyPassword(currentPassword, row.password_hash)) {
+    throw new Error('Current password is incorrect.');
+  }
+  if (!newPassword || String(newPassword).length < 6) {
+    throw new Error('New password must be at least 6 characters.');
+  }
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
+    hashPassword(newPassword),
+    userId,
+  );
+  return getUserById(userId);
+}
+
 module.exports = {
   openDb,
   ensureSeeded,
@@ -345,5 +427,10 @@ module.exports = {
   authenticate,
   createUser,
   listUsersForAdmin,
+  updatePhone,
+  updateEmail,
+  updateProfile,
+  regenerateRecoveryId,
+  changePassword,
   dbPath,
 };
