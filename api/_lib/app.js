@@ -60,6 +60,8 @@ function mount(path, handler) {
 mount('/api/auth/login', require('../_routes/auth/login'));
 mount('/api/auth/logout', require('../_routes/auth/logout'));
 mount('/api/auth/me', require('../_routes/auth/me'));
+mount('/api/auth/register', require('../_routes/auth/register'));
+mount('/api/auth/signup', require('../_routes/auth/register'));
 mount('/api/auth/change-password', require('../_routes/auth/change-password'));
 mount('/api/auth/smtp-verify', require('../_routes/auth/smtp-verify'));
 

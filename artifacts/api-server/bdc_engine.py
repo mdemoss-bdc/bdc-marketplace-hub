@@ -2250,101 +2250,91 @@ def init_db():
                     "(password unchanged — no env secret)."
                 )
         # ── Seed: testreviewer — Rooftop Dealership Admin demo account ───────────
-        # This account is automatically re-created/force-synced on every startup so
-        # it survives database resets and future schema migrations.
-        # Configured as a fully active Rooftop Admin for testing multi-seat
-        # management, referral links, and store-level configurations.
+        # Non-destructive: create once; never overwrite an existing password hash.
         _TR_USER  = 'testreviewer'
-        # Real Gmail+alias — verification emails land in matthewdemoss@gmail.com
-        # inbox (Gmail delivers all plus-alias mail to the base address).
-        # email_verified is intentionally kept 0 so the blue banner is live for
-        # end-to-end testing of the full resend -> click -> verify flow.
-        _TR_EMAIL = 'matthewdemoss+testreviewer@gmail.com'
-        _TR_PASS  = (os.environ.get('TESTER_PASSWORD') or '').strip()
+        _TR_EMAIL = (
+            os.environ.get('TESTER_EMAIL')
+            or 'reviewer@bdcmanager.com'
+        ).strip().lower()
+        _TR_PASS  = (
+            os.environ.get('TESTER_PASSWORD')
+            or 'TestReviewer123!'
+        ).strip()
         _tr_existing = conn.execute(
-            "SELECT id FROM users WHERE username = ?", (_TR_USER,)
+            "SELECT id, password_hash, email, organization_id FROM users WHERE username = ?",
+            (_TR_USER,),
         ).fetchone()
         if not _tr_existing:
-            if not _TR_PASS:
-                print("[INIT] 'testreviewer' NOT created — set TESTER_PASSWORD.")
-            else:
-                _tr_hash = _hash_password(_TR_PASS)
-                conn.execute(
-                    """INSERT INTO users
-                           (username, password_hash, email,
-                            subscription_status, subscription_tier,
-                            inventory_url_used, inventory_url_new,
-                            recovery_id, referral_code, email_verified, role)
-                       VALUES (?, ?, ?, 'active', 'rooftop_monthly', ?, ?, ?, ?, 0, 'Reviewer')""",
-                    (
-                        _TR_USER,
-                        _tr_hash,
-                        _TR_EMAIL,
-                        MOSES_USED_URL,
-                        MOSES_NEW_URL,
-                        secrets.token_urlsafe(16),
-                        'TESTREVIEWER',
-                    ),
-                )
-                conn.commit()
-                _tr_uid = conn.execute(
-                    "SELECT id FROM users WHERE username = ?", (_TR_USER,)
-                ).fetchone()[0]
-                for _loc_name, _loc_en in MOSES_DEFAULT_LOCATIONS:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO user_locations "
-                        "(user_id, location, enabled) VALUES (?, ?, ?)",
-                        (_tr_uid, _loc_name, 1 if _loc_en else 0),
-                    )
-                _tr_invite = secrets.token_urlsafe(12)
-                conn.execute(
-                    """INSERT INTO organizations
-                           (name, owner_user_id, seat_limit,
-                            subscription_status, subscription_tier, invite_code)
-                       VALUES (?, ?, 10, 'active', 'rooftop_monthly', ?)""",
-                    ("Testreviewer's Dealership", _tr_uid, _tr_invite),
-                )
-                conn.commit()
-                _tr_org_id = conn.execute(
-                    "SELECT id FROM organizations WHERE owner_user_id = ?", (_tr_uid,)
-                ).fetchone()[0]
-                conn.execute(
-                    "UPDATE users SET organization_id = ?, org_role = 'admin' WHERE id = ?",
-                    (_tr_org_id, _tr_uid),
-                )
-                conn.commit()
-                print(
-                    f"[INIT] Seeded 'testreviewer' (id={_tr_uid}, org={_tr_org_id}) — "
-                    "Rooftop Admin account for dealership testing."
-                )
-        else:
-            # Account exists — force-sync to Rooftop Admin on every restart so the
-            # account retains full rooftop privileges across any future restarts.
-            _tr_uid = _tr_existing[0]
-            if _TR_PASS:
-                conn.execute(
-                    "UPDATE users SET password_hash = ?, subscription_status = 'active', "
-                    "subscription_tier = 'rooftop_monthly', "
-                    "email = ?, "
-                    "org_role = 'admin', email_verified = 0, role = 'Reviewer' "
-                    "WHERE username = ?",
-                    (_hash_password(_TR_PASS), _TR_EMAIL, _TR_USER),
-                )
-            else:
-                conn.execute(
-                    "UPDATE users SET subscription_status = 'active', "
-                    "subscription_tier = 'rooftop_monthly', "
-                    "email = ?, "
-                    "org_role = 'admin', email_verified = 0, role = 'Reviewer' "
-                    "WHERE username = ?",
-                    (_TR_EMAIL, _TR_USER),
-                )
+            _tr_hash = _hash_password(_TR_PASS)
+            conn.execute(
+                """INSERT INTO users
+                       (username, password_hash, email,
+                        subscription_status, subscription_tier,
+                        inventory_url_used, inventory_url_new,
+                        recovery_id, referral_code, email_verified, role)
+                   VALUES (?, ?, ?, 'active', 'rooftop_monthly', ?, ?, ?, ?, 1, 'Reviewer')""",
+                (
+                    _TR_USER,
+                    _tr_hash,
+                    _TR_EMAIL,
+                    MOSES_USED_URL,
+                    MOSES_NEW_URL,
+                    secrets.token_urlsafe(16),
+                    'TESTREVIEWER',
+                ),
+            )
             conn.commit()
-            # Ensure the account has a rooftop organization (idempotent).
-            _tr_org_row = conn.execute(
-                "SELECT organization_id FROM users WHERE id = ?", (_tr_uid,)
-            ).fetchone()
-            if not (_tr_org_row and _tr_org_row[0]):
+            _tr_uid = conn.execute(
+                "SELECT id FROM users WHERE username = ?", (_TR_USER,)
+            ).fetchone()[0]
+            for _loc_name, _loc_en in MOSES_DEFAULT_LOCATIONS:
+                conn.execute(
+                    "INSERT OR IGNORE INTO user_locations "
+                    "(user_id, location, enabled) VALUES (?, ?, ?)",
+                    (_tr_uid, _loc_name, 1 if _loc_en else 0),
+                )
+            _tr_invite = secrets.token_urlsafe(12)
+            conn.execute(
+                """INSERT INTO organizations
+                       (name, owner_user_id, seat_limit,
+                        subscription_status, subscription_tier, invite_code)
+                   VALUES (?, ?, 10, 'active', 'rooftop_monthly', ?)""",
+                ("Testreviewer's Dealership", _tr_uid, _tr_invite),
+            )
+            conn.commit()
+            _tr_org_id = conn.execute(
+                "SELECT id FROM organizations WHERE owner_user_id = ?", (_tr_uid,)
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE users SET organization_id = ?, org_role = 'admin' WHERE id = ?",
+                (_tr_org_id, _tr_uid),
+            )
+            conn.commit()
+            print(
+                f"[INIT] Seeded 'testreviewer' (id={_tr_uid}, org={_tr_org_id}, "
+                f"email={_TR_EMAIL!r}) — password set once (non-destructive thereafter)."
+            )
+        else:
+            _tr_uid = int(_tr_existing['id'])
+            _tr_stored_email = str(_tr_existing['email'] or '').strip()
+            _tr_stored_hash = str(_tr_existing['password_hash'] or '').strip()
+            if not _tr_stored_email and _TR_EMAIL:
+                conn.execute(
+                    "UPDATE users SET email = ? WHERE id = ?",
+                    (_TR_EMAIL, _tr_uid),
+                )
+            if not _tr_stored_hash:
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE id = ?",
+                    (_hash_password(_TR_PASS), _tr_uid),
+                )
+            conn.execute(
+                "UPDATE users SET subscription_status = 'active', "
+                "subscription_tier = 'rooftop_monthly', org_role = 'admin', "
+                "role = 'Reviewer' WHERE id = ?",
+                (_tr_uid,),
+            )
+            if not _tr_existing['organization_id']:
                 _tr_invite2 = secrets.token_urlsafe(12)
                 conn.execute(
                     """INSERT INTO organizations
@@ -2358,22 +2348,13 @@ def init_db():
                     "SELECT id FROM organizations WHERE owner_user_id = ?", (_tr_uid,)
                 ).fetchone()[0]
                 conn.execute(
-                    "UPDATE users SET organization_id = ?, org_role = 'admin' "
-                    "WHERE id = ?",
+                    "UPDATE users SET organization_id = ?, org_role = 'admin' WHERE id = ?",
                     (_tr_org_id2, _tr_uid),
                 )
-                conn.commit()
-                print(
-                    f"[INIT] Provisioned rooftop org (id={_tr_org_id2}) for "
-                    "'testreviewer' — Rooftop Admin credentials force-synced."
-                )
-            else:
-                print(
-                    "[INIT] 'testreviewer' Rooftop Admin credentials "
-                    "force-synced (org already provisioned)."
-                )
-
-        # NOTE: dead legacy testreviewer create block removed — see above.
+            conn.commit()
+            print(
+                "[INIT] 'testreviewer' already exists — password preserved (non-destructive)."
+            )
 
         # ── Seed: mdemoss1 — dedicated Rooftop Admin test account ───────────────
         # Force-synced on every startup so the account survives DB resets and
@@ -2482,19 +2463,19 @@ def init_db():
                     "force-synced (org already provisioned)."
                 )
 
-        # ── Seed: Jdemoss — permanent Pro account ────────────────────────────
-        # Force-synced on every startup: password is re-hashed from plaintext so
-        # the account survives DB resets, schema migrations, and future deploys.
+        # ── Seed: Jdemoss — permanent Pro account (non-destructive) ───────────
         _JD_USER  = 'jdemoss'
-        # Real Gmail+alias — verification emails land in matthewdemoss@gmail.com
-        # inbox.  email_verified kept 0 so the blue banner is live for testing.
-        _JD_EMAIL = 'matthewdemoss+jdemoss@gmail.com'
-        _JD_PASS  = 'DeMoss123!$'
-        _jd_salt = secrets.token_hex(16)
-        _jd_key  = hashlib.pbkdf2_hmac("sha256", _JD_PASS.encode(), _jd_salt.encode(), 260_000)
-        _jd_hash = f"{_jd_salt}:{_jd_key.hex()}"
+        _JD_EMAIL = (
+            os.environ.get('JDEMOSS_EMAIL')
+            or 'jdemoss@bdcmanager.com'
+        ).strip().lower()
+        _JD_PASS  = (
+            os.environ.get('JDEMOSS_PASSWORD')
+            or 'Jdemoss123!'
+        ).strip()
         _jd_existing = conn.execute(
-            "SELECT id FROM users WHERE LOWER(username) = ?", (_JD_USER,)
+            "SELECT id, password_hash, email FROM users WHERE LOWER(username) = ?",
+            (_JD_USER,),
         ).fetchone()
         if not _jd_existing:
             conn.execute(
@@ -2502,11 +2483,11 @@ def init_db():
                        (username, password_hash, email,
                         subscription_status, subscription_tier,
                         inventory_url_used, inventory_url_new,
-                        recovery_id, referral_code, email_verified)
-                   VALUES (?, ?, ?, 'active', 'pro_monthly', ?, ?, ?, 'JDEMOSS', 0)""",
+                        recovery_id, referral_code, email_verified, role)
+                   VALUES (?, ?, ?, 'active', 'pro_annual', ?, ?, ?, 'JDEMOSS', 1, 'Reviewer')""",
                 (
                     _JD_USER,
-                    _jd_hash,
+                    _hash_password(_JD_PASS),
                     _JD_EMAIL,
                     MOSES_USED_URL,
                     MOSES_NEW_URL,
@@ -2517,27 +2498,37 @@ def init_db():
             _jd_uid = conn.execute(
                 "SELECT id FROM users WHERE LOWER(username) = ?", (_JD_USER,)
             ).fetchone()[0]
-            # Pre-seed default Moses locations so the inventory page works immediately
             for _loc_name, _loc_en in MOSES_DEFAULT_LOCATIONS:
                 conn.execute(
                     "INSERT OR IGNORE INTO user_locations "
                     "(user_id, location, enabled) VALUES (?, ?, ?)",
                     (_jd_uid, _loc_name, 1 if _loc_en else 0),
                 )
-            print(f"[INIT] Seeded 'jdemoss' (id={_jd_uid}) — active Pro account.")
-        else:
-            # Account exists — force-sync password + tier on every restart so the
-            # account stays accessible regardless of any billing or DB event.
-            # email_verified = 0 keeps the blue verification banner live for testing.
-            conn.execute(
-                "UPDATE users SET password_hash = ?, email = ?, "
-                "subscription_status = 'active', "
-                "subscription_tier = 'pro_monthly', email_verified = 0 "
-                "WHERE LOWER(username) = ?",
-                (_jd_hash, _JD_EMAIL, _JD_USER),
+            print(
+                f"[INIT] Seeded 'jdemoss' (id={_jd_uid}, email={_JD_EMAIL!r}) — "
+                "password set once (non-destructive thereafter)."
             )
-            print(f"[INIT] Pro account 'jdemoss' credentials force-synced.")
-
+        else:
+            _jd_stored_email = str(_jd_existing['email'] or '').strip()
+            _jd_stored_hash = str(_jd_existing['password_hash'] or '').strip()
+            if not _jd_stored_email and _JD_EMAIL:
+                conn.execute(
+                    "UPDATE users SET email = ? WHERE id = ?",
+                    (_JD_EMAIL, _jd_existing['id']),
+                )
+            if not _jd_stored_hash:
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE id = ?",
+                    (_hash_password(_JD_PASS), _jd_existing['id']),
+                )
+            conn.execute(
+                "UPDATE users SET subscription_status = 'active', "
+                "subscription_tier = 'pro_annual' WHERE id = ?",
+                (_jd_existing['id'],),
+            )
+            print(
+                "[INIT] 'jdemoss' already exists — password preserved (non-destructive)."
+            )
         # ── Startup seat-counter sync ─────────────────────────────────────────
         # Recalculate used_seats for every org from the actual user count so any
         # missed increment/decrement (e.g. before this column existed) self-heals.

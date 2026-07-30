@@ -1,2 +1,5 @@
 # Generated password hashes — do not commit.
 users.hashed.json
+auth.db
+auth.db-*
+auth-vault.json

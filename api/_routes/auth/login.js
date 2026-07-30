@@ -1,6 +1,6 @@
 /**
  * POST /api/auth/login
- * Rate-limited credential check → JWT session cookie + token body.
+ * Dynamic credential check against the persistent users table → JWT session.
  */
 const { authenticate } = require('../../_lib/users');
 const { signJwt, setAuthCookie } = require('../../_lib/jwt');
@@ -45,6 +45,7 @@ module.exports = async function handler(req, res) {
   const ip = clientIp(req);
   const limit = checkLoginRateLimit(ip);
   if (!limit.allowed) {
+    console.log('[AUTH FAIL]', ip, 'rate limited');
     res.setHeader('Retry-After', String(limit.retryAfterSec));
     res.status(429).json({
       error: 'Too many login attempts. Try again later.',
@@ -54,10 +55,11 @@ module.exports = async function handler(req, res) {
   }
 
   const body = parseBody(req);
-  const username = String(body.username || '').trim();
+  const username = String(body.username || body.email || '').trim();
   const password = String(body.password || '');
 
   if (!username || !password) {
+    console.log('[AUTH FAIL]', username || '(empty)', 'missing username or password');
     recordLoginFailure(ip);
     res.status(401).json({ error: 'Invalid credentials' });
     return;
@@ -65,6 +67,7 @@ module.exports = async function handler(req, res) {
 
   const user = authenticate(username, password);
   if (!user) {
+    // authenticate() already logs [AUTH FAIL] with a specific reason
     recordLoginFailure(ip);
     res.status(401).json({ error: 'Invalid credentials' });
     return;
@@ -81,11 +84,13 @@ module.exports = async function handler(req, res) {
     setAuthCookie(res, token);
     clearLoginFailures(ip);
     res.status(200).json({
+      success: true,
       ...user,
       role: user.role,
       token,
     });
   } catch (err) {
+    console.log('[AUTH FAIL]', username, err instanceof Error ? err.message : 'session signing failed');
     res.status(500).json({
       error: err instanceof Error ? err.message : 'Session signing failed.',
     });
