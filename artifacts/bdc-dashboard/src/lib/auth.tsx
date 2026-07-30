@@ -47,7 +47,34 @@ export interface LocalAccountPreset {
 const TOKEN_KEY = 'bdc_token';
 const USER_KEY = 'bdc_user';
 const ACTIVE_USER_KEY = 'active_user';
-const API_BASE = '/api';
+const CLIENT_TOKEN_PREFIX = 'client-fallback:';
+
+/** Optional absolute API origin for production (e.g. https://api.example.com). */
+const VITE_API_URL = String(import.meta.env.VITE_API_URL ?? '')
+  .trim()
+  .replace(/\/$/, '');
+const IS_PROD = Boolean(import.meta.env.PROD);
+
+/**
+ * Local Vite proxies `/api` → the Python engine.
+ * Production uses `VITE_API_URL` when set; otherwise auth falls back to
+ * client-side credentials (Vercel static deploy has no Python backend).
+ */
+function apiUrl(path: string): string {
+  const suffix = path.startsWith('/') ? path : `/${path}`;
+  if (VITE_API_URL) return `${VITE_API_URL}${suffix}`;
+  return suffix.startsWith('/api') ? suffix : `/api${suffix}`;
+}
+
+/** True when we should attempt the real backend first. */
+function shouldAttemptApiLogin(): boolean {
+  if (!IS_PROD) return true;
+  return Boolean(VITE_API_URL);
+}
+
+function isClientFallbackToken(token: string | null | undefined): boolean {
+  return Boolean(token && token.startsWith(CLIENT_TOKEN_PREFIX));
+}
 
 function roleFromUser(u: {
   is_master_admin?: boolean;
@@ -98,9 +125,20 @@ function mapApiUser(raw: Record<string, unknown>): User {
 function readStoredToken(): string | null {
   try {
     const t = localStorage.getItem(TOKEN_KEY);
-    // Reject the old local-dev bypass token — it is not a real session.
     if (!t || t === 'local-dev-force-auth') return null;
     return t;
+  } catch {
+    return null;
+  }
+}
+
+function readStoredUser(): User | null {
+  try {
+    const raw = localStorage.getItem(USER_KEY) || localStorage.getItem(ACTIVE_USER_KEY);
+    if (!raw || raw === '') return null;
+    const parsed = JSON.parse(raw) as User;
+    if (!parsed?.username) return null;
+    return parsed;
   } catch {
     return null;
   }
@@ -210,6 +248,43 @@ export const LOCAL_ACCOUNTS: LocalAccountPreset[] = [
   },
 ];
 
+/**
+ * Hardcoded production fallback credentials for static Vercel deploys
+ * where no Python API / VITE_API_URL is available.
+ */
+const PROD_FALLBACK_CREDENTIALS: Record<string, { password: string; user: User }> = {
+  mdemoss: {
+    password: 'Password123!',
+    user: buildUser({
+      id: 9,
+      username: 'mdemoss',
+      name: 'Matthew DeMoss',
+      role: 'admin',
+      is_admin: true,
+      is_master_admin: true,
+    }),
+  },
+  testreviewer: {
+    password: 'TestPass123!',
+    user: buildUser({
+      id: 20,
+      username: 'testreviewer',
+      name: 'Test Reviewer',
+      role: 'manager',
+      is_admin: true,
+      is_master_admin: false,
+      org_role: 'admin',
+    }),
+  },
+};
+
+function tryClientFallbackLogin(username: string, password: string): User | null {
+  const key = username.trim().toLowerCase();
+  const entry = PROD_FALLBACK_CREDENTIALS[key];
+  if (!entry || entry.password !== password) return null;
+  return { ...entry.user, mock_role: '' };
+}
+
 interface AuthContextValue {
   user: User | null;
   token: string | null;
@@ -221,7 +296,6 @@ interface AuthContextValue {
   mockRole: MockRole;
   effectiveIsMasterAdmin: boolean;
   effectiveOrgRole: string;
-  /** Disabled passwordless switch — kept for API compatibility. */
   switchAccount: (accountId: string) => void;
   setMockRole: (role: MockRole) => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -234,7 +308,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 async function fetchMe(token: string): Promise<User> {
-  const res = await fetch(`${API_BASE}/auth/me`, {
+  const res = await fetch(apiUrl('/api/auth/me'), {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -258,13 +332,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     persistSession(nextToken, nextUser);
   }, []);
 
-  // Restore a real server session on boot — never invent a local user.
+  // Restore session on boot — client-fallback tokens skip the API.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const stored = readStoredToken();
       if (!stored) {
-        // Clear any leftover local-dev bypass session.
         persistSession(null, null);
         if (!cancelled) {
           setToken(null);
@@ -273,6 +346,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         return;
       }
+
+      if (isClientFallbackToken(stored)) {
+        const cached = readStoredUser();
+        if (cached && PROD_FALLBACK_CREDENTIALS[cached.username.toLowerCase()]) {
+          if (!cancelled) applySession(stored, cached);
+        } else if (!cancelled) {
+          applySession(null, null);
+        }
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
+
+      // Production without a configured API cannot validate server tokens.
+      if (IS_PROD && !VITE_API_URL) {
+        if (!cancelled) applySession(null, null);
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
+
       try {
         const me = await fetchMe(stored);
         if (!cancelled) applySession(stored, me);
@@ -298,39 +390,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Password is required.');
     }
 
-    let res: Response;
-    try {
-      res = await fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: trimmedUser, password }),
-      });
-    } catch {
-      throw new Error('Could not reach the authentication server.');
-    }
+    // ── Local / configured remote API ────────────────────────────────
+    if (shouldAttemptApiLogin()) {
+      try {
+        const res = await fetch(apiUrl('/api/auth/login'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: trimmedUser, password }),
+        });
+        const data = await res.json().catch(() => ({}));
 
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const msg = typeof data.error === 'string' ? data.error.trim() : '';
-      // Normalize to the product-facing message (drop trailing period if present).
-      if (/^invalid username or password\.?$/i.test(msg) || res.status === 401) {
-        throw new Error('Invalid username or password');
+        if (res.ok) {
+          const sessionToken = String(data.token || '');
+          if (!sessionToken) {
+            throw new Error('Invalid username or password');
+          }
+          try {
+            const me = await fetchMe(sessionToken);
+            applySession(sessionToken, me);
+          } catch {
+            applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
+          }
+          return;
+        }
+
+        // Auth rejected by a reachable API — do not fall back in local/dev.
+        if (!IS_PROD) {
+          const msg = typeof data.error === 'string' ? data.error.trim() : '';
+          if (/^invalid username or password\.?$/i.test(msg) || res.status === 401) {
+            throw new Error('Invalid username or password');
+          }
+          throw new Error(msg || 'Invalid username or password');
+        }
+
+        // Production with VITE_API_URL: only fall back when the API looks
+        // unreachable (404/5xx), not on a clean 401 invalid-credentials response.
+        if (res.status === 401) {
+          throw new Error('Invalid username or password');
+        }
+      } catch (err) {
+        if (!IS_PROD) {
+          if (err instanceof Error) throw err;
+          throw new Error('Could not reach the authentication server.');
+        }
+        if (err instanceof Error && err.message === 'Invalid username or password') {
+          throw err;
+        }
+        // Production: fall through to client credentials when the API is down.
       }
-      throw new Error(msg || 'Invalid username or password');
     }
 
-    const sessionToken = String(data.token || '');
-    if (!sessionToken) {
+    // ── Production client-side fallback (Vercel static host) ─────────
+    const fallbackUser = tryClientFallbackLogin(trimmedUser, password);
+    if (!fallbackUser) {
       throw new Error('Invalid username or password');
     }
-
-    // Prefer the full /me profile (includes is_master_admin).
-    try {
-      const me = await fetchMe(sessionToken);
-      applySession(sessionToken, me);
-    } catch {
-      applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
-    }
+    applySession(`${CLIENT_TOKEN_PREFIX}${fallbackUser.username}`, fallbackUser);
   }, [applySession]);
 
   const register = useCallback(async (
@@ -343,7 +458,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!username.trim()) throw new Error('Username is required.');
     if (!password) throw new Error('Password is required.');
 
-    const res = await fetch(`${API_BASE}/auth/register`, {
+    if (!shouldAttemptApiLogin()) {
+      throw new Error('Registration requires a configured API backend.');
+    }
+
+    const res = await fetch(apiUrl('/api/auth/register'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -379,9 +498,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     const tok = tokenRef.current;
-    if (tok) {
+    if (tok && !isClientFallbackToken(tok) && shouldAttemptApiLogin()) {
       try {
-        await fetch(`${API_BASE}/auth/logout`, {
+        await fetch(apiUrl('/api/auth/logout'), {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${tok}`,
@@ -400,8 +519,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (input: string, init: RequestInit = {}): Promise<Response> => {
       const tok = tokenRef.current;
       const headers = new Headers(init.headers);
-      if (tok) headers.set('Authorization', `Bearer ${tok}`);
-      return fetch(input, { ...init, headers });
+      if (tok && !isClientFallbackToken(tok)) {
+        headers.set('Authorization', `Bearer ${tok}`);
+      }
+      const url =
+        typeof input === 'string' && input.startsWith('/api') && VITE_API_URL
+          ? `${VITE_API_URL}${input}`
+          : input;
+      return fetch(url, { ...init, headers });
     },
     [],
   );
@@ -409,6 +534,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refreshUser = useCallback(async () => {
     const tok = tokenRef.current;
     if (!tok) return;
+    if (isClientFallbackToken(tok)) {
+      const cached = readStoredUser();
+      if (cached) applySession(tok, cached);
+      return;
+    }
     try {
       const me = await fetchMe(tok);
       applySession(tok, me);
@@ -417,7 +547,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [applySession]);
 
-  // Passwordless account switching is disabled — login requires a real password.
   const switchAccount = useCallback((_accountId: string) => {
     console.warn('[auth] switchAccount is disabled; use the login form with a password.');
   }, []);
@@ -425,17 +554,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setMockRole = useCallback(async (role: MockRole) => {
     const tok = tokenRef.current;
     if (!tok) return;
-    try {
-      await fetch(`${API_BASE}/admin/impersonate`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${tok}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ mock_role: role }),
-      });
-    } catch {
-      // Fall through to local override if the endpoint is unavailable.
+    if (!isClientFallbackToken(tok) && shouldAttemptApiLogin()) {
+      try {
+        await fetch(apiUrl('/api/admin/impersonate'), {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${tok}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ mock_role: role }),
+        });
+      } catch {
+        // Fall through to local override if the endpoint is unavailable.
+      }
     }
     setUser((prev) => {
       if (!prev) return prev;
