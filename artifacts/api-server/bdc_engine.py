@@ -1856,12 +1856,32 @@ def init_db():
             "ALTER TABLE users ADD COLUMN meta_pixel_id                 TEXT DEFAULT ''",
             # Team member profile fields — full display name and job role
             "ALTER TABLE users ADD COLUMN job_title TEXT DEFAULT ''",
+            # RBAC role: Admin | Reviewer (desk-level access control)
+            "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'Reviewer'",
         ]
         for _sql in _migrations:
             try:
                 cursor.execute(_sql)
             except sqlite3.OperationalError:
                 pass  # column already present
+
+        # Backfill RBAC roles for known accounts (idempotent).
+        try:
+            cursor.execute(
+                "UPDATE users SET role = 'Admin' "
+                "WHERE LOWER(username) = ? OR is_admin = 1",
+                (os.environ.get('ADMIN_USER', 'mdemoss').strip().lower(),),
+            )
+            cursor.execute(
+                "UPDATE users SET role = 'Reviewer' "
+                "WHERE LOWER(username) IN ('testreviewer', 'jdemoss')"
+            )
+            cursor.execute(
+                "UPDATE users SET role = 'Reviewer' "
+                "WHERE COALESCE(role, '') = ''"
+            )
+        except Exception as _role_err:
+            print(f"[INIT] role backfill warning: {_role_err}")
 
         # Bypass email verification globally: every existing account (including
         # mdemoss and any unverified demo / trial users) is marked verified on
@@ -2134,8 +2154,8 @@ def init_db():
                            (username, password_hash, email,
                             is_admin, subscription_status,
                             inventory_url_used, inventory_url_new,
-                            recovery_id, referral_code, email_verified)
-                       VALUES (?, ?, ?, 1, 'active', ?, ?, ?, 'MDEMOSS', 1)""",
+                            recovery_id, referral_code, email_verified, role)
+                       VALUES (?, ?, ?, 1, 'active', ?, ?, ?, 'MDEMOSS', 1, 'Admin')""",
                     (
                         _MASTER_USER,
                         _ma_hash,
@@ -2152,7 +2172,8 @@ def init_db():
             conn.execute(
                 "UPDATE users SET password_hash = ?, email = ?, "
                 "is_admin = 1, subscription_status = 'active', "
-                "subscription_tier = 'pro_lifetime', email_verified = 1 "
+                "subscription_tier = 'pro_lifetime', email_verified = 1, "
+                "role = 'Admin' "
                 "WHERE LOWER(username) = ?",
                 (_ma_hash, _MASTER_EMAIL, _MASTER_USER),
             )
@@ -2161,7 +2182,8 @@ def init_db():
             conn.execute(
                 "UPDATE users SET email = ?, "
                 "is_admin = 1, subscription_status = 'active', "
-                "subscription_tier = 'pro_lifetime', email_verified = 1 "
+                "subscription_tier = 'pro_lifetime', email_verified = 1, "
+                "role = 'Admin' "
                 "WHERE LOWER(username) = ?",
                 (_MASTER_EMAIL, _MASTER_USER),
             )
@@ -2192,8 +2214,8 @@ def init_db():
                            (username, password_hash, email,
                             subscription_status, subscription_tier,
                             inventory_url_used, inventory_url_new,
-                            recovery_id, referral_code, email_verified)
-                       VALUES (?, ?, ?, 'active', 'rooftop_monthly', ?, ?, ?, ?, 0)""",
+                            recovery_id, referral_code, email_verified, role)
+                       VALUES (?, ?, ?, 'active', 'rooftop_monthly', ?, ?, ?, ?, 0, 'Reviewer')""",
                     (
                         _TR_USER,
                         _tr_hash,
@@ -2244,7 +2266,7 @@ def init_db():
                     "UPDATE users SET password_hash = ?, subscription_status = 'active', "
                     "subscription_tier = 'rooftop_monthly', "
                     "email = ?, "
-                    "org_role = 'admin', email_verified = 0 "
+                    "org_role = 'admin', email_verified = 0, role = 'Reviewer' "
                     "WHERE username = ?",
                     (_hash_password(_TR_PASS), _TR_EMAIL, _TR_USER),
                 )
@@ -2253,7 +2275,7 @@ def init_db():
                     "UPDATE users SET subscription_status = 'active', "
                     "subscription_tier = 'rooftop_monthly', "
                     "email = ?, "
-                    "org_role = 'admin', email_verified = 0 "
+                    "org_role = 'admin', email_verified = 0, role = 'Reviewer' "
                     "WHERE username = ?",
                     (_TR_EMAIL, _TR_USER),
                 )
@@ -3218,8 +3240,8 @@ class UserManager:
                        (username, password_hash, email,
                         inventory_url_used, inventory_url_new, visitor_id,
                         recovery_id, referral_code, referred_by,
-                        email_verified)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                        email_verified, role)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'Reviewer')""",
                 (
                     username.strip().lower(),
                     _hash_password(password),
@@ -3381,7 +3403,7 @@ class UserManager:
         cursor.execute(
             "SELECT id, username, email, password_hash, salesperson_id, is_admin, "
             "subscription_status, subscription_tier, org_role, organization_id, "
-            "is_suspended, recovery_id FROM users "
+            "is_suspended, recovery_id, role FROM users "
             "WHERE LOWER(username) = ? OR (email != '' AND LOWER(email) = ?)",
             (normalized, normalized),
         )
@@ -3434,10 +3456,9 @@ class UserManager:
         _mu = os.environ.get('ADMIN_USER', 'mdemoss').strip().lower()
         _uname = (row["username"] or "").lower()
         _is_master = bool(row["is_admin"]) and _uname == _mu
-        _role = "Admin" if _is_master or _uname == "mdemoss" else (
-            "Reviewer" if _uname in ("testreviewer", "jdemoss") else (
-                "Admin" if row["is_admin"] else "Reviewer"
-            )
+        _role = (row["role"] or "").strip() or (
+            "Admin" if _is_master or _uname == "mdemoss" or row["is_admin"]
+            else "Reviewer"
         )
         return {
             "id":                  row["id"],
@@ -3659,7 +3680,7 @@ class UserManager:
         cursor.execute(
             "SELECT id, username, email, salesperson_id, is_admin, subscription_status, "
             "subscription_tier, org_role, organization_id, email_verified, is_suspended, "
-            "created_at, recovery_id, mock_role, "
+            "created_at, recovery_id, mock_role, role, "
             "tiktok_open_id, tiktok_access_token, tiktok_token_expires_at, "
             "tiktok_trial_start_date, tiktok_daily_posts, tiktok_privacy_level, pending_extra_seats, "
             "pending_billing_cycle, active_session_id FROM users WHERE id = ?",
@@ -3709,6 +3730,10 @@ class UserManager:
         # always see the correct entitlement even across impersonation views.
         _tier = "pro_lifetime" if _is_master else (row["subscription_tier"] or "")
         _status = "active" if _is_master else (row["subscription_status"] or "inactive")
+        _role = (row["role"] or "").strip() or (
+            "Admin" if _is_master or _uname == "mdemoss" or row["is_admin"]
+            else "Reviewer"
+        )
         return {
             "id":                  row["id"],
             "username":            row["username"],
@@ -3716,6 +3741,8 @@ class UserManager:
             "salesperson_id":      row["salesperson_id"] or "",
             "is_admin":            bool(row["is_admin"]),
             "is_master_admin":     _is_master,
+            "role":                _role,
+            "rbac_role":           _role,
             "subscription_status": _status,
             "subscription_tier":   _tier,
             "org_role":            row["org_role"] or "",
@@ -12173,11 +12200,9 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/auth/me":
             user = self._require_auth()
             if user:
-                _uname = (user.get("username") or "").lower()
-                _role = "Admin" if user.get("is_master_admin") or _uname == "mdemoss" else (
-                    "Reviewer" if _uname in ("testreviewer", "jdemoss") else (
-                        "Admin" if user.get("is_admin") else "Reviewer"
-                    )
+                _role = (user.get("role") or user.get("rbac_role") or "").strip() or (
+                    "Admin" if user.get("is_master_admin") or user.get("is_admin")
+                    else "Reviewer"
                 )
                 self._json({
                     "id":                  user["id"],
@@ -12382,7 +12407,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 "SELECT u.id, u.username, u.dealer_name AS full_name, u.email, "
                 "u.subscription_status, u.subscription_tier, u.is_admin, "
                 "u.is_suspended, u.email_verified, u.created_at, u.recovery_id, "
-                "u.organization_id, u.org_role, "
+                "u.organization_id, u.org_role, u.role, "
                 "o.name AS org_name, o.seat_limit AS org_max_seats "
                 "FROM users u "
                 "LEFT JOIN organizations o ON o.id = u.organization_id "
@@ -12407,6 +12432,9 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                         "org_role":            r["org_role"] or "",
                         "org_name":            r["org_name"] or "",
                         "org_max_seats":       r["org_max_seats"] or 10,
+                        "role":                (r["role"] or "").strip() or (
+                            "Admin" if r["is_admin"] else "Reviewer"
+                        ),
                     }
                     for r in _rows
                 ]

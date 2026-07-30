@@ -57,3 +57,9 @@ venv/
 .env
 .env.*
 !.env.example
+
+# Local auth SQLite + legacy hash dumps (seeded at runtime)
+api/_data/auth.db
+api/_data/auth.db-*
+api/_data/users.hashed.json
+*.db-journal

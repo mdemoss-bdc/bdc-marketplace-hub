@@ -1,6 +1,6 @@
 /**
  * GET /api/admin/users
- * Admin-only directory (profiles + mock extras). No passwords.
+ * Admin-only directory loaded from the SQLite users table. No passwords.
  */
 const {
   getUserByUsername,

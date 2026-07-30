@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Seed api/_data/users.hashed.json from DASHBOARD_PASSWORD / TESTER_PASSWORD.
- * Reads process.env and optional project-root .env (no dotenv dependency).
+ * Seed the persistent SQLite auth DB (api/_data/auth.db) from
+ * DASHBOARD_PASSWORD / TESTER_PASSWORD / JDEMOSS_PASSWORD.
  *
  * Usage: node scripts/seed-auth-users.mjs
  */
@@ -11,12 +11,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const require = createRequire(import.meta.url);
-const { hashPassword } = require('../api/_lib/crypto-passwords.js');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
-const outDir = path.join(root, 'api', '_data');
-const outFile = path.join(outDir, 'users.hashed.json');
 
 function loadDotEnv(filePath) {
   if (!fs.existsSync(filePath)) return;
@@ -53,11 +50,9 @@ if (!dashboard && !tester && !jdemoss) {
   process.exit(1);
 }
 
-const hashes = {};
-if (dashboard) hashes.mdemoss = hashPassword(dashboard);
-if (tester) hashes.testreviewer = hashPassword(tester);
-if (jdemoss) hashes.jdemoss = hashPassword(jdemoss);
-
-fs.mkdirSync(outDir, { recursive: true });
-fs.writeFileSync(outFile, `${JSON.stringify(hashes, null, 2)}\n`, 'utf8');
-console.log(`Wrote ${Object.keys(hashes).length} hash(es) to ${outFile}`);
+const { openDb, dbPath, listUsersForAdmin } = require('../api/_lib/db.js');
+const db = openDb();
+const users = listUsersForAdmin();
+console.log(`Auth DB: ${dbPath()}`);
+console.log(`Seeded/synced ${users.length} user(s): ${users.map((u) => `${u.username}(${u.role})`).join(', ')}`);
+db.close?.();
