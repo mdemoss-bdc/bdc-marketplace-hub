@@ -2111,7 +2111,7 @@ def init_db():
         _MASTER_PASS  = (
             os.environ.get('LOGIN_PASSWORD')
             or os.environ.get('ADMIN_PASSWORD')
-            or 'BdcManager2026!'
+            or 'Netsirk115!$'
         ).strip()
         if not _MASTER_PASS:
             raise RuntimeError(
