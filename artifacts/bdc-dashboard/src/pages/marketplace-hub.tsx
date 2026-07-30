@@ -1640,9 +1640,15 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     setFilterSearch('');   setFilterPosted('');
     setSortBy('');
   };
-  const hasFilters = filterCondition || filterMake || filterModel || filterLocation || filterMinPrice
+  const hasFilters = !!(filterCondition || filterMake || filterModel || filterLocation || filterMinPrice
     || filterMaxPrice || filterMinYear || filterMaxYear || filterSearch || filterPosted
-    || sortBy;
+    || sortBy);
+
+  const filteredCount = filteredInventory.length;
+  const totalLoadedCount = inventory.length;
+  const showingCountLabel = hasFilters || filteredCount !== totalLoadedCount
+    ? `Showing ${filteredCount.toLocaleString()} of ${totalLoadedCount.toLocaleString()} vehicles`
+    : `${totalLoadedCount.toLocaleString()} total vehicle${totalLoadedCount === 1 ? '' : 's'}`;
 
   const onLocationChange = (v: string) => {
     const next = v === 'all' ? '' : v;
@@ -1953,6 +1959,21 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
         </div>
       )}
 
+      {/* Live filtered count — updates with location / search / condition filters */}
+      {!loading && (
+        <div className="flex items-center justify-between gap-3 px-0.5">
+          <span
+            className={`inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium tabular-nums ${
+              hasFilters || filteredCount !== totalLoadedCount
+                ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+                : 'border-slate-700/60 bg-slate-900/60 text-slate-300'
+            }`}
+          >
+            {showingCountLabel}
+          </span>
+        </div>
+      )}
+
       {/* Inventory table */}
       {loading ? (
         <div className="flex items-center justify-center py-24">
@@ -2235,9 +2256,8 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
             </table>
           </div>
           <div className="px-4 py-2.5 border-t border-border bg-muted/20 text-xs text-muted-foreground">
-            {sortedInventory.length} vehicle{sortedInventory.length !== 1 ? 's' : ''} · {counts.posted} in Meta feed
+            {showingCountLabel} · {counts.posted} in Meta feed
             {someSelected && ` · ${selectedVins.size} selected`}
-            {hasFilters && ' · filtered'}
           </div>
         </div>
       )}

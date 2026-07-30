@@ -5,7 +5,7 @@
   "inventory_url_new": "https://www.universityfordwv.com/searchnew.aspx",
   "inventory_locations": [
     {
-      "location_name": "University Ford - St. Albans",
+      "location_name": "University Ford",
       "inventory_url_new": "https://www.universityfordwv.com/searchnew.aspx",
       "inventory_url_used": "https://www.universityfordwv.com/searchused.aspx",
       "csv_enabled": false,
