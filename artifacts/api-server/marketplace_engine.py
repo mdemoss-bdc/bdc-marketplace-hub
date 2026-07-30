@@ -575,6 +575,244 @@ def generate_copy(vin: str, db_path: str | None = None) -> dict:
     }
 
 
+def _features_from_payload(payload: dict, vehicle: dict | None = None) -> list[str]:
+    """Collect feature bullets from free-form specs / vehicle colors."""
+    features: list[str] = []
+    raw = (
+        payload.get("features")
+        or payload.get("specs")
+        or payload.get("Specs")
+        or payload.get("feature_list")
+        or ""
+    )
+    if isinstance(raw, list):
+        features.extend(str(x).strip() for x in raw if str(x).strip())
+    elif isinstance(raw, str) and raw.strip():
+        for part in re.split(r"[\n|;,]+", raw):
+            item = part.strip(" -•\t")
+            if item:
+                features.append(item)
+
+    v = vehicle or {}
+    for label, key in (
+        ("Exterior", "exterior_color"),
+        ("Interior", "interior_color"),
+    ):
+        val = (payload.get(key) or payload.get(label) or v.get(key) or "").strip()
+        if val and not any(val.lower() in f.lower() for f in features):
+            features.append(f"{label}: {val}")
+
+    condition = (payload.get("condition") or v.get("condition") or "Used").strip()
+    if condition.lower() == "new":
+        features.insert(0, "Brand-new inventory — never titled")
+    elif not any("carfax" in f.lower() or "title" in f.lower() for f in features):
+        features.append("Clean title / CARFAX available on request")
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    out: list[str] = []
+    for f in features:
+        key = f.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+    return out[:12]
+
+
+def build_structured_description(payload: dict, db_path: str | None = None) -> dict:
+    """Facebook Marketplace-optimized copy from explicit vehicle fields.
+
+    Sections:
+      1. High-converting hook
+      2. Value snapshot (mileage, title/CARFAX, warranty cues)
+      3. Feature highlights (bullets)
+      4. Local SEO / dealership trust
+      5. Clear CTA
+    """
+    vin = str(payload.get("vin") or "").strip().upper()
+    vehicle = get_vehicle(vin, db_path) if vin else None
+
+    year = _int(payload.get("year") or payload.get("Year") or (vehicle or {}).get("year"))
+    make = str(payload.get("make") or payload.get("Make") or (vehicle or {}).get("make") or "").strip()
+    model = str(payload.get("model") or payload.get("Model") or (vehicle or {}).get("model") or "").strip()
+    trim = str(payload.get("trim") or payload.get("Trim") or (vehicle or {}).get("trim") or "").strip()
+    price = _int(payload.get("price") or payload.get("Price") or (vehicle or {}).get("price"))
+    mileage = _int(payload.get("mileage") or payload.get("Mileage") or (vehicle or {}).get("mileage"))
+    condition = str(
+        payload.get("condition") or (vehicle or {}).get("condition") or "Used"
+    ).strip() or "Used"
+    location = str(
+        payload.get("location")
+        or payload.get("city")
+        or payload.get("Location")
+        or payload.get("City")
+        or (vehicle or {}).get("location")
+        or ""
+    ).strip()
+
+    v_for_brand = dict(vehicle or {})
+    v_for_brand.update({
+        "year": year, "make": make, "model": model, "trim": trim,
+        "price": price, "mileage": mileage, "condition": condition,
+        "location": location or v_for_brand.get("location", ""),
+        "vin": vin or v_for_brand.get("vin", ""),
+        "exterior_color": payload.get("exterior_color") or v_for_brand.get("exterior_color", ""),
+        "interior_color": payload.get("interior_color") or v_for_brand.get("interior_color", ""),
+        "stock_number": payload.get("stock_number") or v_for_brand.get("stock_number", ""),
+    })
+    branding = resolve_dealer_branding(v_for_brand, db_path)
+    dealer_name = branding["dealer_name"]
+    dealer_location = location or branding["dealer_location"]
+    dealer_phone = branding["dealer_phone"]
+
+    title = " ".join(p for p in [str(year or ""), make, model, trim] if p).strip() or "Vehicle"
+    price_txt = f"${price:,}" if price > 0 else "Call for Price"
+    miles_txt = f"{mileage:,} miles" if mileage > 0 else "Low miles — ask for the odometer"
+
+    # 1) Hook
+    if condition.lower() == "new":
+        hook = f"NEW ARRIVAL — {title} ready for delivery at {price_txt}!"
+    elif price > 0 and mileage > 0 and mileage < 40000:
+        hook = f"LOW-MILE {title} — only {miles_txt} and priced at {price_txt}!"
+    else:
+        hook = f"DON'T MISS THIS {title} — {price_txt} at {dealer_name}!"
+
+    # 2) Value snapshot
+    warranty = "Factory warranty may still apply — ask our desk for remaining coverage."
+    if condition.lower() == "new":
+        warranty = "Full factory new-vehicle warranty included."
+    value_lines = [
+        f"• Mileage: {miles_txt}",
+        "• Title: Clean title / CARFAX report available",
+        f"• Warranty: {warranty}",
+        f"• Condition: {condition}",
+    ]
+    if price > 0:
+        value_lines.insert(0, f"• Asking price: {price_txt}")
+
+    # 3) Features
+    features = _features_from_payload(payload, v_for_brand)
+    if not features:
+        features = [
+            f"{condition} {make} {model}".strip(),
+            "Dealer-inspected and lot-ready",
+            "Financing available for all credit tiers",
+            "Trade-ins welcome — same-day appraisals",
+        ]
+    feature_block = "\n".join(f"• {f}" for f in features)
+
+    # 4) Local SEO / trust
+    city_hint = dealer_location or "our area"
+    trust = (
+        f"Shop local with {dealer_name} in {city_hint}. "
+        "We're a trusted dealership serving nearby shoppers looking for "
+        f"{make or 'quality'} {model or 'vehicles'} — transparent pricing, "
+        "no pressure, and a real BDC team that answers Marketplace messages fast."
+    )
+
+    # 5) CTA
+    cta = (
+        "READY TO DRIVE?\n"
+        "1. Message us on Marketplace with your name + best callback number.\n"
+        f"2. Call/text {dealer_phone} to book a test drive today.\n"
+        "3. Ask about availability, financing, or a trade appraisal — "
+        "same-day appointments available.\n\n"
+        "Serious buyers get a reply within 15 minutes during business hours."
+    )
+
+    text = "\n".join([
+        hook,
+        "",
+        "—— VALUE SNAPSHOT ——",
+        *value_lines,
+        "",
+        "—— FEATURE HIGHLIGHTS ——",
+        feature_block,
+        "",
+        "—— WHY BUY FROM US ——",
+        trust,
+        "",
+        cta,
+    ])
+
+    # Optional OpenAI polish while preserving structure cues
+    polished, source = _polish_with_openai(text, v_for_brand, branding=branding)
+
+    return {
+        "vin": vin or (vehicle or {}).get("vin", ""),
+        "title": title,
+        "ai_description": polished,
+        "description": polished,
+        "hook": hook,
+        "source": source,
+        "character_count": len(polished),
+        "dealer_name": dealer_name,
+        "dealer_location": dealer_location,
+        "sections": {
+            "hook": hook,
+            "value_snapshot": value_lines,
+            "features": features,
+            "trust": trust,
+            "cta": cta,
+        },
+    }
+
+
+def save_vehicle_ai_description(
+    vin: str,
+    description: str,
+    user_id: int | None = None,
+    db_path: str | None = None,
+) -> dict:
+    """Persist AI listing copy onto the marketplace_inventory row."""
+    vin = (vin or "").strip().upper()
+    text = (description or "").strip()
+    if not vin:
+        raise ValueError("vin is required")
+    if not text:
+        raise ValueError("description is required")
+
+    conn = _connect(db_path)
+    try:
+        # Ensure column exists (older DBs).
+        try:
+            conn.execute(
+                "ALTER TABLE marketplace_inventory ADD COLUMN ai_description TEXT DEFAULT ''"
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+        params: list[Any] = [text, vin]
+        where = "vin = ?"
+        if user_id is not None:
+            where += " AND user_id = ?"
+            params.append(int(user_id))
+        cur = conn.execute(
+            f"UPDATE marketplace_inventory SET ai_description = ? WHERE {where}",
+            params,
+        )
+        if cur.rowcount == 0:
+            # Retry without user filter if VIN exists under another local account.
+            cur = conn.execute(
+                "UPDATE marketplace_inventory SET ai_description = ? WHERE vin = ?",
+                (text, vin),
+            )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise LookupError(f"VIN {vin} not found in inventory")
+    finally:
+        conn.close()
+
+    return {
+        "status": "saved",
+        "vin": vin,
+        "ai_description": text,
+        "character_count": len(text),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Queue reads
 # ---------------------------------------------------------------------------

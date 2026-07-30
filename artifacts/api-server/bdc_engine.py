@@ -1769,6 +1769,8 @@ def init_db():
             "ALTER TABLE marketplace_inventory ADD COLUMN doc_fee INTEGER DEFAULT 0",
             "ALTER TABLE marketplace_inventory ADD COLUMN retail_price INTEGER DEFAULT 0",
             "ALTER TABLE marketplace_inventory ADD COLUMN savings INTEGER DEFAULT 0",
+            # AI-generated Marketplace listing copy (saved from Hub modal)
+            "ALTER TABLE marketplace_inventory ADD COLUMN ai_description TEXT DEFAULT ''",
             # Subscription billing-cycle tracking — used for cancellation UX
             "ALTER TABLE users ADD COLUMN subscription_period_end    TEXT    DEFAULT ''",
             "ALTER TABLE users ADD COLUMN subscription_cancel_scheduled INTEGER DEFAULT 0",
@@ -14775,6 +14777,81 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 print(f"[MARKETPLACE] generate-copy error: {exc}")
                 self._json({"error": "Copy generation failed."}, 500)
+            return
+
+        # ── AI Vehicle Description Generator (structured Marketplace copy) ─
+        if path in (
+            "/api/generate-description",
+            "/api/marketplace/generate-description",
+            "/api/v1/generate-description",
+            "/api/v1/marketplace/generate-description",
+        ):
+            try:
+                from marketplace_engine import (
+                    build_structured_description as _build_desc,
+                    generate_copy as _generate_copy,
+                )
+            except ImportError:
+                self._json({"error": "marketplace_engine not available."}, 500)
+                return
+            try:
+                # Prefer explicit field payload; fall back to VIN lookup.
+                _has_fields = any(
+                    payload.get(k)
+                    for k in ("year", "Year", "make", "Make", "model", "Model",
+                              "price", "Price", "mileage", "Mileage")
+                )
+                if _has_fields or not str(payload.get("vin") or "").strip():
+                    result = _build_desc(payload, db_path=DB_FILE)
+                else:
+                    # VIN-only → reuse generate_copy then wrap keys for the modal.
+                    _gc = _generate_copy(str(payload.get("vin")).strip(), db_path=DB_FILE)
+                    result = {
+                        **_gc,
+                        "description": _gc.get("ai_description", ""),
+                    }
+                self._json(result)
+            except LookupError as exc:
+                self._json({"error": str(exc)}, 404)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                print(f"[MARKETPLACE] generate-description error: {exc}")
+                self._json({"error": "Description generation failed."}, 500)
+            return
+
+        # ── Save AI description onto the inventory row ─────────────────────
+        if path in (
+            "/api/marketplace/save-description",
+            "/api/v1/marketplace/save-description",
+            "/api/save-description",
+        ):
+            try:
+                from marketplace_engine import save_vehicle_ai_description as _save_desc
+            except ImportError:
+                self._json({"error": "marketplace_engine not available."}, 500)
+                return
+            _sd_vin = str(payload.get("vin") or "").strip()
+            _sd_text = str(
+                payload.get("ai_description")
+                or payload.get("description")
+                or ""
+            ).strip()
+            if not _sd_vin or not _sd_text:
+                self._json({"error": "vin and description are required."}, 400)
+                return
+            _sd_uid = _local_settings_user_id(self._get_bearer_token())
+            try:
+                self._json(_save_desc(
+                    _sd_vin, _sd_text, user_id=_sd_uid, db_path=DB_FILE,
+                ))
+            except LookupError as exc:
+                self._json({"error": str(exc)}, 404)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                print(f"[MARKETPLACE] save-description error: {exc}")
+                self._json({"error": "Failed to save description."}, 500)
             return
 
         # ── Marketplace publisher: schedule / instant publish (public/local) ─

@@ -65,6 +65,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import VideoUploadDropzone from '@/components/VideoUploadDropzone';
@@ -97,6 +105,7 @@ interface Vehicle {
   status: 'ACTIVE' | 'SOLD';
   posted_status: PostedStatus;
   last_seen: string;
+  ai_description?: string;
 }
 
 interface GeneratedPost {
@@ -1225,6 +1234,17 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
   const [drawerError, setDrawerError] = useState('');
   const [drawerSource, setDrawerSource] = useState('');
   const [drawerClipDone, setDrawerClipDone] = useState(false);
+  // AI Vehicle Description Generator modal
+  const [aiDescOpen, setAiDescOpen] = useState(false);
+  const [aiDescVehicle, setAiDescVehicle] = useState<Vehicle | null>(null);
+  const [aiDescText, setAiDescText] = useState('');
+  const [aiDescTitle, setAiDescTitle] = useState('');
+  const [aiDescLoading, setAiDescLoading] = useState(false);
+  const [aiDescSaving, setAiDescSaving] = useState(false);
+  const [aiDescError, setAiDescError] = useState('');
+  const [aiDescCopied, setAiDescCopied] = useState(false);
+  const [aiDescSaved, setAiDescSaved] = useState(false);
+  const [aiDescSource, setAiDescSource] = useState('');
   // Legacy inline-expand state (kept for any cached posts; FB Post now uses the drawer)
   const [generatingVin, setGeneratingVin] = useState<string | null>(null);
   const [expandedVin, setExpandedVin] = useState<string | null>(null);
@@ -1615,6 +1635,106 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
       window.setTimeout(() => setDrawerClipDone(false), 2200);
     } catch {
       setDrawerError('Clipboard copy failed — select the text manually.');
+    }
+  };
+
+  // ── AI Vehicle Description Generator ───────────────────────────────
+  const openAiDescriptionModal = useCallback(async (vehicle: Vehicle) => {
+    setAiDescVehicle(vehicle);
+    setAiDescOpen(true);
+    setAiDescError('');
+    setAiDescCopied(false);
+    setAiDescSaved(false);
+    setAiDescSource('');
+    setAiDescTitle([vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' '));
+    setAiDescText(vehicle.ai_description?.trim() || '');
+    setAiDescLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/generate-description`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vin: vehicle.vin,
+          year: vehicle.year,
+          make: vehicle.make,
+          model: vehicle.model,
+          trim: vehicle.trim,
+          price: vehicle.price,
+          mileage: vehicle.mileage,
+          condition: vehicle.condition,
+          location: vehicle.location,
+          exterior_color: vehicle.exterior_color,
+          interior_color: vehicle.interior_color,
+          stock_number: vehicle.stock_number,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && (data.ai_description || data.description)) {
+        setAiDescText(String(data.ai_description || data.description));
+        if (data.title) setAiDescTitle(String(data.title));
+        setAiDescSource(String(data.source || ''));
+      } else {
+        setAiDescError(String(data.error || 'Description generation failed.'));
+      }
+    } catch {
+      setAiDescError('Could not reach the description engine. Try again.');
+    } finally {
+      setAiDescLoading(false);
+    }
+  }, []);
+
+  const handleAiDescClipboard = async () => {
+    if (!aiDescText.trim()) return;
+    try {
+      await navigator.clipboard.writeText(aiDescText);
+      setAiDescCopied(true);
+      toast({
+        title: 'Description Copied!',
+        description: 'Paste it into your Facebook Marketplace listing.',
+        className: 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100',
+      });
+      window.setTimeout(() => setAiDescCopied(false), 2200);
+    } catch {
+      setAiDescError('Clipboard copy failed — select the text manually.');
+    }
+  };
+
+  const handleAiDescSave = async () => {
+    if (!aiDescVehicle?.vin || !aiDescText.trim()) return;
+    setAiDescSaving(true);
+    setAiDescError('');
+    try {
+      const res = await fetch(`${API_BASE}/marketplace/save-description`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vin: aiDescVehicle.vin,
+          ai_description: aiDescText,
+          description: aiDescText,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAiDescError(String(data.error || 'Failed to save description.'));
+        return;
+      }
+      const saved = String(data.ai_description || aiDescText);
+      setAiDescText(saved);
+      setAiDescSaved(true);
+      setInventory(prev => prev.map(row =>
+        row.vin === aiDescVehicle.vin ? { ...row, ai_description: saved } : row,
+      ));
+      toast({
+        title: 'Saved to Vehicle Record',
+        description: `${aiDescTitle || aiDescVehicle.vin} description updated.`,
+        className: 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100',
+      });
+      window.setTimeout(() => setAiDescSaved(false), 2200);
+    } catch {
+      setAiDescError('Could not save — engine may be offline.');
+    } finally {
+      setAiDescSaving(false);
     }
   };
 
@@ -2229,6 +2349,18 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
                               : <Bot className="w-3 h-3" />}
                             FB Post
                           </Button>
+                          <Button
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                            onClick={() => void openAiDescriptionModal(v)}
+                            className="h-7 px-2.5 text-xs gap-1 whitespace-nowrap border-violet-400/50 text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
+                          >
+                            {aiDescLoading && aiDescVehicle?.vin === v.vin
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : <Sparkles className="w-3 h-3" />}
+                            ✨ Generate AI Description
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -2365,6 +2497,105 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* ── AI Vehicle Description Generator modal ──────────────────────── */}
+      <Dialog
+        open={aiDescOpen}
+        onOpenChange={open => {
+          setAiDescOpen(open);
+          if (!open) {
+            setAiDescVehicle(null);
+            setAiDescError('');
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-violet-500" />
+              AI Vehicle Description
+              {aiDescTitle ? ` — ${aiDescTitle}` : ''}
+            </DialogTitle>
+            <DialogDescription>
+              Facebook Marketplace-optimized copy with hook, value snapshot, features,
+              local trust signals, and a clear CTA. Edit freely, then copy or save.
+            </DialogDescription>
+          </DialogHeader>
+
+          {aiDescVehicle && (
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">
+                {aiDescVehicle.year} {aiDescVehicle.make} {aiDescVehicle.model}
+                {aiDescVehicle.trim ? ` ${aiDescVehicle.trim}` : ''}
+              </span>
+              <span className="mx-2 font-mono">{aiDescVehicle.vin}</span>
+              <span>{fmt(aiDescVehicle.price)} · {fmtMiles(aiDescVehicle.mileage)}</span>
+              {aiDescSource && (
+                <span className="ml-2 rounded border border-border px-1.5 py-0.5 uppercase tracking-wider text-[10px]">
+                  {aiDescSource === 'openai' ? 'AI polished' : 'Template'}
+                </span>
+              )}
+            </div>
+          )}
+
+          {aiDescLoading ? (
+            <div className="flex flex-col items-center justify-center gap-3 py-16 text-sm text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin text-violet-500" />
+              Generating Marketplace-optimized description…
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="ai-desc-text">Description</Label>
+              <Textarea
+                id="ai-desc-text"
+                value={aiDescText}
+                onChange={e => {
+                  setAiDescText(e.target.value);
+                  setAiDescSaved(false);
+                }}
+                rows={16}
+                className="resize-y font-mono text-[12px] leading-relaxed"
+                placeholder="AI description will appear here…"
+              />
+              <p className="text-[11px] tabular-nums text-muted-foreground">
+                {aiDescText.length} characters
+              </p>
+            </div>
+          )}
+
+          {aiDescError && (
+            <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {aiDescError}
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!aiDescText.trim() || aiDescLoading}
+              onClick={() => void handleAiDescClipboard()}
+              className="gap-2"
+            >
+              {aiDescCopied
+                ? <><CheckCheck className="h-4 w-4" /> Copied!</>
+                : <>📋 Copy to Clipboard</>}
+            </Button>
+            <Button
+              type="button"
+              disabled={!aiDescText.trim() || aiDescLoading || aiDescSaving || !aiDescVehicle}
+              onClick={() => void handleAiDescSave()}
+              className="gap-2 bg-violet-600 text-white hover:bg-violet-500"
+            >
+              {aiDescSaving
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>
+                : aiDescSaved
+                  ? <><Check className="h-4 w-4" /> Saved!</>
+                  : <>💾 Save to Vehicle Record</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Trial Upgrade Modal ──────────────────────────────────────────── */}
       {upgradeModal && (
