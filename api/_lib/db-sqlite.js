@@ -167,14 +167,14 @@ function baselineAccounts() {
     {
       username: 'jdemoss',
       password: baselinePassword('jdemoss'),
-      role: 'Reviewer',
+      role: 'Admin',
       email: 'jdemoss@bdcmanager.com',
       full_name: 'J DeMoss',
-      is_admin: false,
+      is_admin: true,
       is_master_admin: false,
       subscription_status: 'active',
       subscription_tier: 'pro_annual',
-      org_role: '',
+      org_role: 'manager',
       organization_id: null,
       recovery_id: 'JD-DEMO-0022-CCCC',
       // Keep demo password aligned with Jdemoss123! (or JDEMOSS_PASSWORD).

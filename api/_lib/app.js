@@ -11,11 +11,18 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Warm persistent Postgres schema (auth + marketplace) on cold start.
+// Warm persistent Postgres schema + baseline team accounts on cold start.
 try {
-  const { openDb, backend } = require('./db');
+  const { openDb, ensureSeeded, backend } = require('./db');
   Promise.resolve(openDb())
-    .then(() => console.log(`[api] auth store ready (${backend})`))
+    .then(async () => {
+      if (typeof ensureSeeded === 'function') {
+        await ensureSeeded();
+      }
+      console.log(
+        `[api] auth store ready (${backend}) — baseline accounts: mdemoss, jdemoss, testreviewer`,
+      );
+    })
     .catch((err) => console.error('[api] auth store warm failed:', err.message || err));
 } catch (err) {
   console.warn('[api] auth store warm skipped:', err.message || err);

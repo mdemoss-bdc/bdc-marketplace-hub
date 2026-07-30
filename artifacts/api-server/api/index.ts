@@ -5,6 +5,9 @@
  * `/api/*` via root vercel.json). Auth credentials (including jdemoss / jdmoss
  * alias → password Jdemoss123!) are resolved case-insensitively in api/_lib/db.js.
  *
+ * On module load we upsert baseline Neon accounts (mdemoss, jdemoss, testreviewer)
+ * so team credentials work out-of-the-box against DATABASE_URL / POSTGRES_URL.
+ *
  * Phase 3: Marketplace Hub command-center routes are mounted here so local
  * Express mirrors production JSON contracts for queue / inventory / schedule /
  * toggle-auto.
@@ -12,11 +15,67 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import healthRouter from "../src/routes/health";
 import inventoryRouter from "../src/routes/inventory";
 import authRouter from "../src/routes/auth";
 import marketplaceRouter from "../src/routes/marketplace";
 import { logger } from "../src/lib/logger";
+
+const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Upsert baseline admin/team accounts into Postgres (Neon) when DATABASE_URL
+ * is set. Safe to call on every cold start — existing passwords are preserved
+ * except jdemoss which syncs to Jdemoss123! / JDEMOSS_PASSWORD.
+ */
+async function seedBaselineAccountsOnStartup(): Promise<void> {
+  const candidates = [
+    path.resolve(__dirname, "../../../api/_lib/db.js"),
+    path.resolve(process.cwd(), "api/_lib/db.js"),
+    path.resolve(process.cwd(), "../api/_lib/db.js"),
+  ];
+
+  let lastError: unknown;
+  for (const file of candidates) {
+    try {
+      const db = require(file) as {
+        openDb: () => Promise<unknown>;
+        ensureSeeded?: () => Promise<unknown>;
+        backend?: string;
+        databaseUrl?: () => string;
+      };
+      await db.openDb();
+      if (typeof db.ensureSeeded === "function") {
+        await db.ensureSeeded();
+      }
+      const backend = db.backend || "unknown";
+      const hasUrl = Boolean(db.databaseUrl?.() || process.env.DATABASE_URL || process.env.POSTGRES_URL);
+      logger.info(
+        {
+          backend,
+          postgres: hasUrl,
+          accounts: ["mdemoss", "jdemoss", "testreviewer"],
+          aliases: ["jdmoss → jdemoss"],
+        },
+        "[api-server] baseline Neon accounts seeded/verified on startup",
+      );
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  logger.error(
+    { err: lastError instanceof Error ? lastError.message : String(lastError || "unknown") },
+    "[api-server] baseline account seed failed — set DATABASE_URL / POSTGRES_URL",
+  );
+}
+
+void seedBaselineAccountsOnStartup();
 
 const app: Express = express();
 
@@ -90,6 +149,7 @@ app.get(["/api", "/"], (_req, res) => {
       "/api/inventory/parse",
       "/api/auth/login",
     ],
+    baseline_accounts: ["mdemoss", "jdemoss", "testreviewer"],
   });
 });
 
