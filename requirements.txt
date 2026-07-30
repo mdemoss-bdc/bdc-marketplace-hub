@@ -1,0 +1,17 @@
+# Python dependencies for the BDC automation engine.
+#   pip install -r requirements.txt
+#
+# The engine itself runs on the standard library with SQLite. Everything below
+# supports optional features: dynamic inventory scraping, transactional email,
+# billing, and PostgreSQL.
+
+playwright>=1.61.0
+python-dotenv>=1.0.1
+resend>=2.35.0
+stripe>=15.3.1
+
+# Required only when DATABASE_URL points at PostgreSQL.
+psycopg2-binary>=2.9.9
+
+# Test suite
+pytest>=9.1.1

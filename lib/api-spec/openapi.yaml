@@ -1,0 +1,327 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: BDC Automotive Automation Engine API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: leads
+    description: Lead pipeline operations
+  - name: appointments
+    description: Appointment management
+  - name: analytics
+    description: Desk KPI analytics
+  - name: sessions
+    description: Customer session management
+  - name: inventory
+    description: Vehicle inventory
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /v1/lead:
+    post:
+      operationId: submitLead
+      tags: [leads]
+      summary: Submit an inbound lead
+      description: Process an inbound customer lead through the BDC pipeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeadInput"
+      responses:
+        "200":
+          description: Lead processed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadResponse"
+
+  /v1/twilio/inbound:
+    post:
+      operationId: twilioInbound
+      tags: [leads]
+      summary: Twilio inbound webhook
+      description: Receive and process inbound Twilio SMS messages as leads
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LeadInput"
+      responses:
+        "200":
+          description: Message processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadResponse"
+
+  /v1/appointments:
+    get:
+      operationId: listAppointments
+      tags: [appointments]
+      summary: Get all appointments
+      description: Returns all booked appointments for the sales desk board
+      responses:
+        "200":
+          description: List of appointments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppointmentList"
+
+  /v1/analytics:
+    get:
+      operationId: getDeskAnalytics
+      tags: [analytics]
+      summary: Get desk KPI analytics
+      description: Returns conversion metrics, lead counts, and performance KPIs
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeskAnalytics"
+
+  /v1/sessions:
+    get:
+      operationId: listSessions
+      tags: [sessions]
+      summary: Get all lead sessions
+      description: Returns the full lead pipeline with customer session records
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionList"
+
+  /v1/inventory:
+    get:
+      operationId: listInventory
+      tags: [inventory]
+      summary: Get vehicle inventory
+      description: Returns all vehicles in the current inventory
+      responses:
+        "200":
+          description: Vehicle inventory
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InventoryList"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        engine:
+          type: string
+      required:
+        - status
+
+    LeadInput:
+      type: object
+      properties:
+        phone_number:
+          type: string
+          description: Customer phone number (primary key)
+        first_name:
+          type: string
+        last_name:
+          type: string
+        source:
+          type: string
+          description: Lead source (e.g. Website, Twilio, Walk-in)
+        message:
+          type: string
+          description: Customer message text for NLP processing
+      required:
+        - phone_number
+        - message
+
+    LeadResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+        intent:
+          type: string
+          description: Detected intent (APPOINTMENT_BOOKED, AUTOMATED_TRADE_VALUATION, AVAILABILITY_CHECK, GENERAL_INFO)
+        escalated:
+          type: boolean
+          description: Whether this lead has been escalated to the desk
+        reply:
+          type: string
+          description: Automated bot reply text
+        booked_slot:
+          type: ["string", "null"]
+          description: Appointment slot if one was booked
+      required:
+        - status
+        - intent
+        - escalated
+        - reply
+
+    Appointment:
+      type: object
+      properties:
+        id:
+          type: integer
+        first_name:
+          type: string
+        last_name:
+          type: string
+        phone_number:
+          type: string
+        appt_type:
+          type: string
+          description: VIP Test Drive or Appraisal & Test Drive
+        time_slot:
+          type: string
+        active_stock_no:
+          type: ["string", "null"]
+        trade_vehicle:
+          type: ["string", "null"]
+        status:
+          type: string
+        created_at:
+          type: string
+      required:
+        - id
+        - phone_number
+        - appt_type
+        - time_slot
+        - status
+
+    AppointmentList:
+      type: object
+      properties:
+        appointments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Appointment"
+      required:
+        - appointments
+
+    DeskAnalytics:
+      type: object
+      properties:
+        total_leads_processed:
+          type: integer
+        confirmed_appointments:
+          type: integer
+        conversion_rate_percentage:
+          type: string
+        active_trade_evaluations:
+          type: integer
+        reengaged_by_worker:
+          type: integer
+        manager_desk_escalations:
+          type: integer
+      required:
+        - total_leads_processed
+        - confirmed_appointments
+        - conversion_rate_percentage
+        - active_trade_evaluations
+        - reengaged_by_worker
+        - manager_desk_escalations
+
+    Session:
+      type: object
+      properties:
+        phone_number:
+          type: string
+        first_name:
+          type: string
+        last_name:
+          type: string
+        source:
+          type: string
+        active_stock_no:
+          type: ["string", "null"]
+        trade_vehicle:
+          type: ["string", "null"]
+        status:
+          type: string
+          description: ACTIVE, BOOKED, FOLLOWED_UP, ESCALATE_TO_DESK
+        last_activity:
+          type: string
+        created_at:
+          type: string
+      required:
+        - phone_number
+        - status
+
+    SessionList:
+      type: object
+      properties:
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Session"
+      required:
+        - sessions
+
+    VehicleItem:
+      type: object
+      properties:
+        stock_no:
+          type: string
+        year:
+          type: integer
+        make:
+          type: string
+        model:
+          type: string
+        trim:
+          type: string
+        price:
+          type: string
+        raw_price:
+          type: integer
+        status:
+          type: string
+        body_style:
+          type: string
+        category:
+          type: string
+      required:
+        - stock_no
+        - year
+        - make
+        - model
+        - status
+
+    InventoryList:
+      type: object
+      properties:
+        inventory:
+          type: array
+          items:
+            $ref: "#/components/schemas/VehicleItem"
+      required:
+        - inventory

@@ -1,0 +1,4 @@
+- [Python BDC engine CWD](python-bdc-cwd.md) — artifact CWD is artifacts/api-server/, so run command must be `python3 bdc_engine.py` not `python3 artifacts/api-server/bdc_engine.py`
+- [SQLite → PostgreSQL migration](pg-migration.md) — bdc_engine.py uses `import pg_compat as sqlite3`; DB_FILE = DATABASE_URL; shim translates all dialect differences automatically.
+- [Moses sitemap crawl](moses-sitemap-crawl.md) — sitemap.xml is the only reliable source; DealerOn SRP never paginates; VDP pages have prices but no location attributes; use make-to-franchise mapping for new vehicles.
+- [Playwright browser launch](playwright-browser-launch.md) — portable Chromium fallback chain (env override → bundled → chrome/msedge channel → system binary); playwright_scraper.py is the JS fallback engine.

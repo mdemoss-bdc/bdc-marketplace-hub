@@ -1,0 +1,446 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-card-border: hsl(var(--card-border));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-popover-border: hsl(var(--popover-border));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-border: var(--primary-border);
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-secondary-border: var(--secondary-border);
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-muted-border: var(--muted-border);
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-accent-border: var(--accent-border);
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-destructive-border: var(--destructive-border);
+
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+
+  --color-sidebar: hsl(var(--sidebar));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-primary-border: var(--sidebar-primary-border);
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-accent-border: var(--sidebar-accent-border);
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  --font-sans: var(--app-font-sans);
+  --font-serif: var(--app-font-serif);
+  --font-mono: var(--app-font-mono);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* EXECUTIVE DARK SLATE — default canvas for the Manager Desk.
+   Remapped from the old warm-industrial light theme so every page that uses
+   semantic tokens (bg-card, bg-muted, text-muted-foreground, border-border)
+   inherits the smoked-glass look with zero light-mode flicker on tab switches. */
+:root {
+  --button-outline: rgba(255, 255, 255, 0.1);
+  --badge-outline: rgba(255, 255, 255, 0.05);
+
+  --opaque-button-border-intensity: 9;
+
+  --elevate-1: rgba(255, 255, 255, 0.04);
+  --elevate-2: rgba(255, 255, 255, 0.09);
+
+  /* slate-950 canvas */
+  --background: 222 47% 5%;
+  --foreground: 210 40% 96%;
+
+  /* slate-800 razor edge */
+  --border: 217 19% 18%;
+
+  /* smoked glass card face */
+  --card: 222 35% 9%;
+  --card-foreground: 210 40% 96%;
+  --card-border: 217 19% 16%;
+
+  --sidebar: 222 47% 4%;
+  --sidebar-foreground: 210 40% 92%;
+  --sidebar-border: 217 19% 14%;
+  --sidebar-primary: 38 92% 50%;
+  --sidebar-primary-foreground: 222 47% 6%;
+  --sidebar-accent: 217 25% 12%;
+  --sidebar-accent-foreground: 210 40% 96%;
+  --sidebar-ring: 38 92% 50%;
+
+  --popover: 222 40% 8%;
+  --popover-foreground: 210 40% 96%;
+  --popover-border: 217 19% 18%;
+
+  /* anodized amber */
+  --primary: 38 92% 50%;
+  --primary-foreground: 222 47% 6%;
+
+  --secondary: 217 25% 14%;
+  --secondary-foreground: 210 40% 96%;
+
+  --muted: 217 25% 12%;
+  --muted-foreground: 215 16% 57%;
+
+  --accent: 38 90% 55%;
+  --accent-foreground: 222 47% 6%;
+
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+
+  --input: 217 19% 16%;
+  --ring: 38 92% 50%;
+
+  --chart-1: 38 92% 50%;
+  --chart-2: 215 20% 65%;
+  --chart-3: 160 60% 45%;
+  --chart-4: 0 72% 55%;
+  --chart-5: 45 80% 55%;
+
+  --shadow-2xs: 0px 1px 2px 0px rgba(0, 0, 0, 0.35);
+  --shadow-xs: 0px 1px 3px 0px rgba(0, 0, 0, 0.45);
+  --shadow-sm:
+    0px 2px 4px -1px rgba(0, 0, 0, 0.45),
+    0px 1px 2px -1px rgba(0, 0, 0, 0.35);
+  --shadow:
+    0px 2px 4px -1px rgba(0, 0, 0, 0.55),
+    0px 1px 2px -1px rgba(0, 0, 0, 0.4);
+  --shadow-md:
+    0px 4px 6px -1px rgba(0, 0, 0, 0.55),
+    0px 2px 4px -1px rgba(0, 0, 0, 0.4);
+  --shadow-lg:
+    0px 10px 15px -3px rgba(0, 0, 0, 0.65),
+    0px 4px 6px -2px rgba(0, 0, 0, 0.45);
+  --shadow-xl:
+    0px 20px 25px -5px rgba(0, 0, 0, 0.7),
+    0px 10px 10px -5px rgba(0, 0, 0, 0.45);
+  --shadow-2xl: 0px 25px 50px -12px rgba(0, 0, 0, 0.85);
+
+  --app-font-sans: 'DM Sans', -apple-system, system-ui, sans-serif;
+  --app-font-serif: Georgia, serif;
+  --app-font-mono: 'Space Mono', 'Courier New', monospace;
+  --font-display: 'Space Grotesk', -apple-system, system-ui, sans-serif;
+
+  --radius: 0.5rem;
+  --tracking-normal: 0em;
+  --spacing: 0.25rem;
+
+  --sidebar-primary-border: hsl(var(--sidebar-primary));
+  --sidebar-primary-border: hsl(
+    from hsl(var(--sidebar-primary)) h s
+      calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
+
+  --sidebar-accent-border: hsl(var(--sidebar-accent));
+  --sidebar-accent-border: hsl(
+    from hsl(var(--sidebar-accent)) h s
+      calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
+
+  --primary-border: hsl(var(--primary));
+  --primary-border: hsl(
+    from hsl(var(--primary)) h s
+      calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
+
+  --secondary-border: hsl(var(--secondary));
+  --secondary-border: hsl(
+    from hsl(var(--secondary)) h s
+      calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
+
+  --muted-border: hsl(var(--muted));
+  --muted-border: hsl(
+    from hsl(var(--muted)) h s calc(l + var(--opaque-button-border-intensity)) /
+      alpha
+  );
+
+  --accent-border: hsl(var(--accent));
+  --accent-border: hsl(
+    from hsl(var(--accent)) h s
+      calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
+
+  --destructive-border: hsl(var(--destructive));
+  --destructive-border: hsl(
+    from hsl(var(--destructive)) h s
+      calc(l + var(--opaque-button-border-intensity)) / alpha
+  );
+}
+
+.dark {
+  /* Same executive slate palette — kept so any leftover .dark toggles stay consistent. */
+  --button-outline: rgba(255, 255, 255, 0.1);
+  --badge-outline: rgba(255, 255, 255, 0.05);
+  --opaque-button-border-intensity: 9;
+  --elevate-1: rgba(255, 255, 255, 0.04);
+  --elevate-2: rgba(255, 255, 255, 0.09);
+  --background: 222 47% 5%;
+  --foreground: 210 40% 96%;
+  --border: 217 19% 18%;
+  --card: 222 35% 9%;
+  --card-foreground: 210 40% 96%;
+  --card-border: 217 19% 16%;
+  --sidebar: 222 47% 4%;
+  --sidebar-foreground: 210 40% 92%;
+  --sidebar-border: 217 19% 14%;
+  --sidebar-primary: 38 92% 50%;
+  --sidebar-primary-foreground: 222 47% 6%;
+  --sidebar-accent: 217 25% 12%;
+  --sidebar-accent-foreground: 210 40% 96%;
+  --sidebar-ring: 38 92% 50%;
+  --popover: 222 40% 8%;
+  --popover-foreground: 210 40% 96%;
+  --popover-border: 217 19% 18%;
+  --primary: 38 92% 50%;
+  --primary-foreground: 222 47% 6%;
+  --secondary: 217 25% 14%;
+  --secondary-foreground: 210 40% 96%;
+  --muted: 217 25% 12%;
+  --muted-foreground: 215 16% 57%;
+  --accent: 38 90% 55%;
+  --accent-foreground: 222 47% 6%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --input: 217 19% 16%;
+  --ring: 38 92% 50%;
+  --chart-1: 38 92% 50%;
+  --chart-2: 215 20% 65%;
+  --chart-3: 160 60% 45%;
+  --chart-4: 0 72% 55%;
+  --chart-5: 45 80% 55%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased text-foreground bg-background;
+    background-color: hsl(222 47% 5%);
+    background-image:
+      radial-gradient(ellipse at top, rgba(251, 191, 36, 0.05), transparent 55%),
+      linear-gradient(rgba(2, 6, 23, 0.92), rgba(2, 6, 23, 0.96)),
+      url('/audi-bg.png');
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+  }
+}
+
+@layer utilities {
+  input[type='search']::-webkit-search-cancel-button {
+    @apply hidden;
+  }
+
+  [contenteditable][data-placeholder]:empty::before {
+    content: attr(data-placeholder);
+    color: hsl(var(--muted-foreground));
+    pointer-events: none;
+  }
+
+  .no-default-hover-elevate {
+  }
+
+  .no-default-active-elevate {
+  }
+
+  .toggle-elevate::before,
+  .toggle-elevate-2::before {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0px;
+    border-radius: inherit;
+    z-index: -1;
+  }
+
+  .toggle-elevate.toggle-elevated::before {
+    background-color: var(--elevate-2);
+  }
+
+  .border.toggle-elevate::before {
+    inset: -1px;
+  }
+
+  .hover-elevate:not(.no-default-hover-elevate),
+  .active-elevate:not(.no-default-active-elevate),
+  .hover-elevate-2:not(.no-default-hover-elevate),
+  .active-elevate-2:not(.no-default-active-elevate) {
+    position: relative;
+    z-index: 0;
+  }
+
+  .hover-elevate:not(.no-default-hover-elevate)::after,
+  .active-elevate:not(.no-default-active-elevate)::after,
+  .hover-elevate-2:not(.no-default-hover-elevate)::after,
+  .active-elevate-2:not(.no-default-active-elevate)::after {
+    content: '';
+    pointer-events: none;
+    position: absolute;
+    inset: 0px;
+    border-radius: inherit;
+    z-index: 999;
+  }
+
+  .hover-elevate:hover:not(.no-default-hover-elevate)::after,
+  .active-elevate:active:not(.no-default-active-elevate)::after {
+    background-color: var(--elevate-1);
+  }
+
+  .hover-elevate-2:hover:not(.no-default-hover-elevate)::after,
+  .active-elevate-2:active:not(.no-default-active-elevate)::after {
+    background-color: var(--elevate-2);
+  }
+
+  .border.hover-elevate:not(.no-hover-interaction-elevate)::after,
+  .border.active-elevate:not(.no-active-interaction-elevate)::after,
+  .border.hover-elevate-2:not(.no-hover-interaction-elevate)::after,
+  .border.active-elevate-2:not(.no-active-interaction-elevate)::after,
+  .border.hover-elevate:not(.no-hover-interaction-elevate)::after {
+    inset: -1px;
+  }
+  
+  /* Mono for data display */
+  .font-mono-data {
+    font-family: var(--app-font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+  
+  /* Display font utility */
+  .font-display {
+    font-family: var(--font-display);
+  }
+}
+
+/* ── Mobile: dynamic viewport height ─────────────────────────────────────────
+   100dvh shrinks when the mobile browser address bar is visible so content is
+   never clipped behind it. 100vh is the fallback for older browsers.          */
+html,
+body,
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.min-h-dvh {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.h-dvh {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* ── Safe-area inset (iPhone notch / home bar) ────────────────────────────── */
+.pb-safe {
+  /* Provides at least 0.5 rem so content isn't flush with the bottom edge,
+     but respects the real home-bar inset when it is larger.               */
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.5rem);
+}
+
+/* ── Momentum scrolling on iOS Safari ────────────────────────────────────── */
+.overflow-x-auto,
+.overflow-y-auto,
+.overflow-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+@layer utilities {
+  /* Smoked-glass panel — matches Dashboard Hub cards */
+  .glass-panel {
+    @apply rounded-xl border border-slate-800/60 bg-slate-900/80 backdrop-blur-md
+      shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset];
+  }
+
+  .glass-input {
+    @apply h-9 rounded-lg border border-slate-700/60 bg-slate-950/70 text-sm text-slate-100
+      placeholder:text-slate-600 focus-visible:ring-amber-400/40 focus-visible:ring-offset-0
+      focus-visible:border-amber-300/40;
+  }
+
+  .meta-label {
+    @apply text-xs font-semibold uppercase tracking-wider text-slate-400;
+  }
+}
+
+/* ── Forms module — clean paper printout ─────────────────────────────────── */
+@media print {
+  /* Hide app chrome so only the pre-filled document prints */
+  header,
+  aside,
+  nav,
+  .forms-controls,
+  [data-help-assistant],
+  [data-admin-fix-tool] {
+    display: none !important;
+  }
+
+  body,
+  #root,
+  main {
+    background: white !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: auto !important;
+  }
+
+  /* Undo the desktop sidebar offset for print */
+  main {
+    margin-left: 0 !important;
+    padding-top: 0 !important;
+  }
+
+  .forms-print-surface {
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0.5in !important;
+    max-width: none !important;
+  }
+
+  .forms-doc {
+    color: #000 !important;
+  }
+}
+

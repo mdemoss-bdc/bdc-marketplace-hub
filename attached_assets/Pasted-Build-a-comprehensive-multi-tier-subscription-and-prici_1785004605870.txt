@@ -1,0 +1,35 @@
+Build a comprehensive multi-tier subscription and pricing engine supporting Individual Pro Reps and Dealership Rooftops across Monthly, Annual, and Lifetime billing models.
+
+Requirements:
+
+1. Database Schema Updates (`schema.ts` / User & Organization tables):
+   - Support `subscriptionTier` values: 
+     * 'pro_monthly', 'pro_annual', 'pro_lifetime'
+     * 'rooftop_monthly', 'rooftop_annual', 'rooftop_lifetime'
+   - Add seat tracking for Rooftop accounts: cap rooftop tier memberships at 10 active seat licenses per dealership location/organization.
+   - For 'pro_lifetime' and 'rooftop_lifetime', bypass all recurring subscription expiration checks and grant permanent active dashboard access.
+
+2. Frontend Pricing Component (`Pricing.tsx` / Settings / Upgrade Modal):
+   - Add a Billing Toggle Header: [ Monthly | Annual (2 Months Free) | Lifetime Pass ]
+   - Segment view into two sections or tabs: "Individual Sales Rep" vs "Dealership Rooftop (Up to 10 Seats)"
+   - Render Pricing Cards dynamically based on active toggle:
+     * Pro Rep Cards (1 Seat):
+       - Monthly: $149/mo
+       - Annual: $1,490/yr (Badge: "SAVE $298 — GET 2 MONTHS FREE", $124/mo equivalent)
+       - Lifetime: $4,995 one-time payment (Badge: "PAY ONCE, USE FOREVER")
+     * Dealership Rooftop Cards (Up to 10 Seats):
+       - Monthly: $495/mo
+       - Annual: $4,950/yr (Badge: "SAVE $990 — GET 2 MONTHS FREE", $412/mo equivalent)
+       - Lifetime: $14,995 one-time payment (Badge: "CAPEX STORE PASS — 10 SEATS")
+
+3. Stripe Checkout Router Integration (`POST /api/stripe/create-checkout-session`):
+   - Handle recurring subscription mode (`mode: 'subscription'`) for:
+     * Pro Monthly ($149) & Pro Annual ($1,490)
+     * Rooftop Monthly ($495) & Rooftop Annual ($4,950)
+   - Handle one-time payment mode (`mode: 'payment'`) for:
+     * Pro Lifetime Pass ($4,995)
+     * Rooftop Lifetime Pass ($14,995)
+   - Enable referral credits ($25) to apply toward checkout balance where applicable.
+
+4. Stripe Webhook Handler (`checkout.session.completed`):
+   - Read checkout session metadata and properly mark user/organization account status as active under their corresponding plan tier.

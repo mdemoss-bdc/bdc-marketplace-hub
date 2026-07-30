@@ -1,0 +1,21 @@
+{
+  "name": "workspace",
+  "version": "0.0.0",
+  "license": "MIT",
+  "scripts": {
+    "preinstall": "node -e \"const ua=process.env.npm_config_user_agent||'';if(!ua.startsWith('pnpm')){console.error('Use pnpm instead');process.exit(1)}\"",
+    "build": "pnpm run typecheck && pnpm -r --if-present run build",
+    "typecheck:libs": "tsc --build",
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+    "dev": "pnpm --parallel --filter @workspace/bdc-dashboard --filter @workspace/mockup-sandbox run dev",
+    "dev:api": "python artifacts/api-server/bdc_engine.py",
+    "dev:web": "pnpm --filter @workspace/bdc-dashboard run dev",
+    "dev:mockup": "pnpm --filter @workspace/mockup-sandbox run dev",
+    "start:api": "python artifacts/api-server/bdc_engine.py"
+  },
+  "private": true,
+  "devDependencies": {
+    "prettier": "^3.9.5",
+    "typescript": "~5.9.3"
+  }
+}

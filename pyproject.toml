@@ -1,0 +1,17 @@
+[project]
+name = "bdc-automation-engine"
+version = "0.1.0"
+description = "Automotive BDC automation engine and Manager Desk API server"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.61.0",
+    "pytest>=9.1.1",
+    "python-dotenv>=1.0.1",
+    "resend>=2.35.0",
+    "stripe>=15.3.1",
+]
+
+[project.optional-dependencies]
+# Only needed when DATABASE_URL points at PostgreSQL. The default SQLite backend
+# uses the Python standard library and needs nothing extra.
+postgres = ["psycopg2-binary>=2.9.9"]

@@ -1,0 +1,32 @@
+Move all configuration panels and step-by-step instructions to the TOP of their respective feature pages, and deprecate the standalone Settings sidebar item.
+
+Requirements:
+
+1. Marketplace Hub (`MarketplaceHub.tsx`):
+   - Place an "⚙️ Inventory Scraper & Source Setup" collapsible card at the VERY TOP of the page (above the inventory grid).
+   - Inputs: Used Inventory Page URL, New Inventory Page URL, Salesperson ID (optional), and Auto-Sync Frequency.
+   - Include clear step-by-step instructions:
+     "💡 Quick Setup Instructions:
+      1. Paste the full URL of your dealership's used or new vehicle search pages (e.g., https://yourdealer.com/used-inventory/).
+      2. (Optional) Enter your Salesperson ID if you only want your assigned inventory to display.
+      3. Select your preferred sync frequency and click 'Save Scraper Settings'. Active vehicles will automatically sync below."
+
+2. TikTok Hub (`TikTokHub.tsx`):
+   - Place a "⚙️ TikTok Connection & Account Setup" card at the VERY TOP of the page (above the video studio).
+   - UI: "Connect TikTok Account" OAuth button, connection status badge, and Default Privacy Level selector (Public, Friends, Private).
+   - Include clear step-by-step instructions:
+     "💡 Quick Setup Instructions:
+      1. Click 'Connect TikTok Account' and authorize BDC Manager Desk in TikTok.
+      2. Choose your default video privacy setting (Public recommended for maximum reach).
+      3. Use the AI Video Studio below to upload walkarounds, generate catchy hooks, and post!"
+
+3. Customer Cards & Mail (`CustomerCards.tsx`):
+   - Place a "⚙️ Direct Mailer & Store Branding Setup" card at the VERY TOP of the page (above the customer pipeline).
+   - Inputs: Store/Dealership Name, Return Address, Dealership Phone Number, and Dealership Logo URL.
+   - Include clear step-by-step instructions:
+     "💡 Quick Setup Instructions:
+      1. Enter your official dealership name and return address as you want them to appear on physical customer letters.
+      2. Paste your store's logo image link to automatically brand custom thank-you and anniversary letters."
+
+4. Navigation Sidebar (`Sidebar.tsx`):
+   - Remove the standalone "Settings" link from the sidebar navigation menu since setup controls live directly inside each tab.
