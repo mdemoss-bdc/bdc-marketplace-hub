@@ -16,11 +16,13 @@ _LD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
     re.I,
 )
+# moses_layout.txt: .vehicle-card.vehicle-card--mod (+ legacy SRP card classes)
 _CARD_RE = re.compile(
     r'<(?:div|li|article|section)[^>]+(?:'
     r'data-vin=|data-vehicle|data-year=|'
-    r'class=["\'][^"\']*(?:vehicle-card|srp-vehicle|inventory-card|listing-card)[^"\']*["\']'
-    r')[^>]*>[\s\S]{0,4500}?</(?:div|li|article|section)>',
+    r'class=["\'][^"\']*(?:vehicle-card(?:--mod)?|srp-vehicle|inventory-card|listing-card)'
+    r'[^"\']*["\']'
+    r')[^>]*>[\s\S]{0,12000}?</(?:div|li|article|section)>',
     re.I,
 )
 _ATTR_RE = re.compile(
@@ -28,6 +30,26 @@ _ATTR_RE = re.compile(
     r'stocknumber|stock-number|vin-stock|stock-no|stockno|stocknum|stock|'
     r'mileage|miles|extcolor|exterior-color|'
     r'color|vehicle)\s*=\s*["\'](?P<v>[^"\']+)["\']',
+    re.I,
+)
+_TITLE_YEAR_RE = re.compile(
+    r'class=["\'][^"\']*\bvehicle-title__year\b[^"\']*["\'][^>]*>\s*(\d{4})\s*<',
+    re.I,
+)
+_TITLE_MAKE_MODEL_RE = re.compile(
+    r'class=["\'][^"\']*\bvehicle-title__make-model\b[^"\']*["\'][^>]*>'
+    r'\s*([^<]{2,60})\s*<',
+    re.I,
+)
+_TITLE_TRIM_RE = re.compile(
+    r'class=["\'][^"\']*\bvehicle-title__trim\b[^"\']*["\'][^>]*>\s*([^<]{1,40})\s*<',
+    re.I,
+)
+_IDENT_VIN_RE = re.compile(
+    r'class=["\'][^"\']*\bvehicle-identifiers__label\b[^"\']*["\'][^>]*>'
+    r'\s*VIN\s*:?\s*</[^>]+>\s*'
+    r'<[^>]*class=["\'][^"\']*\bvehicle-identifiers__value\b[^"\']*["\'][^>]*>'
+    r'\s*([A-HJ-NPR-Z0-9]{17})\s*<',
     re.I,
 )
 _VDP_HREF_RE = re.compile(
@@ -121,13 +143,111 @@ def parse_json_ld(html: str, *, condition: str = "Used") -> list[dict]:
     return _dedupe(out)
 
 
+_CARD_OPEN_RE = re.compile(
+    r'<(?P<tag>div|li|article|section)(?P<attrs>[^>]*('
+    r'data-vin=|data-vehicle|data-year=|'
+    r'class=["\'][^"\']*\bvehicle-card\b[^"\']*["\']|'
+    r'class=["\'][^"\']*(?:srp-vehicle|inventory-card|listing-card)[^"\']*["\']'
+    r')[^>]*)>',
+    re.I,
+)
+_TAG_OPEN_RE = re.compile(r'<(?P<tag>[a-zA-Z][\w:-]*)([^>]*)>', re.I)
+_VOID_TAGS = frozenset({
+    "area", "base", "br", "col", "embed", "hr", "img", "input",
+    "link", "meta", "param", "source", "track", "wbr",
+})
+
+
+def _extract_balanced_fragment(text: str, start: int, tag: str) -> str:
+    """Return HTML from ``start`` through the matching close tag (depth-aware)."""
+    tag_l = tag.lower()
+    i = start
+    depth = 0
+    n = len(text)
+    while i < n:
+        lt = text.find("<", i)
+        if lt < 0:
+            break
+        if text.startswith("</", lt):
+            close = re.match(r"</([a-zA-Z][\w:-]*)\s*>", text[lt:], re.I)
+            if not close:
+                i = lt + 1
+                continue
+            if close.group(1).lower() == tag_l:
+                depth -= 1
+                end = lt + close.end()
+                if depth == 0:
+                    return text[start:end]
+                i = end
+                continue
+            i = lt + close.end()
+            continue
+        if text.startswith("<!--", lt):
+            end = text.find("-->", lt + 4)
+            i = n if end < 0 else end + 3
+            continue
+        om = _TAG_OPEN_RE.match(text, lt)
+        if not om:
+            i = lt + 1
+            continue
+        t = om.group("tag").lower()
+        raw_attrs = om.group(2) or ""
+        self_close = raw_attrs.rstrip().endswith("/") or t in _VOID_TAGS
+        if t == tag_l and not self_close:
+            depth += 1
+        i = om.end()
+    return text[start:min(n, start + 14000)]
+
+
+def _iter_card_html(text: str) -> list[str]:
+    """Yield vehicle-card HTML fragments from Moses / DealerOn SRP markup."""
+    cards: list[str] = []
+    for m in _CARD_OPEN_RE.finditer(text):
+        attrs = m.group("attrs") or ""
+        # Skip skeleton placeholders from moses_layout.txt initial HTML.
+        if re.search(r"\bskeleton\b", attrs, re.I):
+            continue
+        frag = _extract_balanced_fragment(text, m.start(), m.group("tag"))
+        if len(frag) >= 80:
+            cards.append(frag)
+    if cards:
+        return cards
+    # Fallback: whole document as one card window
+    return [text] if text.strip() else []
+
+
+def _ymmt_from_moses_title(card: str, attrs: dict[str, str]) -> None:
+    """Fill year/make/model/trim from .vehicle-title__* when data-* empty."""
+    if not attrs.get("year"):
+        ym = _TITLE_YEAR_RE.search(card)
+        if ym:
+            attrs["year"] = ym.group(1)
+    if not attrs.get("make") or not attrs.get("model"):
+        mm = _TITLE_MAKE_MODEL_RE.search(card)
+        if mm:
+            parts = clean_text(mm.group(1)).split()
+            if parts:
+                attrs.setdefault("make", parts[0])
+                if len(parts) > 1:
+                    attrs.setdefault("model", parts[1])
+    if not attrs.get("trim"):
+        tm = _TITLE_TRIM_RE.search(card)
+        if tm:
+            attrs["trim"] = clean_text(tm.group(1))
+
+
 def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") -> list[dict]:
     out: list[dict] = []
     text = decode_entities(html or "")
-    for card in _CARD_RE.findall(text) or [text]:
+    for card in _iter_card_html(text):
         attrs: dict[str, str] = {}
         for am in _ATTR_RE.finditer(card):
             attrs[am.group("k").lower().replace("-", "")] = clean_text(am.group("v"))
+        _ymmt_from_moses_title(card, attrs)
+        if not attrs.get("vin"):
+            iv = _IDENT_VIN_RE.search(card)
+            if iv:
+                attrs["vin"] = iv.group(1).upper()
         if not attrs.get("vin"):
             vm = VIN_RE.search(card)
             if vm:

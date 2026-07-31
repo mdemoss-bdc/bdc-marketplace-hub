@@ -1,4 +1,8 @@
-"""Focused unit tests: Moses / DealerOn DOM selectors for stock, color, miles, price."""
+"""Focused unit tests: Moses / DealerOn DOM selectors for stock, color, miles, price.
+
+Selectors mapped from project-root ``moses_layout.txt`` (UTF-16 dump).
+Fixture: ``tests/fixtures/moses_vehicle_card.html``.
+"""
 
 from __future__ import annotations
 
@@ -21,17 +25,28 @@ from scraper.fields import (  # noqa: E402
     extract_mileage as fields_mileage,
     extract_price as fields_price,
 )
+from scraper.pipeline import extract_inventory  # noqa: E402
 from scraper.schema import normalize_vehicle  # noqa: E402
 from scraper.stock import (  # noqa: E402
     MISSING_STOCK,
     extract_stock_from_html,
     resolve_stock_number,
 )
+from scraper.tier1_dom import parse_data_attributes  # noqa: E402
 from scraper.vdp_hydrate import (  # noqa: E402
     extract_from_vdp_html,
     hydrate_vehicles,
     needs_hydration,
 )
+
+_FIXTURE_PATH = os.path.join(
+    os.path.dirname(__file__), "fixtures", "moses_vehicle_card.html"
+)
+
+
+def _load_fixture() -> str:
+    with open(_FIXTURE_PATH, encoding="utf-8") as f:
+        return f.read()
 
 # Sample Moses / DealerOn SRP card HTML (trimmed)
 MOSES_CARD_HTML = """
@@ -102,13 +117,73 @@ MOSES_VDP_HTML = """
 """
 
 
+class TestMosesLayoutFixture(unittest.TestCase):
+    """Parse the moses_layout.txt-derived card fixture; assert all key fields."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.fixture = _load_fixture()
+
+    def test_fixture_fields_populated(self):
+        vehicles = parse_data_attributes(
+            self.fixture,
+            "https://www.mosescars.com/search-all-new-inventory.html",
+            condition="New",
+        )
+        self.assertGreaterEqual(len(vehicles), 1, "expected at least one parsed card")
+        v = vehicles[0]
+        # One-shot verification log (not a permanent production path).
+        print(
+            "FIRST_PARSED_VEHICLE",
+            {
+                "stockNumber": v.get("stockNumber"),
+                "exteriorColor": v.get("exteriorColor"),
+                "price": v.get("price"),
+                "mileage": v.get("mileage"),
+                "vin": v.get("vin"),
+            },
+            flush=True,
+        )
+        self.assertEqual(v["stockNumber"], "HT60456")
+        self.assertNotEqual(v["stockNumber"], MISSING_STOCK)
+        self.assertEqual(v["exteriorColor"], "Crystal Black Pearl")
+        self.assertEqual(v["price"], 32995)
+        self.assertEqual(v["mileage"], 12)
+        self.assertEqual(v["vin"], "1HGCV1F38PA123456")
+
+    def test_pipeline_extract_inventory_fixture(self):
+        result = extract_inventory(
+            self.fixture,
+            "https://www.mosescars.com/search-all-new-inventory.html",
+            condition="New",
+            min_ok=1,
+            enable_llm=False,
+        )
+        self.assertGreaterEqual(result["count"], 1)
+        v = result["vehicles"][0]
+        self.assertEqual(v["stockNumber"], "HT60456")
+        self.assertEqual(v["exteriorColor"], "Crystal Black Pearl")
+        self.assertEqual(v["price"], 32995)
+        self.assertEqual(v["mileage"], 12)
+        self.assertEqual(v["vin"], "1HGCV1F38PA123456")
+
+    def test_layout_class_extractors(self):
+        html = self.fixture
+        self.assertEqual(extract_stock_from_html(html), "HT60456")
+        self.assertEqual(fields_color(html), "Crystal Black Pearl")
+        self.assertEqual(fields_mileage(html, condition="New"), 12)
+        self.assertEqual(fields_price(html), 32995)
+
+
 class TestMosesStockSelectors(unittest.TestCase):
     def test_stock_colon_regex(self):
         self.assertEqual(extract_stock_from_html("Stock: HT60208"), "HT60208")
         self.assertEqual(extract_stock_from_html("STOCK: VT60109A"), "VT60109A")
         self.assertEqual(extract_stock_from_html("Stock: HT60456"), "HT60456")
+        self.assertEqual(extract_stock_from_html("Stock #: HT60456"), "HT60456")
         self.assertEqual(extract_stock_number("Stock: HT60456"), "HT60456")
         self.assertEqual(extract_stock_number("Stock: HT60208"), "HT60208")
+        self.assertEqual(extract_stock_number("Stock #: HT60456"), "HT60456")
 
     def test_stock_class_dom(self):
         html = '<div class="stock">Stock: HT60208</div>'
@@ -117,6 +192,13 @@ class TestMosesStockSelectors(unittest.TestCase):
         self.assertEqual(extract_stock_from_html(html2), "VT60109A")
         html3 = '<div data-stock="HT60456">x</div>'
         self.assertEqual(extract_stock_from_html(html3), "HT60456")
+        html4 = (
+            '<div class="vehicle-identifiers">'
+            '<span class="vehicle-identifiers__label">Stock #:</span>'
+            '<span class="vehicle-identifiers__value">HT60456</span>'
+            "</div>"
+        )
+        self.assertEqual(extract_stock_from_html(html4), "HT60456")
 
     def test_stock_never_falls_to_unavailable(self):
         stock = resolve_stock_number(
@@ -152,6 +234,15 @@ class TestMosesColorMileagePrice(unittest.TestCase):
             fields_color('<div data-color="Aegean Blue Metallic">x</div>'),
             "Aegean Blue Metallic",
         )
+        self.assertEqual(
+            fields_color(
+                '<div class="vehicle-colors__ext">'
+                '<span class="vehicle-colors__label">Ext.</span>'
+                '<span class="vehicle-colors__value">Crystal Black Pearl</span>'
+                "</div>"
+            ),
+            "Crystal Black Pearl",
+        )
 
     def test_mileage_mi_suffix(self):
         self.assertEqual(extract_mileage("28,450 mi."), 28450)
@@ -161,6 +252,10 @@ class TestMosesColorMileagePrice(unittest.TestCase):
         self.assertEqual(fields_mileage("28,450 mi."), 28450)
         self.assertEqual(fields_mileage("12 mi"), 12)
         self.assertEqual(fields_mileage("12 miles"), 12)
+        self.assertEqual(
+            fields_mileage('<div class="vehicle-mileage">12 mi</div>', condition="New"),
+            12,
+        )
 
     def test_new_missing_mileage_defaults_zero(self):
         self.assertEqual(fields_mileage("Stock: NH1003 OUR PRICE $48,750", condition="New"), 0)
@@ -187,6 +282,15 @@ class TestMosesColorMileagePrice(unittest.TestCase):
         self.assertEqual(extract_price("TSRP $35,000"), 35000)
         self.assertEqual(fields_price("Ask about financing $19,995 today"), 19995)
         self.assertEqual(fields_price("MOSES PRICE $32,995"), 32995)
+        self.assertEqual(
+            fields_price(
+                '<div class="vehiclePricingHighlight featuredPrice">'
+                '<div class="vehiclePricingHighlightLabel">MOSES PRICE</div>'
+                '<div class="vehiclePricingHighlightAmount">$32,995</div>'
+                "</div>"
+            ),
+            32995,
+        )
 
 
 class TestMosesCardNormalize(unittest.TestCase):

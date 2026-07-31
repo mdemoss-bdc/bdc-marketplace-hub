@@ -52,16 +52,37 @@ _DATA_ATTR_PATTERNS = (
 )
 
 # ── 2) DOM class / nested .value selectors ───────────────────────────────────
-# Moses / DealerOn: .stock, .stock-number (bare code or "Stock: HT60208")
+# Mapped from moses_layout.txt DealerOn Sephora / Wasabi SRP:
+#   .vehicle-identifiers__label "Stock #:" + .vehicle-identifiers__value
+#   .vehStock "Stock #:" (ePrice modal)
+#   .stock / .stock-number (legacy)
+_IDENTIFIERS_STOCK_RE = re.compile(
+    r'class=["\'][^"\']*\bvehicle-identifiers__label\b[^"\']*["\'][^>]*>'
+    r'\s*Stock\s*#?\s*:?\s*</[^>]+>\s*'
+    r'<[^>]*class=["\'][^"\']*\bvehicle-identifiers__value\b[^"\']*["\'][^>]*>'
+    r'\s*([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
+    re.I,
+)
+# Label and value may share a flex row with VIN; scan identifier blocks.
+_IDENTIFIERS_BLOCK_RE = re.compile(
+    r'class=["\'][^"\']*\bvehicle-identifiers\b[^"\']*["\'][^>]*>([\s\S]{0,600}?)</(?:div|span|ul)>',
+    re.I,
+)
+_VEH_STOCK_RE = re.compile(
+    r'class=["\'][^"\']*\bvehStock\b[^"\']*["\'][^>]*>\s*Stock\s*#?\s*:?\s*</[^>]+>\s*'
+    r'<[^>]+(?:id=["\'][^"\']*vehStock[^"\']*["\'])?[^>]*>\s*'
+    r'([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
+    re.I,
+)
 _DOM_CLASS_PATTERNS = (
     # DealerOn / Moses: class="stock" / "stock-number" with optional "Stock:" prefix
     r'class=["\'][^"\']*\bstock-number\b[^"\']*["\'][^>]*>\s*'
-    r'(?:Stock\s*:\s*)?([A-Za-z0-9]{3,15})\s*<',
+    r'(?:Stock\s*#?\s*:?\s*)?([A-Za-z0-9]{3,15})\s*<',
     r'class=["\'][^"\']*\bstock\b[^"\']*["\'][^>]*>\s*'
-    r'(?:Stock\s*:\s*)?([A-Za-z0-9]{3,15})\s*<',
+    r'(?:Stock\s*#?\s*:?\s*)?([A-Za-z0-9]{3,15})\s*<',
     r'class=["\'][^"\']*stock[-_]?number[^"\']*["\'][^>]*>\s*'
     r'(?:<(?:span|div|p|strong|em|dd|b)[^>]*class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?'
-    r'(?:Stock\s*:\s*)?([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
+    r'(?:Stock\s*#?\s*:?\s*)?([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
     r'class=["\'][^"\']*item-stock-number[^"\']*["\'][^>]*>\s*'
     r'([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
     r'class=["\'][^"\']*stock[^"\']*["\'][^>]*>\s*'
@@ -74,12 +95,13 @@ _DOM_CLASS_PATTERNS = (
 )
 
 # ── 3) Labeled text nodes ────────────────────────────────────────────────────
-# Moses / DealerOn prefer exact "Stock:" / "STOCK:" before broader labels.
-# Must match plain text "Stock: HT60456" even when HTML tags wrap the code.
+# moses_layout.txt ePrice / forms use "Stock #:"; SRP also uses "Stock:".
+# Must match plain text even when HTML tags wrap the code.
+_MOSES_STOCK_HASH_RE = re.compile(r"Stock\s*#\s*:\s*([A-Za-z0-9]+)", re.I)
 _MOSES_STOCK_RE = re.compile(r"Stock:\s*([A-Za-z0-9]+)", re.I)
 _MOSES_STOCK_UPPER_RE = re.compile(r"STOCK:\s*([A-Za-z0-9]+)", re.I)
 _MOSES_STOCK_HTML_RE = re.compile(
-    r"Stock:\s*(?:<[^>]+>\s*)*([A-Za-z0-9]+)",
+    r"Stock\s*#?\s*:\s*(?:<[^>]+>\s*)*([A-Za-z0-9]+)",
     re.I,
 )
 _LABEL_STOCK_RE = re.compile(
@@ -190,6 +212,39 @@ def extract_stock_from_html(
             if cleaned:
                 return cleaned
 
+    # moses_layout.txt: vehicle-identifiers__label "Stock #:" + __value
+    m = _IDENTIFIERS_STOCK_RE.search(text)
+    if m:
+        cleaned = sanitize_stock_number(m.group(1), vin=vin, year=year)
+        if cleaned:
+            return cleaned
+    for bm in _IDENTIFIERS_BLOCK_RE.finditer(text):
+        block = bm.group(1)
+        plain_block = clean_text(re.sub(r"<[^>]+>", " ", block))
+        lm = _MOSES_STOCK_HASH_RE.search(plain_block) or _LABEL_STOCK_RE.search(plain_block)
+        if lm:
+            cleaned = sanitize_stock_number(lm.group(1), vin=vin, year=year)
+            if cleaned:
+                return cleaned
+        # Paired label/value nodes inside the identifiers flex row
+        pairs = re.findall(
+            r'identifiers__label[^>]*>\s*([^<]+)</[^>]+>\s*'
+            r'<[^>]*identifiers__value[^>]*>\s*([^<]+)\s*<',
+            block,
+            re.I,
+        )
+        for label, value in pairs:
+            if re.search(r"stock", label or "", re.I):
+                cleaned = sanitize_stock_number(value, vin=vin, year=year)
+                if cleaned:
+                    return cleaned
+
+    m = _VEH_STOCK_RE.search(text)
+    if m:
+        cleaned = sanitize_stock_number(m.group(1), vin=vin, year=year)
+        if cleaned:
+            return cleaned
+
     for pat in _DOM_CLASS_PATTERNS:
         m = re.search(pat, text, re.I)
         if m:
@@ -198,8 +253,13 @@ def extract_stock_from_html(
                 return cleaned
 
     plain = clean_text(re.sub(r"<[^>]+>", " ", text))
-    # Exact Moses / DealerOn "Stock:" / "STOCK:" — never skip to Unavailable.
-    for stock_re in (_MOSES_STOCK_RE, _MOSES_STOCK_UPPER_RE, _MOSES_STOCK_HTML_RE):
+    # Exact Moses / DealerOn "Stock #:" / "Stock:" / "STOCK:" — never skip to Unavailable.
+    for stock_re in (
+        _MOSES_STOCK_HASH_RE,
+        _MOSES_STOCK_RE,
+        _MOSES_STOCK_UPPER_RE,
+        _MOSES_STOCK_HTML_RE,
+    ):
         lm = stock_re.search(plain) or stock_re.search(text)
         if lm:
             cleaned = sanitize_stock_number(lm.group(1), vin=vin, year=year)

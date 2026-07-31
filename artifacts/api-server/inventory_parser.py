@@ -26,7 +26,8 @@ PRICE_LABEL_RE = re.compile(
 )
 PRICE_CARD_RE = re.compile(r"\$([0-9]{2,3},[0-9]{3})")
 MILEAGE_RE = re.compile(r"([0-9,]+)\s*(?:mi\.?|miles)\b", re.IGNORECASE)
-# Moses / DealerOn exact "Stock:" / "STOCK:" — always wins over Unavailable
+# Moses / DealerOn (moses_layout.txt): "Stock #:" / "Stock:" / "STOCK:"
+MOSES_STOCK_HASH_RE = re.compile(r"Stock\s*#\s*:\s*([A-Za-z0-9]+)", re.IGNORECASE)
 MOSES_STOCK_RE = re.compile(r"Stock:\s*([A-Za-z0-9]+)", re.IGNORECASE)
 MOSES_STOCK_UPPER_RE = re.compile(r"STOCK:\s*([A-Za-z0-9]+)", re.IGNORECASE)
 STOCK_LABELED_RE = re.compile(
@@ -249,8 +250,8 @@ def extract_stock_from_url(url: str, *, year: int = 0, vin: str = "") -> str | N
 
 def extract_stock_number(text: str) -> str | None:
     scrubbed = scrub_raw_text(text)
-    # Moses / DealerOn "Stock:" / "STOCK:" — never fall through to Unavailable.
-    for stock_re in (MOSES_STOCK_RE, MOSES_STOCK_UPPER_RE):
+    # Moses / DealerOn "Stock #:" / "Stock:" / "STOCK:" — never → Unavailable.
+    for stock_re in (MOSES_STOCK_HASH_RE, MOSES_STOCK_RE, MOSES_STOCK_UPPER_RE):
         moses = stock_re.search(scrubbed)
         if moses:
             cleaned = _clean_stock_candidate(moses.group(1))

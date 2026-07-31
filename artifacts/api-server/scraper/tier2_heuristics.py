@@ -11,11 +11,12 @@ from .schema import VIN_RE, normalize_vehicle
 from .stock import detect_in_transit, extract_stock_from_html, resolve_stock_number
 from .tier1_dom import bind_vdp_anchors
 
+# moses_layout.txt containers: vehicle-card--mod, srp-inventory, inventory_list
 _CONTAINER_RE = re.compile(
     r'<(?P<tag>div|li|article|section|tr)[^>]+(?:'
-    r'class=["\'][^"\']*(?:vehicle|inventory|card|listing|result|srp)[^"\']*["\']|'
+    r'class=["\'][^"\']*(?:vehicle-card|vehicle|inventory|card|listing|result|srp)[^"\']*["\']|'
     r'id=["\'][^"\']*(?:srp|inventory|vehicle|results)[^"\']*["\']'
-    r')[^>]*>(?P<body>[\s\S]{80,6000}?)</(?P=tag)>',
+    r')[^>]*>(?P<body>[\s\S]{80,14000}?)</(?P=tag)>',
     re.I,
 )
 

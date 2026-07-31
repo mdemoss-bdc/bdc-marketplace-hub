@@ -67,6 +67,29 @@ _DATA_MILES_RE = re.compile(
     re.I,
 )
 _DATA_PRICE_RE = re.compile(r'data-(?:price|internet-price|msrp)=["\'](\d+)["\']', re.I)
+# moses_layout.txt VDP / SRP pricing + color DOM
+_HIGHLIGHT_AMOUNT_RE = re.compile(
+    r'class=["\'][^"\']*\bvehiclePricingHighlightAmount\b[^"\']*["\'][^>]*>'
+    r'\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})\s*<',
+    re.I,
+)
+_PRICE_BLOC_VALUE_RE = re.compile(
+    r'class=["\'][^"\']*\bpriceBlocItemPriceValue\b[^"\']*["\'][^>]*>'
+    r'\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})\s*<',
+    re.I,
+)
+_COLORS_EXT_VALUE_RE = re.compile(
+    r'class=["\'][^"\']*\bvehicle-colors__ext\b[^"\']*["\'][^>]*>'
+    r'[\s\S]{0,400}?'
+    r'class=["\'][^"\']*\bvehicle-colors__value\b[^"\']*["\'][^>]*>'
+    r'\s*([^<]{2,48})\s*<',
+    re.I,
+)
+_VEHICLE_MILEAGE_RE = re.compile(
+    r'class=["\'][^"\']*\bvehicle-mileage\b[^"\']*["\'][^>]*>'
+    r'\s*([0-9,]+)',
+    re.I,
+)
 
 DEFAULT_MAX_FETCHES = 40
 DEFAULT_WORKERS = 8
@@ -232,27 +255,30 @@ def extract_from_vdp_html(html: str, *, condition: str = "Used") -> dict[str, An
                     break
 
     if not out.get("exterior_color"):
-        cm = _DATA_COLOR_RE.search(text)
+        cm = _COLORS_EXT_VALUE_RE.search(text) or _DATA_COLOR_RE.search(text)
         if cm:
             c = clean_text(cm.group(1))
             if c and c.lower() not in {"n/a", "none", "unknown", "select"}:
                 out["exterior_color"] = c
 
     if not out.get("mileage"):
-        mm = _DATA_MILES_RE.search(text)
+        mm = _VEHICLE_MILEAGE_RE.search(text) or _DATA_MILES_RE.search(text)
         if mm:
             n = _digits(mm.group(1))
             if n > 0:
                 out["mileage"] = n
 
     if not out.get("price"):
-        for m in _DATA_PRICE_RE.finditer(text):
+        for rx in (_HIGHLIGHT_AMOUNT_RE, _PRICE_BLOC_VALUE_RE, _DATA_PRICE_RE):
+            m = rx.search(text)
+            if not m:
+                continue
             n = _digits(m.group(1))
             if n >= 500:
                 out["price"] = n
                 break
 
-    # 4) Same Stock: / Ext. / mileage / price patterns used on SRP cards
+    # 4) Same Stock #: / Ext. / mileage / price patterns used on SRP cards
     if not out.get("stock_number"):
         stock = extract_stock_from_html(text)
         if stock:

@@ -33,8 +33,9 @@ _VOID = frozenset({
     "link", "meta", "param", "source", "track", "wbr",
 })
 
+# moses_layout.txt: vehicle-card / vehicle-card--mod (DealerOn Sephora SRP)
 _CARD_CLASS_RE = re.compile(
-    r"(?:^|[\s_-])(?:srp-vehicle-card|vehicle-card|inventory-item|"
+    r"(?:^|[\s_-])(?:srp-vehicle-card|vehicle-card(?:--mod)?|inventory-item|"
     r"inventory-card|vehicle-listing|srp-card|listing-card|"
     r"vdp-card|result-item|vehicle-result)(?:$|[\s_-])",
     re.IGNORECASE,
@@ -106,11 +107,14 @@ class _VehicleCardCollector(html.parser.HTMLParser):
         return {k.lower(): (v or "") for k, v in attrs}
 
     def _looks_like_card(self, tag: str, d: dict[str, str]) -> bool:
+        class_attr = d.get("class", "")
+        # moses_layout.txt ships skeleton placeholders before SPA hydrate.
+        if re.search(r"\bskeleton\b", class_attr, re.I):
+            return False
         if d.get("data-vin"):
             return True
         if d.get("data-vehicle") or d.get("data-vehicle-id"):
             return True
-        class_attr = d.get("class", "")
         if _CARD_CLASS_RE.search(class_attr):
             return True
         # Broad data-* inventory markers used by DealerOn / DDC / etc.
@@ -233,31 +237,55 @@ class _VehicleCardCollector(html.parser.HTMLParser):
                 m = _VIN_RE.search(blob)
                 if m:
                     self._cur["vin"] = m.group(1).upper()
-            # Moses / DealerOn class + label fallbacks when data-* attrs empty.
+            # Moses / DealerOn (moses_layout.txt) class + label fallbacks.
             if not self._cur.get("stock_number"):
                 sm = re.search(
-                    r'class=["\'][^"\']*\b(?:stock-number|stock)\b[^"\']*["\'][^>]*>\s*'
-                    r'(?:Stock\s*:\s*)?([A-Za-z0-9]{3,15})\s*<',
+                    r'identifiers__label[^>]*>\s*Stock\s*#?\s*:?\s*</[^>]+>\s*'
+                    r'<[^>]*identifiers__value[^>]*>\s*([A-Za-z0-9]{3,15})\s*<',
                     html_frag,
                     re.I,
-                ) or re.search(r"Stock:\s*([A-Za-z0-9]+)", blob, re.I)
+                ) or re.search(
+                    r'class=["\'][^"\']*\b(?:stock-number|stock)\b[^"\']*["\'][^>]*>\s*'
+                    r'(?:Stock\s*#?\s*:?\s*)?([A-Za-z0-9]{3,15})\s*<',
+                    html_frag,
+                    re.I,
+                ) or re.search(r"Stock\s*#?\s*:\s*([A-Za-z0-9]+)", blob, re.I)
                 if sm:
                     self._cur["stock_number"] = sm.group(1).strip()
             if not self._cur.get("exterior_color"):
                 cm = re.search(
-                    r'class=["\'][^"\']*\b(?:ext-color|exterior-color)\b[^"\']*["\'][^>]*>\s*'
-                    r'([^<]{2,48})\s*<',
+                    r'vehicle-colors__ext[^>]*>[\s\S]{0,300}?'
+                    r'vehicle-colors__value[^>]*>\s*([^<]{2,48})\s*<',
+                    html_frag,
+                    re.I,
+                ) or re.search(
+                    r'class=["\'][^"\']*\b(?:ext-color|exterior-color|vehicle-colors__value)\b'
+                    r'[^"\']*["\'][^>]*>\s*([^<]{2,48})\s*<',
                     html_frag,
                     re.I,
                 ) or re.search(r'data-color=["\']([^"\']+)["\']', html_frag, re.I)
                 if cm:
                     self._cur["exterior_color"] = cm.group(1).strip()
             if not self._cur.get("mileage"):
-                mm = re.search(r"([0-9,]+)\s*(?:mi\.?|miles)\b", blob, re.I)
+                mm = re.search(
+                    r'class=["\'][^"\']*\bvehicle-mileage\b[^"\']*["\'][^>]*>\s*([0-9,]+)',
+                    html_frag,
+                    re.I,
+                ) or re.search(r"([0-9,]+)\s*(?:mi\.?|miles)\b", blob, re.I)
                 if mm:
                     self._cur["mileage"] = mm.group(1)
             if not self._cur.get("price"):
                 pm = re.search(
+                    r'vehiclePricingHighlightAmount[^>]*>\s*\$?\s*'
+                    r'([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})',
+                    html_frag,
+                    re.I,
+                ) or re.search(
+                    r'priceBlocItemPriceValue[^>]*>\s*\$?\s*'
+                    r'([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})',
+                    html_frag,
+                    re.I,
+                ) or re.search(
                     r"(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*"
                     r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})",
                     blob,
