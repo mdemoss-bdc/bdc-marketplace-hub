@@ -1,18 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "cd ../.. && pnpm install",
+  "installCommand": "cd ../.. && pnpm install --no-frozen-lockfile",
   "buildCommand": "cd ../.. && pnpm run build",
   "outputDirectory": "../../dist",
-  "functions": {
-    "api/index.js": {
-      "includeFiles": "../../api/**"
-    }
-  },
   "rewrites": [
-    {
-      "source": "/tiktok-developers-site-verification.html",
-      "destination": "/api/index?__route=tiktok-developers-site-verification.html"
-    },
     {
       "source": "/api",
       "destination": "/api/index"

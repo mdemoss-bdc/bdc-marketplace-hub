@@ -1,16 +1,10 @@
-# Python engine + local DBs are never deployed to Vercel from this package.
 **/*.py
 **/*.pyc
 **/__pycache__/
 **/*.db
 **/*.db-*
-bdc_production.db
-playwright_scraper.py
 scraper/
-express-entry/
+playwright_scraper.py
 dist/
 node_modules/
-.venv/
-venv/
 tests/
-*.tsbuildinfo

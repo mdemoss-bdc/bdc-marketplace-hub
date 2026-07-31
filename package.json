@@ -15,12 +15,7 @@
     "start:api": "python artifacts/api-server/bdc_engine.py"
   },
   "private": true,
-  "packageManager": "pnpm@11.18.0",
-  "engines": {
-    "node": ">=20"
-  },
   "dependencies": {
-    "@vercel/functions": "^2.2.13",
     "bcryptjs": "^3.0.2",
     "express": "^4.22.2",
     "nodemailer": "^7.0.13",
