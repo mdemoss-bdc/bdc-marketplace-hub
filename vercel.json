@@ -6,6 +6,14 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/tiktok-developers-site-verification.txt",
+      "destination": "/api/index?__route=tiktok-developers-site-verification.txt"
+    },
+    {
+      "source": "/tiktok-developers-site-verification.txt/",
+      "destination": "/api/index?__route=tiktok-developers-site-verification.txt"
+    },
+    {
       "source": "/tiktok-developers-site-verification",
       "destination": "/api/index?__route=tiktok-developers-site-verification"
     },

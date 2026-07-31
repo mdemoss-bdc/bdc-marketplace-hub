@@ -144,15 +144,12 @@ mount('/api/scrape', require('../_routes/sync'));
 mount('/api/v1/sync', require('../_routes/sync'));
 mount('/api/v1/scrape', require('../_routes/sync'));
 
-// ── TikTok Developers domain verification (plain text at site root) ─────────
-mount(
-  '/tiktok-developers-site-verification',
-  require('../_routes/tiktok-developers-site-verification'),
-);
-mount(
-  '/api/tiktok-developers-site-verification',
-  require('../_routes/tiktok-developers-site-verification'),
-);
+// ── TikTok URL Property Verification (plain text at site root) ──────────────
+const tiktokVerify = require('../_routes/tiktok-developers-site-verification');
+mount('/tiktok-developers-site-verification.txt', tiktokVerify);
+mount('/tiktok-developers-site-verification', tiktokVerify);
+mount('/api/tiktok-developers-site-verification.txt', tiktokVerify);
+mount('/api/tiktok-developers-site-verification', tiktokVerify);
 
 // ── Marketplace publisher / inventory ───────────────────────────────────────
 mount('/api/marketplace/queue/status', require('../_routes/marketplace/queue/status'));

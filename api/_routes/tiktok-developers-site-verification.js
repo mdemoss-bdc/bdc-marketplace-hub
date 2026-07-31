@@ -1,6 +1,7 @@
 /**
+ * GET /tiktok-developers-site-verification.txt
  * GET /tiktok-developers-site-verification
- * TikTok Developers domain verification — exact text/plain body.
+ * TikTok URL Property Verification — exact text/plain body.
  */
 const BODY =
   'tiktok-developers-site-verification=kuNRyNnbQ1VmMSCYfvKT7kqGHbLlaTX7';
