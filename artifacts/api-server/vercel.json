@@ -5,10 +5,6 @@
   "outputDirectory": "../../dist",
   "rewrites": [
     {
-      "source": "/tiktok-developers-site-verification.html",
-      "destination": "/api/index?__route=tiktok-developers-site-verification.html"
-    },
-    {
       "source": "/api",
       "destination": "/api/index"
     },

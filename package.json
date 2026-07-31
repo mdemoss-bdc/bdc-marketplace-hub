@@ -15,22 +15,13 @@
     "start:api": "python artifacts/api-server/bdc_engine.py"
   },
   "private": true,
-  "packageManager": "pnpm@11.18.0",
-  "engines": {
-    "node": ">=20"
-  },
   "dependencies": {
-    "@vercel/functions": "^2.2.13",
     "bcryptjs": "^3.0.2",
-    "cheerio": "^1.1.2",
     "express": "^4.22.2",
-    "he": "^1.2.0",
     "nodemailer": "^7.0.13",
-    "pg": "^8.22.0",
-    "zod": "^3.25.76"
+    "pg": "^8.22.0"
   },
   "devDependencies": {
-    "@types/he": "^1.2.3",
     "prettier": "^3.9.5",
     "typescript": "~5.9.3"
   }

@@ -205,30 +205,7 @@ async function fetchListingPageVehicles(url, condition, dealerName = '') {
     console.log(
       `[inventory-sync] adapter=${platform} url=${url} vehicles=${vehicles.length}`,
     );
-    let list = vehicles;
-    // Adaptive cheerio/he/zod pipeline (no Playwright) when adapters are thin.
-    if (list.length < 5) {
-      try {
-        const { extractInventory } = require('./scraper');
-        const adaptive = await extractInventory(html, url, {
-          condition,
-          minOk: 5,
-        });
-        if ((adaptive.rows || []).length > list.length) {
-          console.log(
-            `[inventory-sync] adaptive tier=${adaptive.tier} reason=${adaptive.reason} ` +
-              `count=${adaptive.count} url=${url}`,
-          );
-          list = adaptive.rows;
-        }
-      } catch (adaptErr) {
-        console.warn(
-          '[inventory-sync] adaptive scraper skipped:',
-          adaptErr.message || adaptErr,
-        );
-      }
-    }
-    return list.map((v) => ({
+    return vehicles.map((v) => ({
       ...v,
       dealership_group: v.dealership_group || dealerName || '',
       condition: condition || v.condition || 'Used',
