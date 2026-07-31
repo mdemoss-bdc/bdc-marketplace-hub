@@ -1,19 +1,22 @@
-<!-- Representative Moses / DealerOn Sephora SRP card.
-     Classes mapped from moses_layout.txt (UTF-16 dump of mosescars.com
-     search-all-new-inventory): vehicle-card--mod, vehicle-identifiers*,
-     vehicle-mileage, vehicle-colors*, vehiclePricingStack / Highlight*,
-     priceBlocItem*, vehicle-title*. -->
+<!-- Real Moses / DealerOn Sephora SRP card structure.
+     Classes from moses_layout.txt (UTF-16 dump of mosescars.com
+     search-all-new-inventory CSS): vehicle-card--mod, vehicle-identifiers*,
+     vehicle-mileage, vehicle-colors*, vehiclePricingHighlight*, priceBloc*.
+     Field values from live Cosmos VehicleCard for VIN WBY43EJ00RCR48753
+     (dump is skeleton-only; inventory arrives via dlron-srp-model → Cosmos API).
+     PriceStak classes match live Wasabi BuyContent HTML. -->
 <div class="vehicle-card vehicle-card--mod"
-     data-vin="1HGCV1F38PA123456"
-     data-year="2025"
-     data-make="Honda"
-     data-model="Civic">
+     data-vin="WBY43EJ00RCR48753"
+     data-year="2024"
+     data-make="BMW"
+     data-model="i7"
+     data-stocknumber="WC40225">
   <div class="vehicle-card__body">
     <div class="vehicle-card__image">
       <div class="vehicle-image">
         <img class="vehicle-image__single-image"
-             src="https://cdn.dlron.us/photos/2025-honda-civic.jpg"
-             alt="2025 Honda Civic Sport">
+             src="https://cdn.dlron.us/photos/2024-bmw-i7.jpg"
+             alt="2024 BMW i7 eDrive50">
       </div>
     </div>
     <div class="vehicle-card__overview">
@@ -21,31 +24,31 @@
         <div class="vehicle-overview__title">
           <div class="vehicle-title">
             <a class="vehicle-title__text"
-               href="/new-St+Albans-2025-Honda-Civic-Sport-1HGCV1F38PA123456">
+               href="/new-St+Albans-2024-BMW-i7-eDrive50-WBY43EJ00RCR48753">
               <span class="vehicle-title__year-make-model">
-                <span class="vehicle-title__year">2025</span>
-                <span class="vehicle-title__make-model">Honda Civic</span>
+                <span class="vehicle-title__year">2024</span>
+                <span class="vehicle-title__make-model">BMW i7</span>
               </span>
-              <span class="vehicle-title__trim">Sport</span>
+              <span class="vehicle-title__trim">eDrive50</span>
             </a>
           </div>
         </div>
         <div class="vehicle-overview__identifiers">
           <div class="vehicle-identifiers">
             <span class="vehicle-identifiers__label">Stock #:</span>
-            <span class="vehicle-identifiers__value">HT60456</span>
+            <span class="vehicle-identifiers__value">WC40225</span>
             <span class="vehicle-identifiers__label">VIN:</span>
-            <span class="vehicle-identifiers__value">1HGCV1F38PA123456</span>
+            <span class="vehicle-identifiers__value">WBY43EJ00RCR48753</span>
           </div>
         </div>
         <div class="vehicle-overview__specs">
-          <div class="vehicle-mileage">12 mi</div>
+          <div class="vehicle-mileage">4,755 mi</div>
           <div class="vehicle-overview__colors">
             <div class="vehicle-colors">
               <div class="vehicle-colors__ext">
                 <span class="vehicle-colors__icon vehicle-colors__icon--rounded"></span>
                 <span class="vehicle-colors__label">Ext.</span>
-                <span class="vehicle-colors__value">Crystal Black Pearl</span>
+                <span class="vehicle-colors__value">Space Silver Metallic</span>
               </div>
               <div class="vehicle-colors__int">
                 <span class="vehicle-colors__label">Int.</span>
@@ -60,7 +63,7 @@
       <ul class="specs__list">
         <li class="specs__item">
           <span class="specs__color-label">Ext.</span>
-          <span class="specs__value">Crystal Black Pearl</span>
+          <span class="specs__value">Space Silver Metallic</span>
         </li>
       </ul>
     </div>
@@ -68,14 +71,18 @@
       <div class="vehiclePricingStack" data-pricestak-main>
         <div class="vehiclePricingHighlights singlePrice">
           <div class="vehiclePricingHighlight featuredPrice">
-            <div class="vehiclePricingHighlightLabel">MOSES PRICE</div>
-            <div class="vehiclePricingHighlightAmount">$32,995</div>
+            <div class="vehiclePricingHighlightLabel">FINAL PRICE</div>
+            <div class="vehiclePricingHighlightAmount">$111,020</div>
           </div>
         </div>
         <ul class="list-unstyled priceBlock priceBlockResponsiveDesktop">
           <li class="priceBlockItem priceBlockItemPrice">
-            <span class="priceBlocItemPriceLabel">MOSES PRICE</span>
-            <span class="priceBlocItemPriceValue">$32,995</span>
+            <span class="priceBlocItemPriceLabel">MSRP:</span>
+            <span class="priceBlocItemPriceValue">$110,445</span>
+          </li>
+          <li class="priceBlockItem priceBlockItemPrice">
+            <span class="priceBlocItemPriceLabel">FINAL PRICE</span>
+            <span class="priceBlocItemPriceValue">$111,020</span>
           </li>
         </ul>
       </div>

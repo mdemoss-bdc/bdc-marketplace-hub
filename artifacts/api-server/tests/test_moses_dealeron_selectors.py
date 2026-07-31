@@ -144,12 +144,12 @@ class TestMosesLayoutFixture(unittest.TestCase):
             },
             flush=True,
         )
-        self.assertEqual(v["stockNumber"], "HT60456")
+        self.assertEqual(v["stockNumber"], "WC40225")
         self.assertNotEqual(v["stockNumber"], MISSING_STOCK)
-        self.assertEqual(v["exteriorColor"], "Crystal Black Pearl")
-        self.assertEqual(v["price"], 32995)
-        self.assertEqual(v["mileage"], 12)
-        self.assertEqual(v["vin"], "1HGCV1F38PA123456")
+        self.assertEqual(v["exteriorColor"], "Space Silver Metallic")
+        self.assertEqual(v["price"], 111020)
+        self.assertEqual(v["mileage"], 4755)
+        self.assertEqual(v["vin"], "WBY43EJ00RCR48753")
 
     def test_pipeline_extract_inventory_fixture(self):
         result = extract_inventory(
@@ -161,18 +161,18 @@ class TestMosesLayoutFixture(unittest.TestCase):
         )
         self.assertGreaterEqual(result["count"], 1)
         v = result["vehicles"][0]
-        self.assertEqual(v["stockNumber"], "HT60456")
-        self.assertEqual(v["exteriorColor"], "Crystal Black Pearl")
-        self.assertEqual(v["price"], 32995)
-        self.assertEqual(v["mileage"], 12)
-        self.assertEqual(v["vin"], "1HGCV1F38PA123456")
+        self.assertEqual(v["stockNumber"], "WC40225")
+        self.assertEqual(v["exteriorColor"], "Space Silver Metallic")
+        self.assertEqual(v["price"], 111020)
+        self.assertEqual(v["mileage"], 4755)
+        self.assertEqual(v["vin"], "WBY43EJ00RCR48753")
 
     def test_layout_class_extractors(self):
         html = self.fixture
-        self.assertEqual(extract_stock_from_html(html), "HT60456")
-        self.assertEqual(fields_color(html), "Crystal Black Pearl")
-        self.assertEqual(fields_mileage(html, condition="New"), 12)
-        self.assertEqual(fields_price(html), 32995)
+        self.assertEqual(extract_stock_from_html(html), "WC40225")
+        self.assertEqual(fields_color(html), "Space Silver Metallic")
+        self.assertEqual(fields_mileage(html, condition="New"), 4755)
+        self.assertEqual(fields_price(html), 111020)
 
 
 class TestMosesStockSelectors(unittest.TestCase):
@@ -195,10 +195,10 @@ class TestMosesStockSelectors(unittest.TestCase):
         html4 = (
             '<div class="vehicle-identifiers">'
             '<span class="vehicle-identifiers__label">Stock #:</span>'
-            '<span class="vehicle-identifiers__value">HT60456</span>'
+            '<span class="vehicle-identifiers__value">WC40225</span>'
             "</div>"
         )
-        self.assertEqual(extract_stock_from_html(html4), "HT60456")
+        self.assertEqual(extract_stock_from_html(html4), "WC40225")
 
     def test_stock_never_falls_to_unavailable(self):
         stock = resolve_stock_number(
@@ -238,10 +238,10 @@ class TestMosesColorMileagePrice(unittest.TestCase):
             fields_color(
                 '<div class="vehicle-colors__ext">'
                 '<span class="vehicle-colors__label">Ext.</span>'
-                '<span class="vehicle-colors__value">Crystal Black Pearl</span>'
+                '<span class="vehicle-colors__value">Space Silver Metallic</span>'
                 "</div>"
             ),
-            "Crystal Black Pearl",
+            "Space Silver Metallic",
         )
 
     def test_mileage_mi_suffix(self):

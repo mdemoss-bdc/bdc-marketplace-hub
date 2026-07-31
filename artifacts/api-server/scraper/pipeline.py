@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
+from .cosmos import extract_cosmos_inventory, looks_like_skeleton_srp, parse_srp_config_from_html
 from .html_utils import fetch_html
 from .schema import normalize_vehicle, validate_batch
 from .stock import MISSING_STOCK
@@ -41,6 +42,38 @@ def extract_inventory(
 
     vehicles = extract_tier1(html, page_url, condition=cond)
     ok, why = validate_batch(vehicles, min_count=min_ok)
+
+    # DealerOn Cosmos / Wasabi: moses_layout.txt-style SPA shells have skeleton
+    # vehicle-card nodes and empty VehicleListModel — hydrate via SRP REST API
+    # using embedded <script id="dlron-srp-model"> config.
+    if (not ok or looks_like_skeleton_srp(html)) and parse_srp_config_from_html(html, page_url):
+        cosmos = extract_cosmos_inventory(
+            html,
+            page_url,
+            condition=cond,
+            max_pages=1,
+            page_size=24,
+        )
+        if cosmos:
+            by_vin = {v["vin"]: v for v in vehicles}
+            for v in cosmos:
+                prev = by_vin.get(v["vin"])
+                if not prev:
+                    by_vin[v["vin"]] = v
+                    continue
+                merged = dict(prev)
+                for k, val in v.items():
+                    if val in ("", 0, None, "N/A", "Unavailable"):
+                        continue
+                    if merged.get(k) in ("", 0, None, "N/A", "Unavailable"):
+                        merged[k] = val
+                by_vin[v["vin"]] = merged
+            vehicles = list(by_vin.values())
+            ok, why = validate_batch(vehicles, min_count=min_ok)
+            if ok:
+                tier_used = 1
+                reason = "cosmos_ok"
+
     if not ok:
         tier_used = 2
         reason = f"tier1_{why}"
