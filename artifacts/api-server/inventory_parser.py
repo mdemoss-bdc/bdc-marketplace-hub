@@ -20,10 +20,19 @@ PRICE_RE = re.compile(r"\$?\b\d{1,3}(?:,\d{3})*\b")
 PRICE_DOLLAR_RE = re.compile(r"\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b")
 MILEAGE_RE = re.compile(r"\b(\d{1,3}(?:,\d{3})*)\s*(?:mi|miles)\b", re.IGNORECASE)
 STOCK_LABELED_RE = re.compile(
-    r"\b(?:STK|STOCK|ID)\s*#?\s*([A-Z0-9]{4,10})\b", re.IGNORECASE
+    r"\b(?:Stock\s*#?\s*:|Stk\s*#?\s*:|Stock\s*Number\s*:|Stock\s*No\.?\s*:|"
+    r"STK\s*#?\s*:|STOCK\s*#|STK\s*#|STOCK|STK|ID)\s*#?\s*:?\s*"
+    r"([A-Z0-9][A-Z0-9\-_/]{2,14})\b",
+    re.IGNORECASE,
 )
 STOCK_RE = re.compile(
-    r"\b(?:STK|STOCK|ID)?\s*#?\s*([A-Z0-9]{4,10})\b", re.IGNORECASE
+    r"\b(?:STK|STOCK|ID)?\s*#?\s*:?\s*([A-Z0-9][A-Z0-9\-_/]{2,14})\b",
+    re.IGNORECASE,
+)
+_YEAR_ONLY_RE = re.compile(r"^(?:19|20)\d{2}$")
+_STOCK_PREFIX_RE = re.compile(
+    r"^(?:stock\s*(?:number|no\.?|#)?|stk\s*#?)\s*[:#]?\s*",
+    re.IGNORECASE,
 )
 # Year Make Model — standard keyword extraction from SRP headings.
 YMM_RE = re.compile(
@@ -122,20 +131,35 @@ def extract_mileage(text: str) -> int | None:
     return n
 
 
+def _clean_stock_candidate(raw: str) -> str | None:
+    """Strip labels; reject model years and full VINs."""
+    candidate = _STOCK_PREFIX_RE.sub("", scrub_raw_text(raw)).strip().upper()
+    candidate = re.split(r"[\s|,;]+", candidate, maxsplit=1)[0].strip()
+    if not candidate or candidate in {"N/A", "NA", "NONE", "-"}:
+        return None
+    if _YEAR_ONLY_RE.fullmatch(candidate):
+        return None
+    if len(candidate) == 17 and VIN_RE.fullmatch(candidate):
+        return None
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9\-_/]{2,14}", candidate):
+        return None
+    if not re.search(r"\d", candidate) and len(candidate) < 5:
+        return None
+    return candidate
+
+
 def extract_stock_number(text: str) -> str | None:
     scrubbed = scrub_raw_text(text)
     labeled = STOCK_LABELED_RE.search(scrubbed)
     if labeled:
-        candidate = labeled.group(1).upper()
-        if not VIN_RE.fullmatch(candidate):
-            return candidate
+        cleaned = _clean_stock_candidate(labeled.group(1))
+        if cleaned:
+            return cleaned
+    # Only accept unlabeled matches when they cannot be confused with a year.
     m = STOCK_RE.search(scrubbed)
     if not m:
         return None
-    candidate = m.group(1).upper()
-    if len(candidate) == 17 and VIN_RE.fullmatch(candidate):
-        return None
-    return candidate
+    return _clean_stock_candidate(m.group(1))
 
 
 def extract_year_make_model(text: str) -> dict[str, Any]:
@@ -249,13 +273,20 @@ def sanitize_vehicle_record(
     make = _as_str(vehicle.get("make")) or _as_str(parsed.get("make"))
     model = _as_str(vehicle.get("model")) or _as_str(parsed.get("model"))
 
-    stock = _as_str(vehicle.get("stock_number")).upper()
-    if not stock or (len(stock) == 17 and VIN_RE.fullmatch(stock)):
-        stock = parsed["stock_number"] or stock
-    else:
-        from_field = extract_stock_number(stock)
-        if from_field:
-            stock = from_field
+    stock = _clean_stock_candidate(
+        _as_str(vehicle.get("stock_number") or vehicle.get("stockNumber"))
+    ) or ""
+    if not stock:
+        stock = parsed["stock_number"] or ""
+    if stock and _YEAR_ONLY_RE.fullmatch(stock):
+        stock = ""
+    if stock and year and stock == str(year):
+        stock = ""
+    # Never use the full VIN as stock; last-8 only when nothing else exists.
+    if not stock and vin and len(vin) == 17 and VIN_RE.fullmatch(vin):
+        stock = vin[-8:]
+    elif stock and len(stock) == 17 and VIN_RE.fullmatch(stock):
+        stock = vin[-8:] if vin and len(vin) == 17 else ""
 
     out = dict(vehicle)
     out["vin"] = vin

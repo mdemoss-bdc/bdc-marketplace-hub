@@ -5844,6 +5844,7 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
                 'vin':            vin,
                 'stock_number':   (d.get('data-stock-number') or
                                    d.get('data-stocknumber') or
+                                   d.get('data-vin-stock') or
                                    d.get('data-stock-no') or
                                    d.get('data-stockno') or
                                    d.get('data-stock') or

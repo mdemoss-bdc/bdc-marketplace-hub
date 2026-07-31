@@ -7,8 +7,9 @@ const VIN_RE = /[A-HJ-NPR-Z0-9]{17}/i;
 const YEAR_RE = /\b(19|20)\d{2}\b/;
 const PRICE_RE = /\$?\b\d{1,3}(?:,\d{3})*\b/;
 const MILEAGE_RE = /\b(\d{1,3}(?:,\d{3})*)\s*(?:mi|miles)\b/i;
-const STOCK_LABELED_RE = /\b(?:STK|STOCK|ID)\s*#?\s*([A-Z0-9]{4,10})\b/i;
-const STOCK_RE = /\b(?:STK|STOCK|ID)?\s*#?\s*([A-Z0-9]{4,10})\b/i;
+const STOCK_LABELED_RE =
+  /\b(?:Stock\s*#?\s*:|Stk\s*#?\s*:|Stock\s*Number\s*:|Stock\s*No\.?\s*:|STK\s*#?\s*:|STOCK\s*#|STK\s*#|STOCK|STK|ID)\s*#?\s*:?\s*([A-Z0-9][A-Z0-9\-_/]{2,14})\b/i;
+const STOCK_RE = /\b(?:STK|STOCK|ID)?\s*#?\s*:?\s*([A-Z0-9][A-Z0-9\-_/]{2,14})\b/i;
 const YMM_RE =
   /\b((?:19|20)\d{2})\s+([A-Za-z][A-Za-z0-9\-]+)\s+([A-Za-z0-9][A-Za-z0-9 \-/]{1,40})/;
 const HTML_TAG_RE = /<[^>]+>/g;

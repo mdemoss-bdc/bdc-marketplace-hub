@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .stock import resolve_stock_number, sanitize_stock_number
+
 VIN_RE = re.compile(r"\b([A-HJ-NPR-Z0-9]{17})\b", re.I)
 
 REQUIRED_KEYS = (
@@ -85,16 +87,28 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
         price = 0
 
     mileage = _digits(g("mileage", "miles", "odometer", "distance"))
-    stock = _str(g("stockNumber", "stock_number", "stock", "stockNo", "stock_no"))
-    if not stock or re.fullmatch(r"(?:19|20)\d{2}", stock):
-        stock = "N/A"
-
     make = _str(g("make", "manufacturer"))
     model = _str(g("model", "modelName"))
     trim = _str(g("trim", "trimLevel", "series"))
     color = _str(g("exteriorColor", "exterior_color", "extColor", "color"))
     link = _str(g("link", "vdp_url", "vdpUrl", "url", "href"))
     image = _str(g("imageUrl", "image_url", "image", "photo", "thumbnail"))
+
+    # Strict stock: reject model years / full VINs; never use year as stock.
+    stock = resolve_stock_number(
+        raw,
+        _str(g("_html", "raw_html", "html")),
+        vin=vin,
+        year=year,
+    )
+    if stock == "N/A":
+        # Still try a direct sanitize of an explicit field (no VIN fallback).
+        direct = sanitize_stock_number(
+            g("stockNumber", "stock_number", "stock", "stockNo", "stock_no", "sku"),
+            vin=vin,
+            year=year,
+        )
+        stock = direct or "N/A"
 
     cond = (condition or "Used").strip().title()
     if cond not in ("New", "Used"):

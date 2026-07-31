@@ -9,6 +9,7 @@ from urllib.parse import urljoin
 
 from .html_utils import absolutize, clean_text, decode_entities
 from .schema import VIN_RE, normalize_vehicle
+from .stock import extract_stock_from_html, resolve_stock_number
 
 _LD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
@@ -23,7 +24,8 @@ _CARD_RE = re.compile(
 )
 _ATTR_RE = re.compile(
     r'data-(?P<k>vin|year|make|model|trim|price|internet-price|final-price|'
-    r'stocknumber|stock-number|stock|mileage|miles|extcolor|exterior-color|'
+    r'stocknumber|stock-number|vin-stock|stock-no|stockno|stocknum|stock|'
+    r'mileage|miles|extcolor|exterior-color|'
     r'color|vehicle)\s*=\s*["\'](?P<v>[^"\']+)["\']',
     re.I,
 )
@@ -79,7 +81,16 @@ def _walk_ld(node: Any, out: list[dict], condition: str) -> None:
                 if isinstance(node.get("image"), list) and node.get("image")
                 else node.get("image")
             ),
-            "stockNumber": node.get("sku") or node.get("mpn"),
+            "stockNumber": resolve_stock_number(
+                {
+                    "stockNumber": node.get("sku") or node.get("mpn") or node.get("productID"),
+                    "sku": node.get("sku"),
+                    "mpn": node.get("mpn"),
+                },
+                "",
+                vin=str(node.get("vehicleIdentificationNumber") or node.get("vin") or ""),
+                year=node.get("vehicleModelDate") or node.get("modelDate") or 0,
+            ),
         }
         norm = normalize_vehicle(raw, condition=condition)
         if norm:
@@ -133,17 +144,34 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
                 if href and href != base_url:
                     link = href
                     break
+        vin = attrs.get("vin") or ""
+        year = attrs.get("year") or 0
+        # Selector priority: data-* → DOM class → labeled text (never year/VIN).
+        stock = extract_stock_from_html(card, vin=vin, year=year) or resolve_stock_number(
+            {
+                "stockNumber": (
+                    attrs.get("stocknumber")
+                    or attrs.get("vinstock")
+                    or attrs.get("stockno")
+                    or attrs.get("stock")
+                ),
+            },
+            card,
+            vin=vin,
+            year=year,
+        )
         raw = {
-            "vin": attrs.get("vin"),
-            "year": attrs.get("year"),
+            "vin": vin,
+            "year": year,
             "make": attrs.get("make"),
             "model": attrs.get("model"),
             "trim": attrs.get("trim"),
             "price": attrs.get("price") or attrs.get("internetprice") or attrs.get("finalprice"),
             "mileage": attrs.get("mileage") or attrs.get("miles"),
             "exteriorColor": attrs.get("extcolor") or attrs.get("exteriorcolor") or attrs.get("color"),
-            "stockNumber": attrs.get("stocknumber") or attrs.get("stock"),
+            "stockNumber": stock,
             "link": link,
+            "_html": card,
         }
         img_m = re.search(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', card, re.I)
         if img_m:

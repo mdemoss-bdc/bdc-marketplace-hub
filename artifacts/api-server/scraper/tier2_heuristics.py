@@ -7,6 +7,7 @@ from typing import Any
 
 from .html_utils import absolutize, clean_text, decode_entities
 from .schema import VIN_RE, normalize_vehicle
+from .stock import extract_stock_from_html, resolve_stock_number
 from .tier1_dom import bind_vdp_anchors
 
 _CONTAINER_RE = re.compile(
@@ -23,7 +24,6 @@ _PRICE_RE = re.compile(
     re.I,
 )
 _MILES_RE = re.compile(r'([\d,]{1,7})\s*(?:mi|miles|odometer)\b', re.I)
-_STOCK_RE = re.compile(r'(?:stock|stk)\s*#?\s*([A-Z0-9\-_/]{3,16})', re.I)
 _YMM_RE = re.compile(
     r'\b((?:19|20)\d{2})\s+([A-Z][A-Za-z0-9\-]+)\s+([A-Z0-9][A-Za-z0-9\-]+(?:\s+[A-Z0-9][A-Za-z0-9\-]*)?)',
 )
@@ -63,17 +63,18 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         if mm:
             mileage = int(mm.group(1).replace(",", ""))
 
-        stock = ""
-        sm = _STOCK_RE.search(plain)
-        if sm:
-            stock = sm.group(1).upper()
-
         year, make, model = 0, "", ""
         ym = _YMM_RE.search(plain)
         if ym:
             year = int(ym.group(1))
             make = ym.group(2)
             model = ym.group(3).split()[0] if ym.group(3) else ""
+
+        # Stock: data-* / DOM class / "Stock #:" labels BEFORE generic fallbacks.
+        # Never accept a bare model year as the stock number.
+        stock = extract_stock_from_html(body, vin=vin, year=year) or resolve_stock_number(
+            {}, body, vin=vin, year=year,
+        )
 
         color = ""
         cm = _COLOR_RE.search(plain)
@@ -109,6 +110,7 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
             "exteriorColor": color,
             "link": link,
             "imageUrl": image,
+            "_html": body,
         }
         norm = normalize_vehicle(raw, condition=condition)
         if norm:
