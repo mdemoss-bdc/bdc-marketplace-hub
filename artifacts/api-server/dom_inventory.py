@@ -108,6 +108,8 @@ class _VehicleCardCollector(html.parser.HTMLParser):
     def _looks_like_card(self, tag: str, d: dict[str, str]) -> bool:
         if d.get("data-vin"):
             return True
+        if d.get("data-vehicle") or d.get("data-vehicle-id"):
+            return True
         class_attr = d.get("class", "")
         if _CARD_CLASS_RE.search(class_attr):
             return True
@@ -153,16 +155,20 @@ class _VehicleCardCollector(html.parser.HTMLParser):
                 "make": d.get("data-make") or "",
                 "model": d.get("data-model") or "",
                 "trim": d.get("data-trim") or "",
-                "mileage": d.get("data-mileage") or d.get("data-miles") or "",
+                "mileage": d.get("data-mileage") or d.get("data-miles") or d.get("data-odometer") or "",
                 "price": (
                     d.get("data-price")
                     or d.get("data-internet-price")
                     or d.get("data-internetprice")
+                    or d.get("data-final-price")
+                    or d.get("data-finalprice")
                     or ""
                 ),
                 "exterior_color": (
                     d.get("data-exterior-color")
                     or d.get("data-exteriorcolor")
+                    or d.get("data-extcolor")
+                    or d.get("data-ext-color")
                     or d.get("data-color")
                     or ""
                 ),

@@ -1526,10 +1526,23 @@ function dealerBrandingFromUrl(inventoryUrl: string, dealerName = '') {
   };
 }
 
-function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId = '', commerceCatalogId = '', onOpenMetaGuide }: {
+function InventoryView({
+  token,
+  dealerName = '',
+  inventoryUrl = '',
+  inventoryUrlUsed = '',
+  inventoryUrlNew = '',
+  inventoryLocations = [],
+  feedUserId = '',
+  commerceCatalogId = '',
+  onOpenMetaGuide,
+}: {
   token: string;
   dealerName?: string;
   inventoryUrl?: string;
+  inventoryUrlUsed?: string;
+  inventoryUrlNew?: string;
+  inventoryLocations?: InventoryLocationConfig[];
   feedUserId?: string;
   commerceCatalogId?: string;
   onOpenMetaGuide: () => void;
@@ -1755,24 +1768,54 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     setSyncProgress({ synced: 0, total: 0, enriched: 0 });
     setSyncSessionId('');
 
-    // Pass configured Target URLs so the scraper never falls back to a hardcoded dealer.
+    // Pass live form Target URLs (+ cache) so the scraper never falls back to Moses.
     const cached = readCachedSettings();
-    const locs = Array.isArray(cached?.inventory_locations)
+    const locsFromProps = (inventoryLocations || [])
+      .map((loc) => ({
+        location_name: loc.location_name.trim(),
+        inventory_url_new: loc.inventory_url_new.trim(),
+        inventory_url_used: loc.inventory_url_used.trim(),
+        csv_enabled: Boolean(loc.csv_enabled),
+        csv_url: loc.csv_url.trim(),
+      }))
+      .filter((loc) =>
+        loc.location_name
+        || loc.inventory_url_new
+        || loc.inventory_url_used
+        || loc.csv_url
+        || loc.csv_enabled,
+      );
+    const locsFromCache = Array.isArray(cached?.inventory_locations)
       ? (cached.inventory_locations as Array<Record<string, unknown>>)
       : [];
+    const locs = locsFromProps.length ? locsFromProps : locsFromCache;
+    const usedUrl = String(
+      inventoryUrlUsed
+      || cached?.inventory_url_used
+      || locs[0]?.inventory_url_used
+      || '',
+    ).trim();
+    const newUrl = String(
+      inventoryUrlNew
+      || cached?.inventory_url_new
+      || locs[0]?.inventory_url_new
+      || '',
+    ).trim();
     const syncBody = {
-      inventory_url_used:
-        String(cached?.inventory_url_used || locs[0]?.inventory_url_used || ''),
-      inventory_url_new:
-        String(cached?.inventory_url_new || locs[0]?.inventory_url_new || ''),
+      inventory_url_used: usedUrl,
+      inventory_url_new: newUrl,
+      usedInventoryUrl: usedUrl,
+      baseInventoryUrl: newUrl || usedUrl,
       inventory_locations: locs,
-      dealer_name: String(cached?.dealer_name || ''),
+      dealer_name: String(dealerName || cached?.dealer_name || ''),
     };
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
       const startRes = await fetch(`${API_BASE}/sync`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(syncBody),
       });
       const startData = await startRes.json().catch(() => ({}));
@@ -3705,6 +3748,9 @@ export default function MarketplaceHub() {
           token={token!}
           dealerName={dealerName}
           inventoryUrl={primaryUsedUrl || primaryNewUrl}
+          inventoryUrlUsed={primaryUsedUrl}
+          inventoryUrlNew={primaryNewUrl}
+          inventoryLocations={locationConfigs}
           feedUserId={feedUserId}
           commerceCatalogId={commerceCatalogId}
           onOpenMetaGuide={() => setShowMetaGuide(true)}

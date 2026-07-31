@@ -961,10 +961,18 @@ def resolve_scrape_locations(
     settings: dict[str, Any] | None,
     url_used: str = "",
     url_new: str = "",
+    inventory_locations: Any = None,
 ) -> list[dict[str, Any]]:
-    """Prefer multi-location configs; fall back to legacy single used/new URLs."""
+    """Prefer multi-location configs; fall back to legacy single used/new URLs.
+
+    ``inventory_locations`` / ``url_used`` / ``url_new`` from the sync request
+    body win over stale DB values so Sync All always hits the saved rooftop URLs.
+    """
     settings = settings or {}
-    locs = normalize_inventory_locations(settings.get("inventory_locations"))
+    locs = normalize_inventory_locations(
+        inventory_locations if inventory_locations is not None
+        else settings.get("inventory_locations")
+    )
     if locs:
         return locs
     used = (url_used or settings.get("inventory_url_used") or "").strip()

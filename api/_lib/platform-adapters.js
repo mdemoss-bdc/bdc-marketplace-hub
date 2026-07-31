@@ -59,8 +59,22 @@ const PLATFORM_SIGS = {
 };
 
 const PLATFORM_URL_SIGS = {
-  dealeron: ['.aspx', 'searchnew', 'searchused', 'dlron.us', 'dealeron'],
-  dealercom: ['dealer.com', 'ddc'],
+  // Dealer.com paths (University Ford etc.) before DealerOn — bare .aspx is ambiguous.
+  dealercom: [
+    'new-cars.aspx',
+    'used-cars.aspx',
+    'new-inventory.aspx',
+    'used-inventory.aspx',
+    'dealer.com',
+    '/ddc/',
+  ],
+  dealeron: [
+    'searchnew.aspx',
+    'searchused.aspx',
+    'vehicledetails.aspx',
+    'dlron.us',
+    'dealeron',
+  ],
   dealerspike: ['dealerspike'],
   sincro: ['sincro', 'ansira'],
 };
@@ -442,25 +456,32 @@ function detectPlatform(html, url = '') {
   const urlL = String(url || '').toLowerCase();
   const head = String(html || '').slice(0, 120_000).toLowerCase();
 
-  for (const [platform, sigs] of Object.entries(PLATFORM_URL_SIGS)) {
-    if (sigs.some((s) => urlL.includes(s))) return platform;
-  }
-
-  // Ordered checks matching user-requested signature priority
-  const ordered = ['dealercom', 'dealeron', 'dealerspike', 'sincro'];
-  for (const platform of ordered) {
-    const sigs = PLATFORM_SIGS[platform] || [];
-    if (sigs.some((s) => head.includes(s) || urlL.includes(s))) return platform;
-  }
-
-  // Extra Dealer.com markers called out explicitly
+  // HTML Dealer.com markers first — University Ford uses .aspx paths that
+  // previously matched DealerOn's broad URL heuristics.
   if (
     head.includes('ddc.inventory') ||
     head.includes('ddc.pagedata') ||
-    head.includes('dealer.com')
+    head.includes('window.ddc') ||
+    head.includes('static.dealer.com') ||
+    head.includes('cdn.dealer.com') ||
+    head.includes('dealer.com/js/') ||
+    head.includes('data-ddc-widget') ||
+    head.includes('ddc-wrapper')
   ) {
     return 'dealercom';
   }
+
+  const ordered = ['dealercom', 'dealeron', 'dealerspike', 'sincro'];
+  for (const platform of ordered) {
+    const sigs = PLATFORM_SIGS[platform] || [];
+    if (sigs.some((s) => head.includes(s))) return platform;
+  }
+
+  for (const platform of ordered) {
+    const sigs = PLATFORM_URL_SIGS[platform] || [];
+    if (sigs.some((s) => urlL.includes(s))) return platform;
+  }
+
   if (head.includes('dealeron') || /vehicle-card[^>]*data-vin/i.test(html)) {
     return 'dealeron';
   }
@@ -474,7 +495,18 @@ function detectPlatform(html, url = '') {
   return 'unknown';
 }
 
-/** Dealer.com — DDC.inventory / window.DDC JSON blobs */
+/** Pull nested Dealer.com `.stockNumber .value` style fields from a card slice. */
+function ddcClassValue(slice, className) {
+  const re = new RegExp(
+    `class=["'][^"']*${className}[^"']*["'][^>]*>\\s*` +
+      `(?:<[^>]+class=["'][^"']*value[^"']*["'][^>]*>\\s*)?([^<]{1,48})`,
+    'i',
+  );
+  const m = String(slice || '').match(re);
+  return m?.[1]?.trim() || '';
+}
+
+/** Dealer.com — DDC JSON blobs + `.vehicle-card` / `[data-vehicle]` DOM cards */
 function parseDealerCom(html, pageUrl, condition) {
   const blobs = [
     ...extractAssignedObject(html, String.raw`DDC\.inventory\s*=\s*`),
@@ -502,6 +534,51 @@ function parseDealerCom(html, pageUrl, condition) {
       }
     }
   }
+
+  // DOM card pass — University Ford / DDC SRP markup
+  const cardRe =
+    /<(?:div|li|article|section)[^>]*(?:class=["'][^"']*vehicle-card[^"']*["']|data-vehicle(?:=|[\s>])|data-vin=["'][^"']+["'])[^>]*>[\s\S]{0,5000}?<\/(?:div|li|article|section)>/gi;
+  let cm;
+  while ((cm = cardRe.exec(html))) {
+    const slice = cm[0];
+    const fields = fieldsFromCardHtml(slice);
+    const vin =
+      attrFromHtml(slice, ['vin']) ||
+      (slice.match(VIN_RE) || [])[1] ||
+      '';
+    if (!vin) continue;
+    const v = normalizeVehicle(
+      {
+        vin,
+        year: attrFromHtml(slice, ['year']),
+        make: attrFromHtml(slice, ['make']),
+        model: attrFromHtml(slice, ['model']),
+        trim: attrFromHtml(slice, ['trim']),
+        stock_number:
+          fields.stockNumber ||
+          ddcClassValue(slice, 'stockNumber') ||
+          attrFromHtml(slice, ['stocknumber', 'stock-number', 'stock']),
+        mileage:
+          fields.mileage ||
+          parseMileage(ddcClassValue(slice, 'mileage')) ||
+          attrFromHtml(slice, ['mileage', 'miles']),
+        price:
+          fields.price ||
+          parsePrice(ddcClassValue(slice, 'finalPrice')) ||
+          parsePrice(ddcClassValue(slice, 'internetPrice')) ||
+          attrFromHtml(slice, ['price', 'internet-price', 'final-price']),
+        exterior_color:
+          fields.exteriorColor ||
+          parseColor(ddcClassValue(slice, 'extColor')) ||
+          attrFromHtml(slice, ['extcolor', 'exterior-color', 'color']),
+        condition,
+      },
+      condition,
+      pageUrl,
+    );
+    if (v) out.push(v);
+  }
+
   return dedupeByVin(out);
 }
 

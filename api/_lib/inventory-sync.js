@@ -399,7 +399,7 @@ async function upsertVehicles(userId, vehicles) {
         String(v.image_url || ''),
         'ACTIVE',
         String(v.location || ''),
-        String(v.dealership_group || 'Moses Auto Group'),
+        String(v.dealership_group || ''),
         String(v.vdp_url || ''),
         String(v.posted_status || 'not_posted'),
         inFeed,

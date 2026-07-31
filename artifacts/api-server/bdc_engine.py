@@ -2052,20 +2052,9 @@ def init_db():
             """
         )
 
-        # Backfill: existing accounts with no inventory URL configured get the
-        # Moses Auto Group defaults so their Settings page shows the correct URLs
-        # immediately after upgrading.  The condition is safe to re-run — it only
-        # updates rows where BOTH url columns are empty.
-        cursor.execute(
-            """UPDATE users
-                  SET inventory_url_used = ?,
-                      inventory_url_new  = ?
-                WHERE (inventory_url_used IS NULL OR inventory_url_used = '')
-                  AND (inventory_url_new  IS NULL OR inventory_url_new  = '')""",
-            (MOSES_USED_URL, MOSES_NEW_URL),
-        )
-        if cursor.rowcount:
-            print(f"[INIT] Backfilled Moses default URLs for {cursor.rowcount} existing account(s).")
+        # Do NOT plant Moses Auto Group URLs onto every empty account — that
+        # overrides custom rooftop Target URLs on later syncs. Demo/seed inserts
+        # already set Moses URLs explicitly for the master-admin account only.
 
         # Backfill: seed the five canonical Moses locations for every existing user
         # that has not yet received them.  INSERT OR IGNORE means re-running is safe
@@ -5780,10 +5769,18 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
                         'template', 'header', 'footer', 'nav', 'aside'})
     _CARD_CLASS_RE = re.compile(
         r'(?:^|[\s_-])(?:srp-vehicle-card|vehicle-card|inventory-item|'
-        r'inventory-card|vehicle-listing|srp-card|listing-card)(?:$|[\s_-])',
+        r'inventory-card|vehicle-listing|srp-card|listing-card|'
+        r'vehiclecard|hit|result-item)(?:$|[\s_-])',
         re.IGNORECASE,
     )
     _VIN_RE = re.compile(r'\b([A-HJ-NPR-Z0-9]{17})\b')
+    # Dealer.com nested value classes inside a vehicle card
+    _DDC_VALUE_RE = re.compile(
+        r'(?:^|[\s_-])(?:stockNumber|stock-number|mileage|finalPrice|'
+        r'internetPrice|askingPrice|msrp|extColor|exteriorColor|'
+        r'interiorColor|intColor)(?:$|[\s_-])',
+        re.IGNORECASE,
+    )
 
     def __init__(self):
         super().__init__()
@@ -5794,6 +5791,9 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
         self._cur_depth = -1
         self._capture_text = False
         self._text_buf: list[str] = []
+        self._ddc_field: str | None = None
+        self._ddc_field_depth = -1
+        self._ddc_buf: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         low = (tag or '').lower()
@@ -5807,10 +5807,19 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
             return
 
         self._depth += 1
-        d = dict(attrs)
+        d = {str(k).lower(): (v or '') for k, v in attrs}
         vin = d.get('data-vin', '')
         class_attr = d.get('class', '') or ''
-        looks_like_card = bool(vin) or bool(self._CARD_CLASS_RE.search(class_attr))
+        has_vehicle = bool(d.get('data-vehicle') or d.get('data-vehicle-id')
+                           or d.get('data-uuid'))
+        looks_like_card = (
+            bool(vin)
+            or has_vehicle
+            or bool(self._CARD_CLASS_RE.search(class_attr))
+            or (bool(d.get('data-year') and d.get('data-make')) and low in (
+                'div', 'li', 'article', 'section',
+            ))
+        )
         if looks_like_card and self._cur is None:
             self._cur = {
                 'vin':            vin,
@@ -5825,11 +5834,16 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
                 'make':           d.get('data-make', ''),
                 'model':          d.get('data-model', ''),
                 'trim':           d.get('data-trim', ''),
-                'mileage':        d.get('data-mileage') or d.get('data-miles', '0'),
+                'mileage':        (d.get('data-mileage') or d.get('data-miles')
+                                   or d.get('data-odometer') or '0'),
                 'price':          (d.get('data-price') or d.get('data-internet-price') or
-                                   d.get('data-internetprice', '0')),
+                                   d.get('data-internetprice') or d.get('data-final-price')
+                                   or d.get('data-finalprice') or '0'),
                 'exterior_color': (d.get('data-exterior-color') or
-                                   d.get('data-exteriorcolor') or d.get('data-color', '')),
+                                   d.get('data-exteriorcolor') or
+                                   d.get('data-extcolor') or
+                                   d.get('data-ext-color') or
+                                   d.get('data-color', '')),
                 'interior_color': d.get('data-interior-color') or d.get('data-interiorcolor', ''),
                 'image_url':      '',
                 # Location / dealership store name — try every common attribute variant,
@@ -5853,6 +5867,25 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
             # Always capture card text so inventory_parser can fill gaps.
             self._capture_text = True
             self._text_buf = []
+        # Capture Dealer.com nested .stockNumber .value / .mileage .value / etc.
+        if self._cur is not None and self._ddc_field is None and class_attr:
+            if self._DDC_VALUE_RE.search(class_attr) or low in ('ddc-font-size-small',):
+                field = None
+                cl = class_attr.lower()
+                if 'stocknumber' in cl or 'stock-number' in cl:
+                    field = 'stock_number'
+                elif 'mileage' in cl:
+                    field = 'mileage'
+                elif 'finalprice' in cl or 'internetprice' in cl or 'askingprice' in cl:
+                    field = 'price'
+                elif 'extcolor' in cl or 'exteriorcolor' in cl:
+                    field = 'exterior_color'
+                elif 'intcolor' in cl or 'interiorcolor' in cl:
+                    field = 'interior_color'
+                if field:
+                    self._ddc_field = field
+                    self._ddc_field_depth = self._depth
+                    self._ddc_buf = []
         if self._cur and low == 'img':
             src = d.get('src') or d.get('data-src') or d.get('data-lazy', '')
             if src and not src.startswith('data:') and not self._cur.get('image_url'):
@@ -5863,6 +5896,8 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
     def handle_data(self, data):
         if self._skip_depth:
             return
+        if self._ddc_field and data and data.strip():
+            self._ddc_buf.append(data.strip())
         if self._cur and self._capture_text and data and data.strip():
             self._text_buf.append(data.strip())
 
@@ -5873,6 +5908,15 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
             return
         if low in self._NOISE or low in self._VOID:
             return
+        if self._ddc_field and self._depth == self._ddc_field_depth:
+            val = ' '.join(self._ddc_buf).strip()
+            if val and self._cur is not None:
+                cur_val = str(self._cur.get(self._ddc_field) or '').strip()
+                if not cur_val or cur_val in ('0', 'N/A'):
+                    self._cur[self._ddc_field] = val
+            self._ddc_field = None
+            self._ddc_field_depth = -1
+            self._ddc_buf = []
         if self._cur and self._depth == self._cur_depth:
             blob = ' '.join(self._text_buf)
             if not self._cur.get('vin') and blob:
@@ -6125,21 +6169,47 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
         stock_m = re.search(
             r'data-stock(?:-number|-no|number|num)?=["\']([^"\']+)["\']',
             chunk, re.IGNORECASE,
+        ) or re.search(
+            r'class=["\'][^"\']*stockNumber[^"\']*["\'][^>]*>\s*'
+            r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{2,20})',
+            chunk, re.IGNORECASE,
         )
         year_m  = re.search(r'data-year=["\'](\d{4})["\']', chunk, re.IGNORECASE)
         make_m  = re.search(r'data-make=["\']([^"\']+)["\']', chunk, re.IGNORECASE)
         model_m = re.search(r'data-model=["\']([^"\']+)["\']', chunk, re.IGNORECASE)
+        trim_m  = re.search(r'data-trim=["\']([^"\']+)["\']', chunk, re.IGNORECASE)
         price_m = re.search(
-            r'data-(?:internet-)?price=["\']([^"\']+)["\']', chunk, re.IGNORECASE
+            r'data-(?:internet-|final-)?price=["\']([^"\']+)["\']', chunk, re.IGNORECASE
+        ) or re.search(
+            r'class=["\'][^"\']*(?:finalPrice|internetPrice)[^"\']*["\'][^>]*>\s*'
+            r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{2,24})',
+            chunk, re.IGNORECASE,
+        )
+        miles_m = re.search(
+            r'data-(?:mileage|miles|odometer)=["\']([^"\']+)["\']', chunk, re.IGNORECASE
+        ) or re.search(
+            r'class=["\'][^"\']*mileage[^"\']*["\'][^>]*>\s*'
+            r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{1,24})',
+            chunk, re.IGNORECASE,
+        )
+        color_m = re.search(
+            r'data-(?:ext(?:erior)?-?color|color)=["\']([^"\']+)["\']', chunk, re.IGNORECASE
+        ) or re.search(
+            r'class=["\'][^"\']*extColor[^"\']*["\'][^>]*>\s*'
+            r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{2,40})',
+            chunk, re.IGNORECASE,
         )
         img_m   = re.search(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', chunk, re.IGNORECASE)
         raw = {
             'vin': vin,
-            'stock_number': stock_m.group(1) if stock_m else '',
+            'stock_number': stock_m.group(1).strip() if stock_m else '',
             'year': year_m.group(1) if year_m else 0,
             'make': make_m.group(1) if make_m else '',
             'model': model_m.group(1) if model_m else '',
-            'price': price_m.group(1) if price_m else 0,
+            'trim': trim_m.group(1) if trim_m else '',
+            'price': price_m.group(1).strip() if price_m else 0,
+            'mileage': miles_m.group(1).strip() if miles_m else 0,
+            'exterior_color': color_m.group(1).strip() if color_m else '',
             'image_url': img_m.group(1) if img_m else '',
         }
         if _sanitize_vehicle is not None:
@@ -6224,11 +6294,15 @@ _PLATFORM_SIGS: dict[str, list[str]] = {
 #   searchnew     -> /SearchNew, SearchNew.aspx?…, /searchnew?…
 #   searchused    -> /SearchUsed, SearchUsed.aspx?…, /searchused?…
 _PLATFORM_URL_SIGS: dict[str, list[str]] = {
-    # .aspx      -> SearchNew.aspx / SearchUsed.aspx / VehicleDetails.aspx
-    # searchnew  -> /SearchNew, SearchNew.aspx, /searchnew?…
-    # searchused -> /SearchUsed, SearchUsed.aspx, /searchused?…
-    # dlron.us   -> short-link / CDN domain used by some DealerOn dealer groups
-    'dealeron':     ['.aspx', 'searchnew', 'searchused', 'dlron.us'],
+    # Dealer.com often uses /new-cars.aspx + /searchused.aspx (e.g. University Ford).
+    # Check these BEFORE DealerOn so .aspx alone does not mis-route DDC sites.
+    'dealerdotcom': [
+        'new-cars.aspx', 'used-cars.aspx', 'new-inventory.aspx',
+        'used-inventory.aspx', 'dealer.com', '/ddc/',
+    ],
+    # DealerOn-specific paths — avoid bare ".aspx" (shared with Dealer.com).
+    'dealeron':     ['searchnew.aspx', 'searchused.aspx', 'vehicledetails.aspx',
+                     'dlron.us', 'dealeron'],
     'dealerspike':  ['dealerspike'],
     'sincro':       ['sincro', 'ansira'],
     'edealer':      ['edealer.ca'],
@@ -6259,20 +6333,26 @@ def _norm_condition(raw: str, fallback: str = 'Used') -> str:
 def _detect_platform(url: str, html: str) -> str | None:
     """Return 'dealeron', 'dealerdotcom', 'sincro', or None.
 
-    URL-only signatures are checked first so that JS-shell DealerOn pages
-    (whose raw static HTML contains no platform markers) are still routed to
-    the DealerOn parsers rather than falling through to the generic chain.
+    Prefer HTML Dealer.com markers over URL heuristics — University Ford and
+    other DDC rooftops share .aspx paths with DealerOn and were being
+    mis-routed to the Moses/DealerOn sitemap path.
     """
     url_l = url.lower()
+    head = (html or '')[:80_000].lower()
 
-    # ── 1. URL-only fast path (no HTML required) ──────────────────────────────
+    # ── 1. Strong HTML platform markers (Dealer.com first) ───────────────────
+    for platform in ('dealerdotcom', 'dealeron', 'sincro', 'dealerspike'):
+        for sig in _PLATFORM_SIGS.get(platform, []):
+            if sig.lower() in head:
+                return platform
+
+    # ── 2. URL-only fast path ────────────────────────────────────────────────
     for platform, sigs in _PLATFORM_URL_SIGS.items():
         for sig in sigs:
             if sig in url_l:
                 return platform
 
-    # ── 2. HTML + URL scan ────────────────────────────────────────────────────
-    head = html[:80_000].lower()
+    # ── 3. Remaining HTML + URL scan ─────────────────────────────────────────
     for platform, sigs in _PLATFORM_SIGS.items():
         for sig in sigs:
             sl = sig.lower()
@@ -8812,7 +8892,87 @@ def _enrich_from_vdp(vdp_url: str) -> dict:
     return result
 
 
-def _sync_full_crawl(user_id: int, session_id: str | None = None) -> None:
+def _collect_configured_inventory_urls(
+    settings: dict,
+    url_used: str = '',
+    url_new: str = '',
+    inventory_locations: list | None = None,
+) -> tuple[str, str, list[dict], bool]:
+    """Resolve Used/New Target URLs from request overrides + saved settings.
+
+    Returns ``(used, new, locations, is_moses_only)``. Never substitutes the
+    hardcoded Moses constants when the account has any non-empty Target URL.
+    """
+    if _scraper_engine is not None:
+        locs = _scraper_engine.resolve_scrape_locations(
+            settings,
+            url_used=url_used,
+            url_new=url_new,
+            inventory_locations=inventory_locations,
+        )
+    else:
+        locs = []
+        if inventory_locations:
+            try:
+                locs = list(inventory_locations) if isinstance(inventory_locations, list) else []
+            except Exception:
+                locs = []
+        if not locs:
+            _u = (url_used or settings.get('inventory_url_used') or '').strip()
+            _n = (url_new or settings.get('inventory_url_new') or '').strip()
+            if _u or _n:
+                locs = [{
+                    'location_name': (settings.get('dealer_name') or 'Main Lot'),
+                    'inventory_url_used': _u,
+                    'inventory_url_new': _n,
+                }]
+
+    all_urls: list[str] = []
+    used = (url_used or '').strip()
+    new = (url_new or '').strip()
+    for loc in locs:
+        lu = (loc.get('inventory_url_used') or '').strip()
+        ln = (loc.get('inventory_url_new') or '').strip()
+        if lu:
+            all_urls.append(lu)
+            if not used:
+                used = lu
+        if ln:
+            all_urls.append(ln)
+            if not new:
+                new = ln
+    if not used:
+        used = (settings.get('inventory_url_used') or '').strip()
+        if used:
+            all_urls.append(used)
+    if not new:
+        new = (settings.get('inventory_url_new') or '').strip()
+        if new:
+            all_urls.append(new)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for u in all_urls:
+        k = u.lower()
+        if k not in seen:
+            seen.add(k)
+            uniq.append(u)
+
+    if not uniq:
+        return '', '', locs, False
+
+    is_moses_only = all('mosescars.com' in u.lower() for u in uniq)
+    return used, new, locs, is_moses_only
+
+
+def _sync_full_crawl(
+    user_id: int,
+    session_id: str | None = None,
+    url_used: str = '',
+    url_new: str = '',
+    inventory_locations: list | None = None,
+) -> None:
     """Background full-site crawl for one user — two phases:
 
     Phase 1 — Sitemap (fast, ~2-5 s):
@@ -8859,18 +9019,22 @@ def _sync_full_crawl(user_id: int, session_id: str | None = None) -> None:
         # the master-admin demo account.  Any user with custom inventory URLs
         # should be scraped via their own SRP pages, not the Moses sitemap.
         _crawl_settings = UserManager.get_settings_by_id(user_id)
-        _crawl_used = _crawl_settings.get('inventory_url_used', '').strip()
-        _crawl_new  = _crawl_settings.get('inventory_url_new',  '').strip()
-        _has_custom = bool(_crawl_used or _crawl_new)
-        _is_moses   = (
-            'mosescars.com' in (_crawl_used  or MOSES_USED_URL).lower() or
-            'mosescars.com' in (_crawl_new   or MOSES_NEW_URL).lower()
+        _crawl_used, _crawl_new, _crawl_locs, _is_moses_only = (
+            _collect_configured_inventory_urls(
+                _crawl_settings,
+                url_used=url_used,
+                url_new=url_new,
+                inventory_locations=inventory_locations,
+            )
         )
-        if _has_custom and not _is_moses:
-            print(f"[CRAWL u{user_id}] Non-Moses URLs — skipping sitemap, "
-                  f"falling back to SRP scrape.")
+        _has_custom = bool(_crawl_used or _crawl_new or _crawl_locs)
+        if _has_custom and not _is_moses_only:
+            print(f"[CRAWL u{user_id}] Non-Moses Target URLs — SRP scrape "
+                  f"(used={_crawl_used!r}, new={_crawl_new!r}, "
+                  f"locations={len(_crawl_locs)})")
             _srp = _sync_user_inventory(
                 user_id, _crawl_used, _crawl_new, session_id=session_id,
+                inventory_locations=_crawl_locs or inventory_locations,
             )
             _cancelled = bool(_srp.get('cancelled'))
             if _cancelled and _scraper_engine is not None:
@@ -8903,12 +9067,20 @@ def _sync_full_crawl(user_id: int, session_id: str | None = None) -> None:
 
         if not sitemap_vehicles:
             print(f"[CRAWL u{user_id}] Sitemap returned nothing; trying legacy SRP scrape.")
-            # fall back to existing single-page scraper
-            settings  = UserManager.get_settings_by_id(user_id)
-            url_used  = settings.get('inventory_url_used', '') or MOSES_USED_URL
-            url_new   = settings.get('inventory_url_new',  '') or MOSES_NEW_URL
-            result    = _sync_user_inventory(
-                user_id, url_used, url_new, session_id=session_id,
+            # Use configured Target URLs only — never inject Moses constants here.
+            settings = UserManager.get_settings_by_id(user_id)
+            _fb_used, _fb_new, _fb_locs, _ = _collect_configured_inventory_urls(
+                settings,
+                url_used=url_used or _crawl_used,
+                url_new=url_new or _crawl_new,
+                inventory_locations=inventory_locations or _crawl_locs,
+            )
+            if not (_fb_used or _fb_new or _fb_locs):
+                # Explicit Moses demo path only when the account has zero Target URLs.
+                _fb_used, _fb_new = MOSES_USED_URL, MOSES_NEW_URL
+            result = _sync_user_inventory(
+                user_id, _fb_used, _fb_new, session_id=session_id,
+                inventory_locations=_fb_locs or None,
             )
             _cancelled = bool(result.get('cancelled'))
             if _cancelled and _scraper_engine is not None:
@@ -9118,6 +9290,7 @@ def _sync_user_inventory(
     url_used: str = '',
     url_new: str = '',
     session_id: str | None = None,
+    inventory_locations: list | None = None,
 ) -> dict:
     """Scrape inventory for one user using their configured URLs.
 
@@ -9147,18 +9320,12 @@ def _sync_user_inventory(
 
     # Resolve multi-location configs (preferred) or legacy single used/new URLs.
     _settings = UserManager.get_settings_by_id(user_id)
-    if _scraper_engine is not None:
-        _locations = _scraper_engine.resolve_scrape_locations(
-            _settings, url_used=url_used, url_new=url_new,
-        )
-    else:
-        _u = (url_used or _settings.get('inventory_url_used') or '').strip()
-        _n = (url_new or _settings.get('inventory_url_new') or '').strip()
-        _locations = ([{
-            'location_name': (_settings.get('dealer_name') or 'Main Lot').strip() or 'Main Lot',
-            'inventory_url_new': _n,
-            'inventory_url_used': _u,
-        }] if (_u or _n) else [])
+    effective_used, effective_new, _locations, _ = _collect_configured_inventory_urls(
+        _settings,
+        url_used=url_used,
+        url_new=url_new,
+        inventory_locations=inventory_locations,
+    )
 
     # Track whether the caller / settings supplied explicit custom URLs.  When
     # they did, we must NOT fall back to Moses demo inventory if the scrape
@@ -9170,31 +9337,33 @@ def _sync_user_inventory(
             _uv = (_loc.get(_uk) or '').strip()
             if _uv:
                 _all_urls.append(_uv)
+    if effective_used:
+        _all_urls.append(effective_used)
+    if effective_new:
+        _all_urls.append(effective_new)
     _has_custom_urls = bool(_all_urls)
 
     # When the user has custom URLs, only scrape the URLs they actually
     # provided — never fall back to Moses for the missing condition.  Falling
     # back would silently plant Moses vehicles into a non-Moses account and then
     # mark them all SOLD on the next delta comparison.
-    if _has_custom_urls:
-        effective_used = next(
-            ((_loc.get('inventory_url_used') or '').strip() for _loc in _locations
-             if (_loc.get('inventory_url_used') or '').strip()),
-            '',
-        )
-        effective_new = next(
-            ((_loc.get('inventory_url_new') or '').strip() for _loc in _locations
-             if (_loc.get('inventory_url_new') or '').strip()),
-            '',
-        )
-    else:
-        # No multi-location / custom URLs — scrape Moses defaults as one lot.
+    if not _has_custom_urls:
+        # No Target URLs configured — Moses demo scrape as last-resort bootstrap.
         effective_used = MOSES_USED_URL
         effective_new  = MOSES_NEW_URL
         _locations = [{
             'location_name': 'Main Lot',
             'inventory_url_new': effective_new,
             'inventory_url_used': effective_used,
+        }]
+        _all_urls = [effective_used, effective_new]
+    elif not _locations:
+        _locations = [{
+            'location_name': (_settings.get('dealer_name') or 'Main Lot').strip() or 'Main Lot',
+            'inventory_url_new': effective_new,
+            'inventory_url_used': effective_used,
+            'csv_enabled': False,
+            'csv_url': '',
         }]
 
     # Identify whether this is a Moses-domain sync so we can keep delta-sync
@@ -15468,18 +15637,35 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 _scraper_engine.set_cancel_sync_requested(False, user_id=_sc_uid)
 
             _sc_settings = UserManager.get_settings_by_id(_sc_uid)
-            _sc_used = (_sc_settings.get("inventory_url_used") or "").strip()
-            _sc_new  = (_sc_settings.get("inventory_url_new")  or "").strip()
-            if not (_sc_used or _sc_new):
-                # Multi-location configs may only live in inventory_locations.
+            # Prefer Target URLs from the Sync All request body, then DB settings.
+            _sc_body_locs = None
+            if "inventory_locations" in payload:
                 if _scraper_engine is not None:
-                    _sc_locs = _scraper_engine.normalize_inventory_locations(
-                        _sc_settings.get("inventory_locations")
+                    _sc_body_locs = _scraper_engine.normalize_inventory_locations(
+                        payload.get("inventory_locations")
                     )
-                    for _loc in _sc_locs:
-                        _sc_used = _sc_used or (_loc.get("inventory_url_used") or "").strip()
-                        _sc_new = _sc_new or (_loc.get("inventory_url_new") or "").strip()
-            if not (_sc_used or _sc_new):
+                elif isinstance(payload.get("inventory_locations"), list):
+                    _sc_body_locs = payload.get("inventory_locations")
+            _sc_used, _sc_new, _sc_locs, _ = _collect_configured_inventory_urls(
+                _sc_settings,
+                url_used=str(
+                    payload.get("inventory_url_used")
+                    or payload.get("url_used")
+                    or payload.get("used_url")
+                    or payload.get("baseInventoryUrl")
+                    or payload.get("usedInventoryUrl")
+                    or ""
+                ).strip(),
+                url_new=str(
+                    payload.get("inventory_url_new")
+                    or payload.get("url_new")
+                    or payload.get("new_url")
+                    or payload.get("baseInventoryUrl")
+                    or ""
+                ).strip(),
+                inventory_locations=_sc_body_locs,
+            )
+            if not (_sc_used or _sc_new or _sc_locs):
                 self._json({
                     "status":  "error",
                     "count":   0,
@@ -15512,14 +15698,21 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             })
             print(f"[SCRAPE] Manual sync for user {_sc_uid} "
                   f"session={_sc_session!r} "
-                  f"(used={_sc_used!r}, new={_sc_new!r}, purged={_sc_purged})")
+                  f"(used={_sc_used!r}, new={_sc_new!r}, "
+                  f"locations={len(_sc_locs)}, purged={_sc_purged})")
 
             # /api/sync -> background + progress polling (drives the UI).
             # /api/scrape -> run inline and return the final vehicle count.
             if path in ("/api/sync", "/api/v1/sync"):
                 threading.Thread(
                     target=_sync_full_crawl,
-                    args=(_sc_uid, _sc_session or None),
+                    kwargs={
+                        "user_id": _sc_uid,
+                        "session_id": _sc_session or None,
+                        "url_used": _sc_used,
+                        "url_new": _sc_new,
+                        "inventory_locations": _sc_locs or _sc_body_locs,
+                    },
                     daemon=True,
                 ).start()
                 self._json({
@@ -15535,7 +15728,13 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                _sync_full_crawl(_sc_uid, _sc_session or None)
+                _sync_full_crawl(
+                    _sc_uid,
+                    _sc_session or None,
+                    url_used=_sc_used,
+                    url_new=_sc_new,
+                    inventory_locations=_sc_locs or _sc_body_locs,
+                )
                 _sc_done  = _SYNC_JOBS.get(_sc_uid, {})
                 _sc_count = (MarketplaceDB.count(_sc_uid) or {}).get("ACTIVE", 0)
                 _sc_err   = _sc_done.get("error", "")
@@ -15613,12 +15812,37 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     _raw_locs = payload.get("inventory_locations") or []
                     _mss_locs_list = _raw_locs if isinstance(_raw_locs, list) else []
                     _mss_locs_json = json.dumps(_mss_locs_list, ensure_ascii=False)
-                # Mirror first location into legacy columns for older workers.
+                # Always mirror rooftop location Target URLs into legacy columns
+                # so reloads + workers see the same Base/Used URLs the form saved.
                 if _mss_locs_list:
-                    if _mss_used is None:
-                        _mss_used = _mss_locs_list[0].get("inventory_url_used") or ""
-                    if _mss_new is None:
-                        _mss_new = _mss_locs_list[0].get("inventory_url_new") or ""
+                    _first_used = next(
+                        ((l.get("inventory_url_used") or "").strip()
+                         for l in _mss_locs_list
+                         if (l.get("inventory_url_used") or "").strip()),
+                        "",
+                    )
+                    _first_new = next(
+                        ((l.get("inventory_url_new") or "").strip()
+                         for l in _mss_locs_list
+                         if (l.get("inventory_url_new") or "").strip()),
+                        "",
+                    )
+                    # Prefer explicit form fields when non-empty; otherwise location URLs.
+                    if not (_mss_used or "").strip():
+                        _mss_used = _first_used
+                    if not (_mss_new or "").strip():
+                        _mss_new = _first_new
+                    # If the form still held stale Moses URLs but locations are
+                    # a custom rooftop, overwrite legacy columns with the rooftop.
+                    _loc_hosts = " ".join(
+                        (l.get("inventory_url_used") or "") + " " + (l.get("inventory_url_new") or "")
+                        for l in _mss_locs_list
+                    ).lower()
+                    if _loc_hosts and "mosescars.com" not in _loc_hosts:
+                        if "mosescars.com" in (_mss_used or "").lower():
+                            _mss_used = _first_used
+                        if "mosescars.com" in (_mss_new or "").lower():
+                            _mss_new = _first_new
                 elif _mss_used is None and _mss_new is None:
                     _mss_used = ""
                     _mss_new = ""
