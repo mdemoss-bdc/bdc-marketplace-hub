@@ -159,30 +159,44 @@ function extractInteriorColor(text) {
 }
 
 /** Reject years, VINs, makes, and empty placeholders as stock numbers. */
+const IN_TRANSIT_STOCK = 'In Transit';
+const IN_TRANSIT_RE =
+  /\b(?:in[\s-]?transit|in[\s-]?production|building|arriving[\s-]?soon|on[\s-]?order|coming[\s-]?soon|pipeline)\b/i;
+
+function isInTransitStock(value) {
+  const s = String(value || '').trim();
+  return /^in[\s-]?transit$/i.test(s) || s === IN_TRANSIT_STOCK;
+}
+
+function detectInTransit(text) {
+  return IN_TRANSIT_RE.test(String(text || ''));
+}
+
 function isValidStockNumber(value, year = 0, make = '', model = '') {
-  const stock = String(value || '').trim().toUpperCase();
-  if (!stock || stock === 'N/A' || stock === 'NA' || stock === 'NONE' || stock === '-' || stock === '—') {
+  const stock = String(value || '').trim();
+  if (isInTransitStock(stock)) return true;
+  const upper = stock.toUpperCase();
+  if (!upper || upper === 'N/A' || upper === 'NA' || upper === 'NONE' || upper === '-' || upper === '—') {
     return false;
   }
-  if (stock.length === 17 && VIN_RE.test(stock)) return false;
+  if (upper.length === 17 && VIN_RE.test(upper)) return false;
   // Never treat a model year as a stock number (the "#2020" bug).
-  if (/^(?:19|20)\d{2}$/.test(stock)) return false;
-  if (year > 0 && stock === String(year)) return false;
+  if (/^(?:19|20)\d{2}$/.test(upper)) return false;
+  if (year > 0 && upper === String(year)) return false;
   const makeU = String(make || '').toUpperCase().replace(/\s+/g, '');
   const modelU = String(model || '').toUpperCase().replace(/\s+/g, '');
-  if (makeU && stock === makeU) return false;
-  if (modelU && (stock === modelU || modelU.startsWith(stock) && stock.length <= 4)) return false;
-  if (KNOWN_MAKES.has(stock.toLowerCase())) return false;
+  if (makeU && upper === makeU) return false;
+  if (modelU && (upper === modelU || (modelU.startsWith(upper) && upper.length <= 4))) return false;
+  if (KNOWN_MAKES.has(upper.toLowerCase())) return false;
   // Require at least one digit for numeric dealer stocks, or alphanumeric mix.
-  if (!/[0-9]/.test(stock) && stock.length < 5) return false;
-  if (!/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(stock)) return false;
+  if (!/[0-9]/.test(upper) && upper.length < 5) return false;
+  if (!/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(upper)) return false;
   return true;
 }
 
-function stockFallbackFromVin(vin) {
-  const v = String(vin || '').trim().toUpperCase();
-  if (v.length === 17 && VIN_RE.test(v)) return v.slice(-8);
-  return 'N/A';
+/** @deprecated No synthetic VIN stock — always returns "". Kept for API compat. */
+function stockFallbackFromVin(_vin) {
+  return '';
 }
 
 function extractStockNumber(text, year = 0, make = '', model = '') {
@@ -197,10 +211,10 @@ function extractStockNumber(text, year = 0, make = '', model = '') {
 }
 
 /**
- * Resolve dealer stock from payload aliases; never fall back to year.
- * Missing → last 8 of VIN, else "N/A".
+ * Resolve dealer stock from payload aliases.
+ * Missing → "In Transit" if status indicates it, else "" (never VIN/year).
  */
-function resolveStockNumber(vehicle, year, make, model, vin) {
+function resolveStockNumber(vehicle, year, make, model, _vin) {
   const candidates = [
     vehicle.stock_number,
     vehicle.stockNumber,
@@ -217,10 +231,26 @@ function resolveStockNumber(vehicle, year, make, model, vin) {
     vehicle.dealer_stock_number,
   ];
   for (const c of candidates) {
-    const raw = cleanVehicleText(asNonEmptyString(c)).toUpperCase();
-    if (isValidStockNumber(raw, year, make, model)) return raw;
+    const raw = cleanVehicleText(asNonEmptyString(c));
+    if (isInTransitStock(raw)) return IN_TRANSIT_STOCK;
+    const upper = raw.toUpperCase();
+    if (isValidStockNumber(upper, year, make, model)) return upper;
   }
-  return stockFallbackFromVin(vin);
+  const statusBlob = [
+    vehicle.raw,
+    vehicle.raw_html,
+    vehicle.raw_text,
+    vehicle.description,
+    vehicle.title,
+    vehicle.availability,
+    vehicle.status_label,
+    vehicle.badge,
+    vehicle.vehicle_status,
+  ]
+    .map((v) => asNonEmptyString(v))
+    .join(' ');
+  if (detectInTransit(statusBlob)) return IN_TRANSIT_STOCK;
+  return '';
 }
 
 function extractYearMakeModel(text) {
@@ -453,11 +483,11 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     asNonEmptyString(vehicle.description) || asNonEmptyString(vehicle.ai_description) || '',
   );
 
-  // Prefer structured dealer stock fields — never year; else last-8 VIN / N/A.
+  // Prefer structured dealer stock; "In Transit" status; else empty (no VIN/year).
   let stock = resolveStockNumber(vehicle, year, make, model, vin);
   if (!isValidStockNumber(stock, year, make, model)) {
     const labeled = extractStockNumber(blob, year, make, model);
-    stock = labeled || stockFallbackFromVin(vin);
+    stock = labeled || (detectInTransit(blob) ? IN_TRANSIT_STOCK : '');
   }
 
   const exterior = titleCaseColor(
@@ -557,4 +587,7 @@ module.exports = {
   isValidStockNumber,
   resolveStockNumber,
   stockFallbackFromVin,
+  detectInTransit,
+  isInTransitStock,
+  IN_TRANSIT_STOCK,
 };

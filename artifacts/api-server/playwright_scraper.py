@@ -70,11 +70,18 @@ def _lock_condition(raw: Any, target: str) -> str:
 
 
 def _stock_safe(val: Any) -> str:
+    """Return explicit dealer stock, 'In Transit', or '' — never invent codes."""
     if not val:
-        return 'N/A'
+        return ''
     s = str(val).strip()
-    if not s or s.lower() in ('null', 'none', 'n/a', '0'):
-        return 'N/A'
+    if not s or s.lower() in ('null', 'none', 'n/a', 'na', '0', '-', '—'):
+        return ''
+    if re.fullmatch(r'in[\s\-]?transit', s, re.I):
+        return 'In Transit'
+    if re.fullmatch(r'(?:19|20)\d{2}', s):
+        return ''
+    if re.fullmatch(r'[A-HJ-NPR-Z0-9]{17}', s, re.I):
+        return ''
     return s
 
 
@@ -1026,13 +1033,19 @@ def fetch_with_playwright(url: str, condition: str) -> list[dict]:
                 except ImportError:
                     _san_fb = None  # type: ignore[assignment]
                 for vin in vins_in_html:
-                    stock = 'N/A'
+                    stock = ''
                     # Try to find a nearby stock number in a small window
                     idx = scan_html.find(vin)
                     window = scan_html[max(0, idx - 200): idx + 200]
                     sm = _STOCK_RE.search(window)
                     if sm:
                         stock = sm.group(1)
+                    elif re.search(
+                        r'\b(?:in[\s\-]?transit|building|arriving[\s\-]?soon)\b',
+                        window,
+                        re.I,
+                    ):
+                        stock = 'In Transit'
                     raw_fb = {
                         'vin':          vin.upper(),
                         'stock_number': _stock_safe(stock),

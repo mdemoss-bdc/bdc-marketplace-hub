@@ -94,29 +94,23 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
     link = _str(g("link", "vdp_url", "vdpUrl", "url", "href"))
     image = _str(g("imageUrl", "image_url", "image", "photo", "thumbnail"))
 
-    # Strict stock: reject model years / full VINs; never use year as stock.
-    stock = resolve_stock_number(
-        raw,
-        _str(g("_html", "raw_html", "html")),
-        vin=vin,
-        year=year,
-    )
-    if stock == "N/A":
-        # Still try a direct sanitize of an explicit field (no VIN fallback).
-        direct = sanitize_stock_number(
+    # Strict stock: explicit dealer value, else "In Transit", else "" — never invent.
+    html_blob = _str(g("_html", "raw_html", "html", "raw_text", "description"))
+    stock = resolve_stock_number(raw, html_blob, vin=vin, year=year)
+    if not stock:
+        stock = sanitize_stock_number(
             g("stockNumber", "stock_number", "stock", "stockNo", "stock_no", "sku"),
             vin=vin,
             year=year,
         )
-        stock = direct or "N/A"
 
     cond = (condition or "Used").strip().title()
     if cond not in ("New", "Used"):
         cond = "Used"
 
     return {
-        # Zod / LLM schema keys
-        "stockNumber": stock,
+        # Zod / LLM schema keys — "" when omitted; "In Transit" when status badge says so
+        "stockNumber": stock or "",
         "year": year,
         "make": make,
         "model": model,
@@ -128,7 +122,7 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
         "imageUrl": image,
         "vin": vin,
         # DB / engine aliases
-        "stock_number": stock if stock != "N/A" else "",
+        "stock_number": stock or "",
         "exterior_color": color,
         "image_url": image,
         "vdp_url": link,
@@ -144,9 +138,7 @@ def validate_batch(vehicles: list[dict[str, Any]], *, min_count: int = 5) -> tup
     rich = 0
     for v in vehicles:
         has_price = bool(_digits(v.get("price")))
-        has_stock = bool(_str(v.get("stockNumber") or v.get("stock_number"))) and (
-            _str(v.get("stockNumber") or v.get("stock_number")) != "N/A"
-        )
+        has_stock = bool(_str(v.get("stockNumber") or v.get("stock_number")))
         has_link = bool(_str(v.get("link") or v.get("vdp_url")))
         if has_price or has_stock or has_link:
             rich += 1

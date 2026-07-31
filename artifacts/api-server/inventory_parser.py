@@ -34,6 +34,12 @@ _STOCK_PREFIX_RE = re.compile(
     r"^(?:stock\s*(?:number|no\.?|#)?|stk\s*#?)\s*[:#]?\s*",
     re.IGNORECASE,
 )
+_IN_TRANSIT_RE = re.compile(
+    r"\b(?:in[\s\-]?transit|in[\s\-]?production|building|arriving[\s\-]?soon|"
+    r"on[\s\-]?order|coming[\s\-]?soon|pipeline)\b",
+    re.IGNORECASE,
+)
+IN_TRANSIT_STOCK = "In Transit"
 # Year Make Model — standard keyword extraction from SRP headings.
 YMM_RE = re.compile(
     r"\b((?:19|20)\d{2})\s+([A-Za-z][A-Za-z0-9\-]+)\s+([A-Za-z0-9][A-Za-z0-9 \-/]{1,40})"
@@ -282,11 +288,19 @@ def sanitize_vehicle_record(
         stock = ""
     if stock and year and stock == str(year):
         stock = ""
-    # Never use the full VIN as stock; last-8 only when nothing else exists.
-    if not stock and vin and len(vin) == 17 and VIN_RE.fullmatch(vin):
-        stock = vin[-8:]
-    elif stock and len(stock) == 17 and VIN_RE.fullmatch(stock):
-        stock = vin[-8:] if vin and len(vin) == 17 else ""
+    if stock and len(stock) == 17 and VIN_RE.fullmatch(stock):
+        stock = ""
+    # No synthetic VIN/year codes. "In Transit" is the only non-dealer fallback.
+    if not stock:
+        status_blob = " ".join(
+            _as_str(vehicle.get(k))
+            for k in (
+                "raw", "raw_html", "raw_text", "description", "title",
+                "availability", "status_label", "badge", "vehicle_status",
+            )
+        )
+        if _IN_TRANSIT_RE.search(status_blob) or _IN_TRANSIT_RE.search(blob):
+            stock = IN_TRANSIT_STOCK
 
     out = dict(vehicle)
     out["vin"] = vin

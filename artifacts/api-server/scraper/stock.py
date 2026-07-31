@@ -4,6 +4,8 @@ Priority (before generic regex / VIN / year fallbacks):
   1. Data attributes: data-stocknumber, data-stock-number, data-stock, data-vin-stock
   2. DOM class selectors: .stockNumber .value, .stock-number .value, …
   3. Labeled text: "Stock #:" / "Stk #:" + alphanumeric code
+  4. "In Transit" / "Building" / "Arriving Soon" status badges (literal stockNumber)
+  5. Empty string — never invent VIN slices, years, or random codes
 """
 
 from __future__ import annotations
@@ -18,6 +20,22 @@ YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 # Clean stock codes: P1234, U89012, 1049A, NH-1001, etc.
 STOCK_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9\-_/]{2,14}$", re.I)
 
+IN_TRANSIT_STOCK = "In Transit"
+
+# Status / availability badges when no explicit stock exists.
+_IN_TRANSIT_RE = re.compile(
+    r"\b(?:"
+    r"in[\s\-]?transit|"
+    r"in[\s\-]?production|"
+    r"building|"
+    r"arriving[\s\-]?soon|"
+    r"on[\s\-]?order|"
+    r"coming[\s\-]?soon|"
+    r"pipeline"
+    r")\b",
+    re.I,
+)
+
 # ── 1) Data attributes (highest priority) ────────────────────────────────────
 _DATA_ATTR_PATTERNS = (
     r'data-stocknumber\s*=\s*["\']([^"\']+)["\']',
@@ -31,25 +49,17 @@ _DATA_ATTR_PATTERNS = (
 )
 
 # ── 2) DOM class / nested .value selectors ───────────────────────────────────
-# Matches: <div class="stockNumber"><span class="value">P9821</span></div>
-#          <span class="item-stock-number">U89012</span>
-#          <div class="ddc-stockNumber"><span class="value">…</span>
 _DOM_CLASS_PATTERNS = (
-    # .stockNumber .value  /  .stock-number .value
     r'class=["\'][^"\']*stock[-_]?number[^"\']*["\'][^>]*>\s*'
     r'(?:<(?:span|div|p|strong|em|dd|b)[^>]*class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?'
     r'([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
-    # .item-stock-number
     r'class=["\'][^"\']*item-stock-number[^"\']*["\'][^>]*>\s*'
     r'([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
-    # [class*="stock"] .value
     r'class=["\'][^"\']*stock[^"\']*["\'][^>]*>\s*'
     r'<(?:span|div|p|strong|em|dd|b)[^>]*class=["\'][^"\']*\bvalue\b[^"\']*["\'][^>]*>\s*'
     r'([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
-    # [class*="stockNumber"] direct text
     r'class=["\'][^"\']*stockNumber[^"\']*["\'][^>]*>\s*'
     r'(?:<[^>]+>\s*)*([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
-    # data-field / aria style value next to stock class
     r'class=["\'][^"\']*stock[-_]?number[^"\']*["\'][^>]*'
     r'(?:data-value|data-stock|title)\s*=\s*["\']([^"\']+)["\']',
 )
@@ -61,11 +71,28 @@ _LABEL_STOCK_RE = re.compile(
     re.I,
 )
 
-# Strip leading labels if a raw field still contains them
 _PREFIX_STRIP_RE = re.compile(
     r'^(?:stock\s*(?:number|no\.?|#)?|stk\s*#?)\s*[:#]?\s*',
     re.I,
 )
+
+
+def detect_in_transit(html_or_text: str) -> bool:
+    """True when card/status copy indicates the vehicle is in transit / arriving."""
+    text = decode_entities(html_or_text or "")
+    if not text:
+        return False
+    # Prefer badge / status class windows, then full plain text.
+    for m in re.finditer(
+        r'class=["\'][^"\']*(?:status|badge|availability|label|tag|pill)[^"\']*["\'][^>]*>'
+        r'([\s\S]{0,120}?)</',
+        text,
+        re.I,
+    ):
+        if _IN_TRANSIT_RE.search(clean_text(m.group(1))):
+            return True
+    plain = clean_text(re.sub(r"<[^>]+>", " ", text))
+    return bool(_IN_TRANSIT_RE.search(plain))
 
 
 def sanitize_stock_number(
@@ -73,18 +100,20 @@ def sanitize_stock_number(
     *,
     vin: str = "",
     year: int | str = 0,
-    allow_vin_fallback: bool = False,
 ) -> str:
-    """Return a clean stock code, or '' if the value is invalid.
+    """Return a clean dealer stock code, or '' if missing/invalid.
 
-    Rejects 4-digit model years and full 17-digit VINs (unless
-    ``allow_vin_fallback`` and no other stock exists — callers decide).
+    Preserves the literal ``In Transit`` sentinel. Never invents codes.
+    Rejects 4-digit model years and full VINs.
     """
     raw = clean_text(decode_entities(value))
     if not raw:
         return ""
+    if _IN_TRANSIT_RE.fullmatch(raw.replace("_", " ").replace("-", " ")) or (
+        raw.strip().lower() in {"in transit", "in-transit", "intransit"}
+    ):
+        return IN_TRANSIT_STOCK
     raw = _PREFIX_STRIP_RE.sub("", raw).strip()
-    # Keep first token if leftover label noise remains
     raw = re.split(r"[\s|,;]+", raw, maxsplit=1)[0].strip()
     stock = raw.upper()
     if not stock or stock in {"N/A", "NA", "NONE", "-", "—", "NULL", "UNDEFINED"}:
@@ -95,15 +124,11 @@ def sanitize_stock_number(
     if year_s and stock == year_s:
         return ""
     if VIN_RE.fullmatch(stock):
-        if allow_vin_fallback and vin and stock == vin.upper():
-            return vin.upper()[-8:]
         return ""
     if vin and stock == str(vin).upper():
         return ""
     if not STOCK_CODE_RE.fullmatch(stock):
         return ""
-    # Pure years already rejected; also reject bare make-like tokens without digits
-    # when shorter than 5 and no digit present (likely model noise).
     if not re.search(r"\d", stock) and len(stock) < 5:
         return ""
     return stock
@@ -115,12 +140,11 @@ def extract_stock_from_html(
     vin: str = "",
     year: int | str = 0,
 ) -> str:
-    """Extract stock from a vehicle card/container HTML using selector priority."""
+    """Extract stock from a vehicle card using selector priority."""
     text = decode_entities(html_fragment or "")
     if not text:
         return ""
 
-    # 1) Data attributes
     for pat in _DATA_ATTR_PATTERNS:
         m = re.search(pat, text, re.I)
         if m:
@@ -128,7 +152,6 @@ def extract_stock_from_html(
             if cleaned:
                 return cleaned
 
-    # 2) DOM class selectors
     for pat in _DOM_CLASS_PATTERNS:
         m = re.search(pat, text, re.I)
         if m:
@@ -136,7 +159,6 @@ def extract_stock_from_html(
             if cleaned:
                 return cleaned
 
-    # 3) Labeled text nodes (strip tags first for plain text scan)
     plain = clean_text(re.sub(r"<[^>]+>", " ", text))
     lm = _LABEL_STOCK_RE.search(plain) or _LABEL_STOCK_RE.search(text)
     if lm:
@@ -154,14 +176,13 @@ def resolve_stock_number(
     vin: str = "",
     year: int | str = 0,
 ) -> str:
-    """Full resolution: HTML selectors → field aliases → labeled text → N/A.
+    """Resolve stock: explicit dealer value → In Transit → "".
 
-    Never substitutes model year. VIN last-8 only when no explicit stock exists.
+    Never invents VIN slices, model years, or random codes.
     """
     vin_u = (vin or "").upper()
     year_n = year
 
-    # Prefer DOM / data-* from the card HTML first.
     from_html = extract_stock_from_html(html_fragment, vin=vin_u, year=year_n)
     if from_html:
         return from_html
@@ -188,8 +209,23 @@ def resolve_stock_number(
                 if cleaned:
                     return cleaned
 
-    # Last resort: labeled text already tried inside extract_stock_from_html.
-    # Only then allow VIN tail — never the model year.
-    if vin_u and len(vin_u) == 17 and VIN_RE.fullmatch(vin_u):
-        return vin_u[-8:]
-    return "N/A"
+        # Status fields on the vehicle dict (availability / badge copy).
+        status_blob = " ".join(
+            str(raw_vehicle.get(k) or "")
+            for k in (
+                "status_label",
+                "availability",
+                "badge",
+                "vehicle_status",
+                "inventory_status",
+                "raw_text",
+                "description",
+            )
+        )
+        if detect_in_transit(status_blob):
+            return IN_TRANSIT_STOCK
+
+    if detect_in_transit(html_fragment):
+        return IN_TRANSIT_STOCK
+
+    return ""

@@ -426,7 +426,15 @@ function cleanVehicleText(input: unknown): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-function resolveDisplayStock(raw: Record<string, unknown>, year: number, vin: string): string {
+const IN_TRANSIT_STOCK = 'In Transit';
+
+function isInTransitStock(value: unknown): boolean {
+  const s = String(value || '').trim();
+  return /^in[\s-]?transit$/i.test(s) || s === IN_TRANSIT_STOCK;
+}
+
+/** Explicit dealer stock only — never invent VIN slices or years. */
+function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: string): string {
   const candidates = [
     raw.stock_number,
     raw.stockNumber,
@@ -437,7 +445,9 @@ function resolveDisplayStock(raw: Record<string, unknown>, year: number, vin: st
     raw.stock,
   ];
   for (const c of candidates) {
-    const stock = cleanVehicleText(c).toUpperCase();
+    const cleaned = cleanVehicleText(c);
+    if (isInTransitStock(cleaned)) return IN_TRANSIT_STOCK;
+    const stock = cleaned.toUpperCase();
     if (!stock || stock === 'N/A' || stock === 'NA' || stock === 'NONE') continue;
     if (/^(?:19|20)\d{2}$/.test(stock)) continue; // never show year as stock
     if (year > 0 && stock === String(year)) continue;
@@ -445,9 +455,7 @@ function resolveDisplayStock(raw: Record<string, unknown>, year: number, vin: st
     if (/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(stock) && /[0-9]/.test(stock)) return stock;
     if (/^[A-Z0-9][A-Z0-9\-_/]{4,14}$/i.test(stock)) return stock;
   }
-  const v = String(vin || '').trim().toUpperCase();
-  if (v.length === 17) return v.slice(-8);
-  return 'N/A';
+  return '';
 }
 
 /** Pull vehicle rows from either a direct array or nested API payloads. */
@@ -521,10 +529,7 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>, index = 0): Veh
   const interior_color = titleCaseColor(
     cleanVehicleText(raw.interior_color ?? raw.interiorColor ?? raw.int_color),
   );
-  const stock_number =
-    resolveDisplayStock(raw, year, vin) ||
-    String(raw.stockNumber ?? raw.stock_number ?? 'N/A').trim() ||
-    'N/A';
+  const stock_number = resolveDisplayStock(raw, year, vin);
   const vdp_url = String(
     raw.link ?? raw.vdp_url ?? raw.vdpUrl ?? raw.url ?? raw.href ?? '',
   ).trim();
@@ -551,7 +556,7 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>, index = 0): Veh
     retail_price: asMoney(raw.retail_price ?? raw.retailPrice) || 0,
     doc_fee: asMoney(raw.doc_fee) || 0,
     savings: asMoney(raw.savings) || 0,
-    stock_number: stock_number || 'N/A',
+    stock_number: stock_number || '',
     exterior_color: exterior_color || '',
     interior_color: interior_color || '',
     image_url: String(raw.image_url ?? raw.imageUrl ?? '').trim(),
@@ -610,7 +615,44 @@ function resolveVehicleHref(
 function fmtStock(stock: string | undefined | null) {
   const s = String(stock || '').trim();
   if (!s || s === 'N/A' || s === 'NA' || /^(?:19|20)\d{2}$/.test(s)) return '—';
+  if (isInTransitStock(s)) return IN_TRANSIT_STOCK;
   return `#${s}`;
+}
+
+/** Stock cell: In Transit badge, else #CODE, else clean em-dash. */
+function StockNumberCell({
+  stock,
+  href,
+}: {
+  stock: string | undefined | null;
+  href?: string | null;
+}) {
+  const s = String(stock || '').trim();
+  if (isInTransitStock(s)) {
+    return (
+      <span className="inline-flex items-center rounded-md border border-amber-400/40 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+        In Transit
+      </span>
+    );
+  }
+  const label = fmtStock(s);
+  if (label === '—') {
+    return <span className="text-muted-foreground/70">—</span>;
+  }
+  if (href) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary hover:underline underline-offset-2"
+        title="Open vehicle detail page"
+      >
+        {label}
+      </a>
+    );
+  }
+  return <span>{label}</span>;
 }
 
 function fmt(n: number) {
@@ -2817,8 +2859,7 @@ function InventoryView({
                   const stockNumber =
                     v.stock_number ||
                     (v as Vehicle & { stockNumber?: string }).stockNumber ||
-                    'N/A';
-                  const stockLabel = fmtStock(stockNumber);
+                    '';
                   const titleLabel =
                     vehicleTitle(v) ||
                     `${v.year || ''} ${v.make || ''} ${v.model || ''}`.trim() ||
@@ -2842,21 +2883,12 @@ function InventoryView({
                         )}
                       </td>
 
-                      {/* Stock # → VDP */}
+                      {/* Stock # → In Transit badge / VDP link / — */}
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {linkHref && stockLabel !== '—' ? (
-                          <a
-                            href={linkHref}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:underline underline-offset-2"
-                            title="Open vehicle detail page"
-                          >
-                            {stockLabel}
-                          </a>
-                        ) : (
-                          stockLabel
-                        )}
+                        <StockNumberCell
+                          stock={stockNumber}
+                          href={!isInTransitStock(stockNumber) ? linkHref : null}
+                        />
                       </td>
 
                       {/* VIN */}

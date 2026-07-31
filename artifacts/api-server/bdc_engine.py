@@ -6647,22 +6647,24 @@ def _int_safe(raw, default: int = 0) -> int:
 
 
 def _stock_safe(raw) -> str:
-    """Return a sanitised stock number or 'N/A' — never empty, never VIN-derived.
+    """Return a sanitised stock number, '' when missing, or 'In Transit'.
 
-    Blocks:
-      • empty / None / placeholder strings
-      • bare 17-char VINs passed as stock numbers
-      • pure auto-increment integers ≥ 5 digits with no letter prefix
+    Never invents VIN slices / years. Blocks bare 17-char VINs and pure
+    auto-increment integers ≥ 5 digits with no letter prefix.
     """
     if not raw:
-        return 'N/A'
+        return ''
     s = str(raw).strip()
     if not s or s.lower() in ('n/a', 'na', 'none', '0', '-', '—', 'null', 'undefined'):
-        return 'N/A'
+        return ''
+    if re.fullmatch(r'in[\s\-]?transit', s, re.I):
+        return 'In Transit'
     if re.fullmatch(r'[A-HJ-NPR-Z0-9]{17}', s, re.I):
-        return 'N/A'   # bare VIN
+        return ''   # bare VIN — do not use as stock
+    if re.fullmatch(r'(?:19|20)\d{2}', s):
+        return ''   # model year — never a stock number
     if re.fullmatch(r'\d{5,}', s):
-        return 'N/A'   # pure auto-increment integer
+        return ''   # pure auto-increment integer
     return s
 
 
@@ -8503,7 +8505,7 @@ def _fetch_dealer_page(
         ld_hits = {
             v['vin']: v
             for v in _parse_json_ld(html, condition)
-            if v.get('vin') and _stock_safe(v.get('stock_number')) != 'N/A'
+            if v.get('vin') and _stock_safe(v.get('stock_number'))
         }
         if ld_hits:
             for v in vehicles:
@@ -12538,7 +12540,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
 
                     # ── vehicle_id: real 17-char VIN -> stock# -> DB id ─────
                     _real_vin  = _vin  if len(_vin) == 17 else ''
-                    _stk_clean = _stk  if (_stk and _stk != 'N/A') else ''
+                    _stk_clean = _stk if (_stk and _stk not in ('N/A', 'NA', 'n/a')) else ''
                     _vid = _real_vin or _stk_clean or _dbid
                     if _vid in _seen_ids:
                         _vid = f"{_vid}-{_dbid}"

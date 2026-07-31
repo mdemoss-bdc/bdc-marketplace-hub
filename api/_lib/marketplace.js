@@ -334,7 +334,7 @@ async function listInventory(queryParams = {}) {
         row.vin || src.vin,
       );
       if (!isValidStockNumber(stock, year, make, model)) {
-        stock = stockFallbackFromVin(row.vin || src.vin);
+        stock = '';
       }
       return {
         ...row,
