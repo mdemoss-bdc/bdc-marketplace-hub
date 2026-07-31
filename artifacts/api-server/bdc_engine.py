@@ -1858,6 +1858,8 @@ def init_db():
             "ALTER TABLE users ADD COLUMN job_title TEXT DEFAULT ''",
             # RBAC role: Admin | Reviewer (desk-level access control)
             "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'Reviewer'",
+            # Temp-password gate — admin-assigned passwords force a reset on next login
+            "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
         ]
         for _sql in _migrations:
             try:
@@ -2461,7 +2463,7 @@ def _normalize_login_identifier(identifier: str) -> str:
 
 
 def _ensure_users_role_column() -> None:
-    """Idempotent schema-only: guarantee users.role exists (no row UPDATEs)."""
+    """Idempotent schema-only: guarantee users.role + must_change_password exist."""
     try:
         conn = sqlite3.connect(DB_FILE)
         try:
@@ -2474,6 +2476,13 @@ def _ensure_users_role_column() -> None:
                 )
                 conn.commit()
                 print("[AUTH] Added missing users.role column")
+            if "must_change_password" not in cols:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN must_change_password "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+                conn.commit()
+                print("[AUTH] Added missing users.must_change_password column")
         finally:
             conn.close()
     except Exception as exc:
@@ -3379,7 +3388,8 @@ class UserManager:
         _login_cols = (
             "id, username, email, password_hash, salesperson_id, is_admin, "
             "subscription_status, subscription_tier, org_role, organization_id, "
-            "is_suspended, recovery_id, role"
+            "is_suspended, recovery_id, role, "
+            "COALESCE(must_change_password, 0) AS must_change_password"
         )
         cursor.execute(
             f"SELECT {_login_cols} FROM users "
@@ -3461,7 +3471,12 @@ class UserManager:
             _role = "Admin"
         else:
             _role = "Reviewer"
-        return {
+        try:
+            _must_change = bool(row["must_change_password"])
+        except (KeyError, IndexError):
+            _must_change = False
+        payload = {
+            "success":             True,
             "id":                  row["id"],
             "username":            row["username"],
             "email":               row["email"] or "",
@@ -3476,8 +3491,14 @@ class UserManager:
             "org_role":            row["org_role"] or "",
             "organization_id":     row["organization_id"],
             "email_verified":      True,
+            "must_change_password": _must_change,
             "token":               token,
         }
+        if _must_change:
+            payload["requirePasswordChange"] = True
+            payload["userId"] = row["id"]
+            print(f"[AUTH] Login requires password change — user id={row['id']}")
+        return payload
 
     @staticmethod
     def dev_login(identifier: str) -> dict:
@@ -3580,11 +3601,20 @@ class UserManager:
             conn.close()
 
     @staticmethod
-    def admin_set_password(actor: dict, target_user_id: int, new_password: str) -> None:
+    def admin_set_password(
+        actor: dict,
+        target_user_id: int,
+        new_password: str,
+        *,
+        temporary: bool = False,
+    ) -> None:
         """Set another user's password (Admin Console / rooftop org admin).
 
         Master admins may update any account. Org admins may update members in
         their own organization only. Self-service must use change_password.
+
+        When ``temporary`` is True, ``must_change_password`` is set so the next
+        login forces a password reset before the dashboard is available.
         """
         if len(new_password) < 6:
             raise ValueError("Password must be at least 6 characters.")
@@ -3617,12 +3647,13 @@ class UserManager:
                 if target["organization_id"] != actor_row["organization_id"]:
                     raise PermissionError("User is not a member of your organization.")
             conn.execute(
-                "UPDATE users SET password_hash = ? WHERE id = ?",
-                (_hash_password(new_password), target_user_id),
+                "UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?",
+                (_hash_password(new_password), 1 if temporary else 0, target_user_id),
             )
             conn.commit()
             print(
-                f"[AUTH] Admin {actor.get('id')} set password for user "
+                f"[AUTH] Admin {actor.get('id')} set "
+                f"{'temporary ' if temporary else ''}password for user "
                 f"{target_user_id} ({target['username']!r})"
             )
         except Exception:
@@ -3633,6 +3664,90 @@ class UserManager:
             raise
         finally:
             conn.close()
+
+    @staticmethod
+    def force_change_password(user_id: int, new_password: str) -> dict:
+        """Complete a mandatory password change after a temporary password login.
+
+        Clears ``must_change_password`` and returns a fresh full session payload.
+        """
+        if len(new_password) < 6:
+            raise ValueError("Password must be at least 6 characters.")
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT id, username, email, salesperson_id, is_admin, "
+                "subscription_status, subscription_tier, org_role, organization_id, "
+                "is_suspended, recovery_id, role, "
+                "COALESCE(must_change_password, 0) AS must_change_password "
+                "FROM users WHERE id = ?",
+                (int(user_id),),
+            ).fetchone()
+            if not row:
+                raise ValueError("User not found.")
+            if not bool(row["must_change_password"]):
+                raise ValueError("Password change is not required for this account.")
+            if row["is_suspended"]:
+                raise ValueError("This account has been suspended. Please contact support.")
+            conn.execute(
+                "UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?",
+                (_hash_password(new_password), row["id"]),
+            )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+        token = secrets.token_urlsafe(32)
+        _ACTIVE_SESSIONS[token] = row["id"]
+        _persist_token(token, row["id"])
+        try:
+            _sid_conn = sqlite3.connect(DB_FILE)
+            _sid_conn.execute(
+                "UPDATE users SET active_session_id = ? WHERE id = ?",
+                (token, row["id"]),
+            )
+            _sid_conn.commit()
+            _sid_conn.close()
+        except Exception:
+            pass
+        _mu = os.environ.get('ADMIN_USER', 'mdemoss').strip().lower()
+        _uname = (row["username"] or "").lower()
+        _is_master = bool(row["is_admin"]) and _uname == _mu
+        _role_raw = (row["role"] or "").strip()
+        if _role_raw in ("Admin", "Reviewer"):
+            _role = _role_raw
+        elif _is_master or bool(row["is_admin"]):
+            _role = "Admin"
+        else:
+            _role = "Reviewer"
+        print(f"[AUTH] Forced password change complete — user id={row['id']}")
+        return {
+            "success": True,
+            "id": row["id"],
+            "username": row["username"],
+            "email": row["email"] or "",
+            "salesperson_id": row["salesperson_id"] or "",
+            "is_admin": bool(row["is_admin"]) or _role == "Admin",
+            "is_master_admin": _is_master,
+            "role": _role,
+            "rbac_role": _role,
+            "is_suspended": bool(row["is_suspended"]),
+            "subscription_status": row["subscription_status"] or "inactive",
+            "subscription_tier": row["subscription_tier"] or "",
+            "org_role": row["org_role"] or "",
+            "organization_id": row["organization_id"],
+            "email_verified": True,
+            "must_change_password": False,
+            "requirePasswordChange": False,
+            "token": token,
+        }
 
     @staticmethod
     def request_password_reset(email: str) -> str | None:
@@ -3738,6 +3853,7 @@ class UserManager:
             "SELECT id, username, email, salesperson_id, is_admin, subscription_status, "
             "subscription_tier, org_role, organization_id, email_verified, is_suspended, "
             "created_at, recovery_id, mock_role, role, "
+            "COALESCE(must_change_password, 0) AS must_change_password, "
             "tiktok_open_id, tiktok_access_token, tiktok_token_expires_at, "
             "tiktok_trial_start_date, tiktok_daily_posts, tiktok_privacy_level, pending_extra_seats, "
             "pending_billing_cycle, active_session_id FROM users WHERE id = ?",
@@ -3818,6 +3934,8 @@ class UserManager:
             "tiktok_privacy_level":     row["tiktok_privacy_level"] or "SELF_ONLY",
             "pending_extra_seats":      int(row["pending_extra_seats"] or 0),
             "pending_billing_cycle":    row["pending_billing_cycle"] or "monthly",
+            "must_change_password":     bool(row["must_change_password"]),
+            "requirePasswordChange":    bool(row["must_change_password"]),
         }
 
     @staticmethod
@@ -12441,6 +12559,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     "tiktok_connected":        bool(user.get("tiktok_open_id")),
                     "tiktok_token_expires_at": user.get("tiktok_token_expires_at", ""),
                     "tiktok_privacy_level":    user.get("tiktok_privacy_level", "SELF_ONLY"),
+                    "must_change_password":    bool(user.get("must_change_password", False)),
+                    "requirePasswordChange":   bool(user.get("must_change_password", False)),
                 })
             return
 
@@ -12667,6 +12787,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 "u.subscription_status, u.subscription_tier, u.is_admin, "
                 "u.is_suspended, u.email_verified, u.created_at, u.recovery_id, "
                 "u.organization_id, u.org_role, u.role, "
+                "COALESCE(u.must_change_password, 0) AS must_change_password, "
                 "o.name AS org_name, o.seat_limit AS org_max_seats "
                 "FROM users u "
                 "LEFT JOIN organizations o ON o.id = u.organization_id "
@@ -12691,6 +12812,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                         "org_role":            r["org_role"] or "",
                         "org_name":            r["org_name"] or "",
                         "org_max_seats":       r["org_max_seats"] or 10,
+                        "must_change_password": bool(r["must_change_password"]),
                         "role":                (r["role"] or "").strip() or (
                             "Admin" if r["is_admin"] else "Reviewer"
                         ),
@@ -15716,15 +15838,67 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/admin/users/update-password":
             _uid = int(payload.get("user_id") or payload.get("id") or 0)
             _npw = str(payload.get("new_password") or payload.get("password") or "").strip()
+            _temp = bool(payload.get("temporary") or payload.get("must_change_password"))
             try:
-                UserManager.admin_set_password(user, _uid, _npw)
-                self._json({"success": True, "user_id": _uid})
+                UserManager.admin_set_password(user, _uid, _npw, temporary=_temp)
+                self._json({
+                    "success": True,
+                    "user_id": _uid,
+                    "must_change_password": _temp,
+                })
             except PermissionError as exc:
                 self._json({"error": str(exc)}, 403)
             except ValueError as exc:
                 self._json({"error": str(exc)}, 400)
             except Exception as exc:
                 self._json({"error": f"Failed to update password: {exc}"}, 500)
+            return
+
+        if path == "/api/admin/users/set-temp-password":
+            _uid = int(payload.get("user_id") or payload.get("id") or 0)
+            _npw = str(
+                payload.get("temporary_password")
+                or payload.get("new_password")
+                or payload.get("password")
+                or ""
+            ).strip()
+            try:
+                UserManager.admin_set_password(user, _uid, _npw, temporary=True)
+                self._json({
+                    "success": True,
+                    "user_id": _uid,
+                    "must_change_password": True,
+                    "message": "Temporary password set. User must change it on next login.",
+                })
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, 403)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._json({"error": f"Failed to set temporary password: {exc}"}, 500)
+            return
+
+        if path == "/api/auth/force-change-password":
+            _npw = str(payload.get("new_password") or "").strip()
+            _cpw = str(payload.get("confirm_password") or "").strip()
+            if _npw != _cpw:
+                self._json({"error": "New passwords do not match."}, 400)
+                return
+            try:
+                _out = UserManager.force_change_password(user["id"], _npw)
+                _secure = " Secure;" if (
+                    (self.headers.get("X-Forwarded-Proto") or "").lower() == "https"
+                    or (APP_BASE_URL or "").startswith("https")
+                ) else ""
+                _cookie = (
+                    f"bdc_session={_out['token']}; HttpOnly; Path=/; "
+                    f"SameSite=Strict; Max-Age={7 * 24 * 3600};{_secure}"
+                )
+                self._json(_out, 200, extra_headers=[("Set-Cookie", _cookie)])
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._json({"error": f"Failed to change password: {exc}"}, 500)
             return
 
         # ── Forms draft — persist shared master fields for paper templates ──

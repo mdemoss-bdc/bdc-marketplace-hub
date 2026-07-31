@@ -116,6 +116,7 @@ mount('/api/auth/me', require('../_routes/auth/me'));
 mount('/api/auth/register', require('../_routes/auth/register'));
 mount('/api/auth/signup', require('../_routes/auth/register'));
 mount('/api/auth/change-password', require('../_routes/auth/change-password'));
+mount('/api/auth/force-change-password', require('../_routes/auth/force-change-password'));
 mount('/api/user/profile/change-password', require('../_routes/user/profile/change-password'));
 mount('/api/auth/smtp-verify', require('../_routes/auth/smtp-verify'));
 mount('/api/auth/facebook/callback', require('../_routes/auth/facebook/callback'));
@@ -130,6 +131,7 @@ mount('/api/user/recovery-id/regenerate', require('../_routes/user/recovery-id/r
 
 // ── Admin ───────────────────────────────────────────────────────────────────
 mount('/api/admin/users/update-password', require('../_routes/admin/users/update-password'));
+mount('/api/admin/users/set-temp-password', require('../_routes/admin/users/set-temp-password'));
 mount('/api/admin/users', require('../_routes/admin/users'));
 
 // ── Inventory sync / scrape (Marketplace Hub "Sync All Inventory") ──────────

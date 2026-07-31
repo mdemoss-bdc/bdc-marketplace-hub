@@ -114,7 +114,12 @@ export default function LoginPage() {
       }
       setLoading(true);
       try {
-        await login(username.trim(), password);
+        const result = await login(username.trim(), password);
+        if (result.requirePasswordChange) {
+          // AuthGate renders the forced password-change modal; stay put.
+          setLocation('/dashboard');
+          return;
+        }
         setLocation('/dashboard');
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : 'Sign-in failed.');

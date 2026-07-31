@@ -6,7 +6,7 @@ import {
   Shield, Loader2, RefreshCw, Trash2, Check,
   UserCheck, UserX, StarOff, Star, AlertTriangle,
   KeyRound, Copy, Eye, EyeOff, Film, Save,
-  Building2, ChevronDown, Users, User, Crown,
+  Building2, ChevronDown, Users, User, Crown, Key,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -29,6 +29,7 @@ type AdminUser = {
   org_role?: string;          // 'admin' | 'member' | ''
   org_name?: string;
   org_max_seats?: number;
+  must_change_password?: boolean;
 };
 
 type RooftopGroup = { owner: AdminUser; members: AdminUser[] };
@@ -112,6 +113,7 @@ function RowActions({
   u, busy,
   confirmDelete,   setConfirmDelete,
   confirmResetRid, setConfirmResetRid,
+  onTempPassword,
   togglePro, toggleSuspend, deleteUser, resetRecoveryId,
 }: {
   u: AdminUser;
@@ -120,13 +122,35 @@ function RowActions({
   setConfirmDelete:    (id: number | null) => void;
   confirmResetRid:     number | null;
   setConfirmResetRid:  (id: number | null) => void;
+  onTempPassword:      (u: AdminUser) => void;
   togglePro:       MutationLike;
   toggleSuspend:   MutationLike;
   deleteUser:      MutationLike;
   resetRecoveryId: MutationLike;
 }) {
+  const tempBtn = (
+    <button
+      onClick={() => onTempPassword(u)}
+      disabled={busy}
+      title="Set temporary password (forces reset on next login)"
+      className="flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-sky-100 text-sky-800 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-300 transition-colors disabled:opacity-50"
+    >
+      <Key className="w-3 h-3" /> Temp PW
+      {u.must_change_password ? (
+        <span className="ml-0.5 rounded bg-amber-500/20 px-1 text-[10px] text-amber-700 dark:text-amber-300">
+          pending
+        </span>
+      ) : null}
+    </button>
+  );
+
   if (u.is_admin) {
-    return <span className="text-xs text-muted-foreground italic">Protected</span>;
+    return (
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {tempBtn}
+        <span className="text-xs text-muted-foreground italic">Protected</span>
+      </div>
+    );
   }
 
   /* Delete confirmation */
@@ -168,6 +192,7 @@ function RowActions({
   /* Normal actions */
   return (
     <div className="flex items-center gap-1 flex-wrap">
+      {tempBtn}
       <button onClick={() => togglePro.mutate(u.id)} disabled={busy}
         title={u.subscription_status === 'active' ? 'Revoke Pro Access' : 'Grant Pro Access'}
         className={cn(
@@ -202,6 +227,145 @@ function RowActions({
         className="flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-400 transition-colors disabled:opacity-50">
         <Trash2 className="w-3 h-3" /> Delete
       </button>
+    </div>
+  );
+}
+
+function generateTempPassword(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$';
+  let out = '';
+  for (let i = 0; i < 12; i += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+}
+
+function TempPasswordModal({
+  user,
+  authFetch,
+  onClose,
+  onSaved,
+}: {
+  user: AdminUser;
+  authFetch: ReturnType<typeof useAuth>['authFetch'];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [password, setPassword] = useState(generateTempPassword);
+  const [show, setShow] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const save = async () => {
+    setError('');
+    if (password.trim().length < 6) {
+      setError('Temporary password must be at least 6 characters.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await authFetch('/api/admin/users/set-temp-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          temporary_password: password.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          typeof data.error === 'string' ? data.error : 'Failed to set temporary password.',
+        );
+      }
+      onSaved();
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to set temporary password.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+      <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl">
+        <h3 className="text-base font-semibold">Reset / Temp Password</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Set a temporary password for <span className="font-medium text-foreground">{user.username}</span>.
+          They will be forced to choose a new password on next login.
+        </p>
+
+        <label className="mt-4 block space-y-1.5">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Temporary Password
+          </span>
+          <div className="relative">
+            <input
+              type={show ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="h-10 w-full rounded-lg border border-border bg-background px-3 pr-20 text-sm outline-none focus:ring-2 focus:ring-ring"
+            />
+            <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(password).then(() => {
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  }).catch(() => undefined);
+                }}
+                className="rounded p-1.5 text-muted-foreground hover:text-foreground"
+                title="Copy"
+              >
+                {copied ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShow((s) => !s)}
+                className="rounded p-1.5 text-muted-foreground hover:text-foreground"
+                title={show ? 'Hide' : 'Show'}
+              >
+                {show ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+          </div>
+        </label>
+
+        <button
+          type="button"
+          onClick={() => setPassword(generateTempPassword())}
+          className="mt-2 text-xs font-semibold text-sky-700 hover:underline dark:text-sky-400"
+        >
+          Auto-generate another password
+        </button>
+
+        {error ? (
+          <p className="mt-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
+        ) : null}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg bg-muted px-3 py-2 text-sm font-semibold text-muted-foreground hover:bg-muted/80"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-60"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Key className="h-3.5 w-3.5" />}
+            Set Temporary Password
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -360,6 +524,7 @@ export default function AdminPage() {
   const [confirmDelete,   setConfirmDelete]   = useState<number | null>(null);
   const [confirmResetRid, setConfirmResetRid] = useState<number | null>(null);
   const [resetRidResult,  setResetRidResult]  = useState<{ id: number; rid: string } | null>(null);
+  const [tempPasswordUser, setTempPasswordUser] = useState<AdminUser | null>(null);
 
   /* Wrapper: also clears the "just-reset" display before opening a new RID confirm */
   const openResetRid = (id: number | null) => {
@@ -471,11 +636,20 @@ export default function AdminPage() {
     busy,
     confirmDelete,   setConfirmDelete,
     confirmResetRid, setConfirmResetRid: openResetRid,
+    onTempPassword: setTempPasswordUser,
     togglePro, toggleSuspend, deleteUser, resetRecoveryId,
   };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
+      {tempPasswordUser ? (
+        <TempPasswordModal
+          user={tempPasswordUser}
+          authFetch={authFetch}
+          onClose={() => setTempPasswordUser(null)}
+          onSaved={() => qc.invalidateQueries({ queryKey: ['admin-users'] })}
+        />
+      ) : null}
 
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">

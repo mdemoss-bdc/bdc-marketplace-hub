@@ -1,6 +1,6 @@
 /**
- * POST /api/admin/users/update-password
- * Admin Console / rooftop org-admin password updates only.
+ * POST /api/admin/users/set-temp-password
+ * Admin Console: assign a temporary password that forces reset on next login.
  */
 const { getUserByUsername } = require('../../../_lib/users');
 const { adminSetPassword } = require('../../../_lib/db');
@@ -23,22 +23,24 @@ module.exports = async function handler(req, res) {
 
   const body = parseBody(req);
   const userId = Number(body.user_id || body.id || 0);
-  const newPassword = String(body.new_password || body.password || '');
+  const newPassword = String(
+    body.temporary_password || body.new_password || body.password || '',
+  );
 
   try {
-    const temporary = Boolean(body.temporary || body.must_change_password);
-    const user = await adminSetPassword(actor, userId, newPassword, { temporary });
+    const user = await adminSetPassword(actor, userId, newPassword, { temporary: true });
     res.status(200).json({
       success: true,
       user_id: user.id,
       username: user.username,
-      must_change_password: Boolean(user.must_change_password),
+      must_change_password: true,
+      message: 'Temporary password set. User must change it on next login.',
     });
   } catch (err) {
     const status = Number(err?.statusCode) || 400;
     res.status(status).json({
       success: false,
-      error: err instanceof Error ? err.message : 'Failed to update password.',
+      error: err instanceof Error ? err.message : 'Failed to set temporary password.',
     });
   }
 };

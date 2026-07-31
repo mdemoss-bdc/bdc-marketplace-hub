@@ -86,6 +86,7 @@ function openDb() {
     "ALTER TABLE users ADD COLUMN fb_catalog_name TEXT DEFAULT ''",
     "ALTER TABLE users ADD COLUMN catalog_token TEXT DEFAULT ''",
     'ALTER TABLE users ADD COLUMN facebook_connected_at TEXT DEFAULT NULL',
+    'ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0',
   ]) {
     try {
       _db.exec(ddl);
@@ -426,6 +427,8 @@ function rowToUser(row) {
     created_at: row.created_at || '',
     phone: row.phone || '',
     mock_role: row.mock_role || '',
+    must_change_password: Boolean(row.must_change_password),
+    requirePasswordChange: Boolean(row.must_change_password),
     tiktok_connected: false,
     tiktok_token_expires_at: '',
     tiktok_privacy_level: 'SELF_ONLY',
@@ -763,8 +766,9 @@ function changePassword(userId, currentPassword, newPassword) {
 
 /**
  * Admin / rooftop-org-admin password set (Admin Console update-password only).
+ * Pass temporary=true to force a password change on next login.
  */
-function adminSetPassword(actor, targetUserId, newPassword) {
+function adminSetPassword(actor, targetUserId, newPassword, { temporary = false } = {}) {
   const db = openDb();
   const targetId = Number(targetUserId);
   if (!targetId) throw new Error('user_id is required.');
@@ -793,13 +797,35 @@ function adminSetPassword(actor, targetUserId, newPassword) {
     err.statusCode = 403;
     throw err;
   }
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
-    hashPassword(newPassword),
-    targetId,
-  );
+  db.prepare(
+    'UPDATE users SET password_hash = ?, must_change_password = ? WHERE id = ?',
+  ).run(hashPassword(newPassword), temporary ? 1 : 0, targetId);
   persistVault(db);
-  console.log(`[auth-db] admin ${actor.id} set password for user ${targetId}`);
+  console.log(
+    `[auth-db] admin ${actor.id} set ${temporary ? 'temporary ' : ''}password for user ${targetId}`,
+  );
   return getUserById(targetId);
+}
+
+function forceChangePassword(userId, newPassword) {
+  const db = openDb();
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(userId));
+  if (!row) throw new Error('User not found.');
+  if (!row.must_change_password) {
+    throw new Error('Password change is not required for this account.');
+  }
+  if (row.is_suspended) {
+    throw new Error('This account has been suspended. Please contact support.');
+  }
+  if (!newPassword || String(newPassword).length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+  db.prepare(
+    'UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?',
+  ).run(hashPassword(newPassword), row.id);
+  persistVault(db);
+  console.log(`[auth-db] forced password change complete for user ${row.id}`);
+  return getUserById(row.id);
 }
 
 module.exports = {
@@ -817,6 +843,7 @@ module.exports = {
   regenerateRecoveryId,
   changePassword,
   adminSetPassword,
+  forceChangePassword,
   saveFacebookConnection,
   clearFacebookConnection,
   dbPath,

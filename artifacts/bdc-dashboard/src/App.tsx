@@ -12,6 +12,7 @@ import EmailDesk from '@/pages/email-desk';
 import MarketplaceHub from '@/pages/marketplace-hub';
 import Settings from '@/pages/settings';
 import LoginPage from '@/pages/login';
+import { ForcePasswordChangeModal } from '@/components/ForcePasswordChangeModal';
 import PricingPage from '@/pages/pricing';
 import ForgotPassword from '@/pages/forgot-password';
 import ResetPassword from '@/pages/reset-password';
@@ -318,6 +319,10 @@ function AuthGate() {
     }
     // Deep-link to /dashboard or /admin without a session → /login
     return <LoginPage />;
+  }
+
+  if (user.must_change_password) {
+    return <ForcePasswordChangeModal />;
   }
 
   return <Router />;

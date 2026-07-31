@@ -79,21 +79,30 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    const mustChange = Boolean(user.must_change_password || user.requirePasswordChange);
     const token = signJwt({
       sub: user.username,
       id: user.id,
       role: user.role,
       is_admin: user.is_admin,
       is_master_admin: user.is_master_admin,
+      must_change_password: mustChange,
     });
     setAuthCookie(res, token);
     clearLoginFailures(ip);
-    console.log('[AUTH OK]', user.username, 'login session issued');
+    console.log(
+      '[AUTH OK]',
+      user.username,
+      mustChange ? 'login requires password change' : 'login session issued',
+    );
     res.status(200).json({
       success: true,
       ...user,
       role: user.role,
       token,
+      must_change_password: mustChange,
+      requirePasswordChange: mustChange,
+      userId: user.id,
     });
   } catch (err) {
     console.log('[AUTH FAIL]', username, err instanceof Error ? err.message : 'session signing failed');

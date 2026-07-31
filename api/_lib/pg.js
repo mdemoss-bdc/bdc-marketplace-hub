@@ -94,6 +94,7 @@ async function ensureCoreSchema() {
         is_suspended INTEGER NOT NULL DEFAULT 0,
         recovery_id TEXT DEFAULT '',
         mock_role TEXT DEFAULT '',
+        must_change_password INTEGER NOT NULL DEFAULT 0,
         email_revert_token TEXT DEFAULT NULL,
         email_revert_expires_at TIMESTAMPTZ DEFAULT NULL,
         old_email_history TEXT DEFAULT '',

@@ -42,6 +42,8 @@ export interface User {
   name: string;
   /** Short role label: admin | rep | manager */
   role: string;
+  /** Admin-assigned temp password — must reset before using the desk. */
+  must_change_password: boolean;
 }
 
 /** Preset labels for the optional account switcher UI (display only). */
@@ -147,6 +149,9 @@ function mapApiUser(raw: Record<string, unknown>): User {
     fb_page_name: String(raw.fb_page_name ?? ''),
     commerce_catalog_id: String(raw.commerce_catalog_id ?? ''),
     fb_catalog_name: String(raw.fb_catalog_name ?? ''),
+    must_change_password: Boolean(
+      raw.must_change_password || raw.requirePasswordChange,
+    ),
   };
 }
 
@@ -222,6 +227,7 @@ function buildUser(partial: {
     fb_page_name: '',
     commerce_catalog_id: '',
     fb_catalog_name: '',
+    must_change_password: false,
   };
 }
 
@@ -295,7 +301,8 @@ interface AuthContextValue {
   effectiveOrgRole: string;
   switchAccount: (accountId: string) => void;
   setMockRole: (role: MockRole) => Promise<void>;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<{ requirePasswordChange: boolean }>;
+  forceChangePassword: (newPassword: string, confirmPassword: string) => Promise<void>;
   register: (username: string, password: string, email: string, tosAccepted: boolean, visitorId?: string, referralCode?: string, orgInvite?: string, accountType?: 'individual' | 'rooftop', dealershipName?: string, extraSeats?: number, billingCycle?: 'monthly' | 'annual' | 'lifetime', fullName?: string) => Promise<void>;
   logout: () => Promise<void>;
   authFetch: (input: string, init?: RequestInit) => Promise<Response>;
@@ -394,11 +401,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const sessionToken = String(data.token || 'cookie-session');
+    const requirePasswordChange = Boolean(
+      data.requirePasswordChange || data.must_change_password,
+    );
     try {
       const me = await fetchMe(data.token ? String(data.token) : null);
-      applySession(sessionToken, me);
+      applySession(sessionToken, {
+        ...me,
+        must_change_password: requirePasswordChange || me.must_change_password,
+      });
     } catch {
-      applySession(sessionToken, mapApiUser(data as Record<string, unknown>));
+      applySession(sessionToken, mapApiUser({
+        ...(data as Record<string, unknown>),
+        must_change_password: requirePasswordChange,
+        requirePasswordChange,
+      }));
+    }
+    return { requirePasswordChange };
+  }, [applySession]);
+
+  const forceChangePassword = useCallback(async (
+    newPassword: string,
+    confirmPassword: string,
+  ) => {
+    if (!newPassword || newPassword.length < 6) {
+      throw new Error('Password must be at least 6 characters.');
+    }
+    if (newPassword !== confirmPassword) {
+      throw new Error('New passwords do not match.');
+    }
+    const tok = tokenRef.current;
+    const res = await fetch(apiUrl('/api/auth/force-change-password'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(tok && tok !== 'cookie-session' && !isClientFallbackToken(tok)
+          ? { Authorization: `Bearer ${tok}` }
+          : {}),
+      },
+      body: JSON.stringify({
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        typeof data.error === 'string' ? data.error : 'Failed to change password.',
+      );
+    }
+    const sessionToken = String(data.token || tok || 'cookie-session');
+    try {
+      const me = await fetchMe(data.token ? String(data.token) : tok);
+      applySession(sessionToken, { ...me, must_change_password: false });
+    } catch {
+      applySession(sessionToken, mapApiUser({
+        ...(data as Record<string, unknown>),
+        must_change_password: false,
+        requirePasswordChange: false,
+      }));
     }
   }, [applySession]);
 
@@ -539,10 +601,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isSubscribed, isEmailVerified,
       isMasterAdmin, mockRole, effectiveIsMasterAdmin, effectiveOrgRole,
       switchAccount, setMockRole,
-      login, register, logout, authFetch, refreshUser,
+      login, forceChangePassword, register, logout, authFetch, refreshUser,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [user, token, isLoading, isAuthenticated, isSubscribed, isEmailVerified, isMasterAdmin, mockRole, effectiveIsMasterAdmin, effectiveOrgRole, switchAccount, setMockRole, login, register, logout, authFetch, refreshUser],
+    [user, token, isLoading, isAuthenticated, isSubscribed, isEmailVerified, isMasterAdmin, mockRole, effectiveIsMasterAdmin, effectiveOrgRole, switchAccount, setMockRole, login, forceChangePassword, register, logout, authFetch, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

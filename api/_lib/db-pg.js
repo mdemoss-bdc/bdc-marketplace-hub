@@ -76,6 +76,7 @@ async function ensureSchema() {
     'ALTER TABLE users ADD COLUMN IF NOT EXISTS is_suspended INTEGER NOT NULL DEFAULT 0',
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS recovery_id TEXT DEFAULT ''",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS mock_role TEXT DEFAULT ''",
+    'ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE users ADD COLUMN IF NOT EXISTS email_revert_token TEXT DEFAULT NULL',
     'ALTER TABLE users ADD COLUMN IF NOT EXISTS email_revert_expires_at TIMESTAMPTZ DEFAULT NULL',
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS old_email_history TEXT DEFAULT ''",
@@ -352,6 +353,8 @@ function rowToUser(row) {
     created_at: row.created_at ? String(row.created_at) : '',
     phone: row.phone || '',
     mock_role: row.mock_role || '',
+    must_change_password: Boolean(row.must_change_password),
+    requirePasswordChange: Boolean(row.must_change_password),
     tiktok_connected: false,
     tiktok_token_expires_at: '',
     tiktok_privacy_level: 'SELF_ONLY',
@@ -677,7 +680,7 @@ async function changePassword(userId, currentPassword, newPassword) {
   return getUserById(userId);
 }
 
-async function adminSetPassword(actor, targetUserId, newPassword) {
+async function adminSetPassword(actor, targetUserId, newPassword, { temporary = false } = {}) {
   await openDb();
   const targetId = Number(targetUserId);
   if (!targetId) throw new Error('user_id is required.');
@@ -706,12 +709,35 @@ async function adminSetPassword(actor, targetUserId, newPassword) {
     err.statusCode = 403;
     throw err;
   }
-  await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
-    hashPassword(newPassword),
-    targetId,
-  ]);
-  console.log(`[auth-pg] admin ${actor.id} set password for user ${targetId}`);
+  await query(
+    'UPDATE users SET password_hash = $1, must_change_password = $2 WHERE id = $3',
+    [hashPassword(newPassword), temporary ? 1 : 0, targetId],
+  );
+  console.log(
+    `[auth-pg] admin ${actor.id} set ${temporary ? 'temporary ' : ''}password for user ${targetId}`,
+  );
   return getUserById(targetId);
+}
+
+async function forceChangePassword(userId, newPassword) {
+  await openDb();
+  const row = await queryOne('SELECT * FROM users WHERE id = $1', [Number(userId)]);
+  if (!row) throw new Error('User not found.');
+  if (!row.must_change_password) {
+    throw new Error('Password change is not required for this account.');
+  }
+  if (row.is_suspended) {
+    throw new Error('This account has been suspended. Please contact support.');
+  }
+  if (!newPassword || String(newPassword).length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+  await query(
+    'UPDATE users SET password_hash = $1, must_change_password = 0 WHERE id = $2',
+    [hashPassword(newPassword), row.id],
+  );
+  console.log(`[auth-pg] forced password change complete for user ${row.id}`);
+  return getUserById(row.id);
 }
 
 function dbPath() {
@@ -737,6 +763,7 @@ module.exports = {
   regenerateRecoveryId,
   changePassword,
   adminSetPassword,
+  forceChangePassword,
   saveFacebookConnection,
   clearFacebookConnection,
   dbPath,
