@@ -188,6 +188,10 @@ interface Vehicle {
   in_meta_feed?: boolean;
   last_seen: string;
   ai_description?: string;
+  /** Direct Vehicle Detail Page URL from the scraper. */
+  vdp_url?: string;
+  /** Alias for vdp_url (adaptive scraper Zod schema). */
+  link?: string;
 }
 
 interface GeneratedPost {
@@ -487,6 +491,9 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>): Vehicle {
     cleanVehicleText(raw.interior_color ?? raw.interiorColor ?? raw.int_color),
   );
   const stock_number = resolveDisplayStock(raw, year, vin);
+  const vdp_url = String(
+    raw.vdp_url ?? raw.vdpUrl ?? raw.link ?? raw.url ?? raw.href ?? '',
+  ).trim();
   return {
     ...(raw as unknown as Vehicle),
     vin,
@@ -499,6 +506,8 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>): Vehicle {
     stock_number,
     exterior_color,
     interior_color,
+    vdp_url,
+    link: vdp_url,
   };
 }
 
@@ -511,6 +520,27 @@ function vehicleTitle(v: Pick<Vehicle, 'year' | 'make' | 'model' | 'trim'>, incl
     includeTrim ? cleanVehicleText(v.trim) : null,
   ].filter(Boolean);
   return parts.join(' ');
+}
+
+/** Resolve clickable VDP href: vehicle.link / vdp_url, else Base Inventory URL. */
+function resolveVehicleHref(
+  v: Pick<Vehicle, 'vdp_url' | 'link' | 'condition'>,
+  baseUsed = '',
+  baseNew = '',
+  baseAny = '',
+): string {
+  const raw = String(v.vdp_url || v.link || '').trim();
+  const fallback =
+    (v.condition === 'New' ? baseNew : baseUsed) || baseUsed || baseNew || baseAny || '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('/') && fallback) {
+    try {
+      return `${new URL(fallback).origin}${raw}`;
+    } catch {
+      /* fall through */
+    }
+  }
+  return fallback;
 }
 
 function fmtStock(stock: string | undefined | null) {
@@ -2717,6 +2747,14 @@ function InventoryView({
                   const post        = posts[v.vin] ?? null;
                   const copyDone    = copyDoneVin === v.vin;
                   const isSelected  = selectedVins.has(v.vin);
+                  const vdpHref = resolveVehicleHref(
+                    v,
+                    inventoryUrlUsed || inventoryUrl,
+                    inventoryUrlNew,
+                    inventoryUrl,
+                  );
+                  const stockLabel = fmtStock(v.stock_number);
+                  const titleLabel = vehicleTitle(v);
 
                   const mainRow = (
                     <tr
@@ -2734,9 +2772,21 @@ function InventoryView({
                         )}
                       </td>
 
-                      {/* Stock # */}
+                      {/* Stock # → VDP */}
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {fmtStock(v.stock_number)}
+                        {vdpHref && stockLabel !== '—' ? (
+                          <a
+                            href={vdpHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline underline-offset-2"
+                            title="Open vehicle detail page"
+                          >
+                            {stockLabel}
+                          </a>
+                        ) : (
+                          stockLabel
+                        )}
                       </td>
 
                       {/* VIN */}
@@ -2744,10 +2794,22 @@ function InventoryView({
                         {v.vin && v.vin.length === 17 ? v.vin : v.vin && v.vin.length > 0 ? <span className="text-muted-foreground/50 italic">—</span> : '—'}
                       </td>
 
-                      {/* Vehicle */}
+                      {/* Vehicle title → VDP */}
                       <td className="px-3 py-3">
                         <div className="font-semibold text-sm leading-tight">
-                          {vehicleTitle(v)}
+                          {vdpHref ? (
+                            <a
+                              href={vdpHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-foreground hover:text-primary hover:underline underline-offset-2"
+                              title="Open vehicle detail page"
+                            >
+                              {titleLabel}
+                            </a>
+                          ) : (
+                            titleLabel
+                          )}
                         </div>
                         {v.trim && (
                           <div className="text-xs text-muted-foreground mt-0.5">{v.trim}</div>
@@ -3363,6 +3425,15 @@ export default function MarketplaceHub() {
         // Surface real validation problems (e.g. a malformed URL) as a
         // secondary note — the local save already succeeded.
         setScraperSaveNote(data.error || 'Saved locally, but the engine rejected the sync.');
+      } else if (data.inventoryWiped) {
+        setScraperSaveMsg(
+          data.message || 'Previous inventory purged for new target URL.',
+        );
+        setScraperSaveNote(
+          data.sync_triggered
+            ? 'Inventory wiped — refreshing from the new Target URL…'
+            : 'Previous inventory purged for new target URL.',
+        );
       } else if (data.sync_triggered) {
         setScraperSaveNote('Inventory refreshing in the background…');
       }
