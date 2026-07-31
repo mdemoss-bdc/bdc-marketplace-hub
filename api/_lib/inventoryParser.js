@@ -30,13 +30,54 @@ function stripDomNoise(raw) {
   return String(raw || '').replace(DOM_NOISE_RE, ' ');
 }
 
-function scrubRawText(raw) {
-  return stripDomNoise(String(raw || ''))
-    .replace(HTML_TAG_RE, ' ')
+/**
+ * Decode HTML entities (&amp;, &#x2B;, &#43;, etc.) without external deps.
+ */
+function decodeHtmlEntities(input) {
+  let s = String(input ?? '');
+  // Hex numeric: &#x2B; / &#X2B
+  s = s.replace(/&#x([0-9a-fA-F]+);?/g, (_, hex) => {
+    const cp = Number.parseInt(hex, 16);
+    return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+  });
+  // Decimal numeric: &#43;
+  s = s.replace(/&#(\d+);?/g, (_, dec) => {
+    const cp = Number.parseInt(dec, 10);
+    return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+  });
+  return s
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
     .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&plus;/gi, '+');
+}
+
+/**
+ * Clean dealer text after entity decode — fix "F+150", "Mercedes+Benz", "GX+460".
+ */
+function cleanVehicleText(input) {
+  let s = decodeHtmlEntities(input).replace(/\u00a0/g, ' ').trim();
+  if (!s) return '';
+  // Ford F-series: F+150 → F-150
+  s = s.replace(/\bF\+(\d{2,3})\b/gi, 'F-$1');
+  // Mercedes+Benz → Mercedes-Benz
+  s = s.replace(/\bMercedes\+Benz\b/gi, 'Mercedes-Benz');
+  // Model codes like GX+460 / RX+350 → GX 460
+  s = s.replace(/\b([A-Z]{2,4})\+(\d{2,4})\b/g, '$1 $2');
+  // Remaining Word+Word → Word-Word
+  s = s.replace(/([A-Za-z]{2,})\+([A-Za-z]{2,})/g, '$1-$2');
+  // Collapse whitespace
+  s = s.replace(WHITESPACE_RE, ' ').trim();
+  return s;
+}
+
+function scrubRawText(raw) {
+  return stripDomNoise(cleanVehicleText(String(raw || '')))
+    .replace(HTML_TAG_RE, ' ')
     .replace(WHITESPACE_RE, ' ')
     .trim();
 }
@@ -116,18 +157,69 @@ function extractInteriorColor(text) {
   return null;
 }
 
-function extractStockNumber(text) {
+/** Reject years, VINs, makes, and empty placeholders as stock numbers. */
+function isValidStockNumber(value, year = 0, make = '', model = '') {
+  const stock = String(value || '').trim().toUpperCase();
+  if (!stock || stock === 'N/A' || stock === 'NA' || stock === 'NONE' || stock === '-' || stock === '—') {
+    return false;
+  }
+  if (stock.length === 17 && VIN_RE.test(stock)) return false;
+  // Never treat a model year as a stock number (the "#2020" bug).
+  if (/^(?:19|20)\d{2}$/.test(stock)) return false;
+  if (year > 0 && stock === String(year)) return false;
+  const makeU = String(make || '').toUpperCase().replace(/\s+/g, '');
+  const modelU = String(model || '').toUpperCase().replace(/\s+/g, '');
+  if (makeU && stock === makeU) return false;
+  if (modelU && (stock === modelU || modelU.startsWith(stock) && stock.length <= 4)) return false;
+  if (KNOWN_MAKES.has(stock.toLowerCase())) return false;
+  // Require at least one digit for numeric dealer stocks, or alphanumeric mix.
+  if (!/[0-9]/.test(stock) && stock.length < 5) return false;
+  if (!/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(stock)) return false;
+  return true;
+}
+
+function stockFallbackFromVin(vin) {
+  const v = String(vin || '').trim().toUpperCase();
+  if (v.length === 17 && VIN_RE.test(v)) return v.slice(-8);
+  return 'N/A';
+}
+
+function extractStockNumber(text, year = 0, make = '', model = '') {
   const scrubbed = scrubRawText(text);
+  // Only accept explicitly labeled stock tokens — unlabeled matches grab years.
   const labeled = scrubbed.match(STOCK_LABELED_RE);
   if (labeled && labeled[1]) {
     const candidate = labeled[1].toUpperCase();
-    if (!VIN_RE.test(candidate)) return candidate;
+    if (isValidStockNumber(candidate, year, make, model)) return candidate;
   }
-  const m = scrubbed.match(STOCK_RE);
-  if (!m || !m[1]) return null;
-  const candidate = m[1].toUpperCase();
-  if (candidate.length === 17 && VIN_RE.test(candidate)) return null;
-  return candidate;
+  return null;
+}
+
+/**
+ * Resolve dealer stock from payload aliases; never fall back to year.
+ * Missing → last 8 of VIN, else "N/A".
+ */
+function resolveStockNumber(vehicle, year, make, model, vin) {
+  const candidates = [
+    vehicle.stock_number,
+    vehicle.stockNumber,
+    vehicle.StockNumber,
+    vehicle.stockNo,
+    vehicle.stock_no,
+    vehicle.stock_num,
+    vehicle.stockNum,
+    vehicle.stock,
+    vehicle.Stock,
+    vehicle.sku,
+    vehicle.SKU,
+    vehicle.dealerStockNumber,
+    vehicle.dealer_stock_number,
+  ];
+  for (const c of candidates) {
+    const raw = cleanVehicleText(asNonEmptyString(c)).toUpperCase();
+    if (isValidStockNumber(raw, year, make, model)) return raw;
+  }
+  return stockFallbackFromVin(vin);
 }
 
 function extractYearMakeModel(text) {
@@ -268,21 +360,29 @@ function sanitizeVehicleRecord(vehicle, rawText) {
       vehicle.title,
       vehicle.vin,
       vehicle.stock_number,
+      vehicle.stockNumber,
+      vehicle.stockNo,
+      vehicle.stock,
       vehicle.year,
       vehicle.make,
       vehicle.model,
+      vehicle.trim,
       vehicle.price,
       vehicle.internetPrice,
       vehicle.listPrice,
+      vehicle.selling_price,
+      vehicle.retail_price,
       vehicle.mileage,
       vehicle.miles,
       vehicle.odometer,
+      vehicle.distance,
       vehicle.exterior_color,
       vehicle.exteriorColor,
       vehicle.color,
+      vehicle.ext_color_generic,
     ]
       .filter((v) => v != null && String(v).trim() !== '')
-      .map(String)
+      .map((v) => cleanVehicleText(String(v)))
       .join(' ');
 
   const parsed = parseInventoryText(blob);
@@ -305,16 +405,18 @@ function sanitizeVehicleRecord(vehicle, rawText) {
         vehicle.price,
         vehicle.internetPrice,
         vehicle.internet_price,
+        vehicle.selling_price,
+        vehicle.sellingPrice,
+        vehicle.retail_price,
+        vehicle.retailPrice,
         vehicle.listPrice,
         vehicle.list_price,
         vehicle.askingPrice,
         vehicle.asking_price,
         vehicle.salePrice,
         vehicle.sale_price,
-        vehicle.sellingPrice,
         vehicle.msrp,
         vehicle.MSRP,
-        vehicle.retailPrice,
       ),
     ) ||
     parsed.price ||
@@ -328,6 +430,8 @@ function sanitizeVehicleRecord(vehicle, rawText) {
         vehicle.Miles,
         vehicle.odometer,
         vehicle.Odometer,
+        vehicle.distance,
+        vehicle.Distance,
         vehicle.odometerReading,
         vehicle.odometer_reading,
         vehicle.mileageFromOdometer,
@@ -336,48 +440,51 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     parsed.mileage ||
     0;
 
-  const make = asNonEmptyString(vehicle.make) || parsed.make || '';
-  const model = asNonEmptyString(vehicle.model) || parsed.model || '';
+  const make = cleanVehicleText(asNonEmptyString(vehicle.make) || parsed.make || '');
+  const model = cleanVehicleText(asNonEmptyString(vehicle.model) || parsed.model || '');
+  const trim = cleanVehicleText(
+    asNonEmptyString(vehicle.trim) || asNonEmptyString(vehicle.Trim) || '',
+  );
+  const title = cleanVehicleText(
+    asNonEmptyString(vehicle.title) || [year, make, model, trim].filter(Boolean).join(' '),
+  );
+  const description = cleanVehicleText(
+    asNonEmptyString(vehicle.description) || asNonEmptyString(vehicle.ai_description) || '',
+  );
 
-  let stock = asNonEmptyString(vehicle.stock_number || vehicle.stockNumber).toUpperCase();
-  if (!stock || (stock.length === 17 && VIN_RE.test(stock))) {
-    const candidate = (parsed.stock_number || '').toUpperCase();
-    // Avoid treating make/model tokens (e.g. CHEVROLET) as stock numbers.
-    const makeU = make.toUpperCase().replace(/\s+/g, '');
-    const modelU = model.toUpperCase().replace(/\s+/g, '');
-    if (
-      candidate &&
-      candidate !== makeU &&
-      candidate !== modelU &&
-      !KNOWN_MAKES.has(candidate.toLowerCase())
-    ) {
-      stock = candidate;
-    }
-  } else {
-    const fromField = extractStockNumber(stock);
-    if (fromField) stock = fromField;
+  // Prefer structured dealer stock fields — never year; else last-8 VIN / N/A.
+  let stock = resolveStockNumber(vehicle, year, make, model, vin);
+  if (!isValidStockNumber(stock, year, make, model)) {
+    const labeled = extractStockNumber(blob, year, make, model);
+    stock = labeled || stockFallbackFromVin(vin);
   }
 
   const exterior = titleCaseColor(
-    firstNonEmpty(
-      vehicle.exterior_color,
-      vehicle.exteriorColor,
-      vehicle.ExteriorColor,
-      vehicle.ext_color,
-      vehicle.extColor,
-      vehicle.color,
-      vehicle.Color,
-      parsed.exterior_color,
+    cleanVehicleText(
+      firstNonEmpty(
+        vehicle.exterior_color,
+        vehicle.exteriorColor,
+        vehicle.ExteriorColor,
+        vehicle.ext_color,
+        vehicle.extColor,
+        vehicle.ext_color_generic,
+        vehicle.extColorGeneric,
+        vehicle.color,
+        vehicle.Color,
+        parsed.exterior_color,
+      ),
     ),
   );
   const interior = titleCaseColor(
-    firstNonEmpty(
-      vehicle.interior_color,
-      vehicle.interiorColor,
-      vehicle.InteriorColor,
-      vehicle.int_color,
-      vehicle.intColor,
-      parsed.interior_color,
+    cleanVehicleText(
+      firstNonEmpty(
+        vehicle.interior_color,
+        vehicle.interiorColor,
+        vehicle.InteriorColor,
+        vehicle.int_color,
+        vehicle.intColor,
+        parsed.interior_color,
+      ),
     ),
   );
 
@@ -387,10 +494,14 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     year,
     make,
     model,
+    trim,
+    title,
+    description,
     price,
     mileage,
     miles: mileage,
     stock_number: stock,
+    stockNumber: stock,
     exterior_color: exterior,
     exteriorColor: exterior,
     color: exterior,
@@ -427,6 +538,8 @@ module.exports = {
   YMM_RE,
   stripDomNoise,
   scrubRawText,
+  decodeHtmlEntities,
+  cleanVehicleText,
   extractVin,
   extractYear,
   extractPrice,
@@ -440,4 +553,7 @@ module.exports = {
   sanitizeInventoryList,
   normalizeYear,
   titleCaseColor,
+  isValidStockNumber,
+  resolveStockNumber,
+  stockFallbackFromVin,
 };

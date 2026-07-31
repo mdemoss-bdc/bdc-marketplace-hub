@@ -389,26 +389,113 @@ function titleCaseColor(value: unknown): string {
     .join('');
 }
 
+/** Decode HTML entities and clean dealer "+"-encoded model names. */
+function decodeHtmlEntities(input: unknown): string {
+  let s = String(input ?? '');
+  s = s.replace(/&#x([0-9a-fA-F]+);?/g, (_, hex: string) => {
+    const cp = Number.parseInt(hex, 16);
+    return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+  });
+  s = s.replace(/&#(\d+);?/g, (_, dec: string) => {
+    const cp = Number.parseInt(dec, 10);
+    return Number.isFinite(cp) ? String.fromCodePoint(cp) : '';
+  });
+  return s
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&plus;/gi, '+');
+}
+
+function cleanVehicleText(input: unknown): string {
+  let s = decodeHtmlEntities(input).replace(/\u00a0/g, ' ').trim();
+  if (!s) return '';
+  s = s.replace(/\bF\+(\d{2,3})\b/gi, 'F-$1');
+  s = s.replace(/\bMercedes\+Benz\b/gi, 'Mercedes-Benz');
+  s = s.replace(/\b([A-Z]{2,4})\+(\d{2,4})\b/g, '$1 $2');
+  s = s.replace(/([A-Za-z]{2,})\+([A-Za-z]{2,})/g, '$1-$2');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+function resolveDisplayStock(raw: Record<string, unknown>, year: number, vin: string): string {
+  const candidates = [
+    raw.stock_number,
+    raw.stockNumber,
+    raw.stockNo,
+    raw.stock_no,
+    raw.stock_num,
+    raw.stockNum,
+    raw.stock,
+  ];
+  for (const c of candidates) {
+    const stock = cleanVehicleText(c).toUpperCase();
+    if (!stock || stock === 'N/A' || stock === 'NA' || stock === 'NONE') continue;
+    if (/^(?:19|20)\d{2}$/.test(stock)) continue; // never show year as stock
+    if (year > 0 && stock === String(year)) continue;
+    if (stock.length === 17) continue;
+    if (/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(stock) && /[0-9]/.test(stock)) return stock;
+    if (/^[A-Z0-9][A-Z0-9\-_/]{4,14}$/i.test(stock)) return stock;
+  }
+  const v = String(vin || '').trim().toUpperCase();
+  if (v.length === 17) return v.slice(-8);
+  return 'N/A';
+}
+
 /** Normalize a raw inventory API row into Hub Vehicle field names. */
 function normalizeInventoryVehicle(raw: Record<string, unknown>): Vehicle {
   const year = normalizeYear(raw.year ?? raw.Year ?? raw.model_year);
   const price = asMoney(
-    raw.price ?? raw.internetPrice ?? raw.internet_price ?? raw.listPrice ?? raw.list_price ?? raw.msrp,
+    raw.price ??
+      raw.internetPrice ??
+      raw.internet_price ??
+      raw.selling_price ??
+      raw.sellingPrice ??
+      raw.retail_price ??
+      raw.retailPrice ??
+      raw.listPrice ??
+      raw.list_price ??
+      raw.msrp,
   );
   const mileage = asMiles(
-    raw.mileage ?? raw.miles ?? raw.odometer ?? raw.odometerReading ?? raw.Odometer,
+    raw.mileage ??
+      raw.miles ??
+      raw.odometer ??
+      raw.distance ??
+      raw.odometerReading ??
+      raw.Odometer,
   );
+  const make = cleanVehicleText(raw.make);
+  const model = cleanVehicleText(raw.model);
+  const trim = cleanVehicleText(raw.trim);
+  const vin = String(raw.vin || '').trim().toUpperCase();
   const exterior_color = titleCaseColor(
-    raw.exterior_color ?? raw.exteriorColor ?? raw.color ?? raw.Color ?? raw.ext_color,
+    cleanVehicleText(
+      raw.exterior_color ??
+        raw.exteriorColor ??
+        raw.color ??
+        raw.Color ??
+        raw.ext_color ??
+        raw.ext_color_generic,
+    ),
   );
   const interior_color = titleCaseColor(
-    raw.interior_color ?? raw.interiorColor ?? raw.int_color,
+    cleanVehicleText(raw.interior_color ?? raw.interiorColor ?? raw.int_color),
   );
+  const stock_number = resolveDisplayStock(raw, year, vin);
   return {
     ...(raw as unknown as Vehicle),
+    vin,
     year,
+    make,
+    model,
+    trim,
     price,
     mileage,
+    stock_number,
     exterior_color,
     interior_color,
   };
@@ -416,8 +503,19 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>): Vehicle {
 
 function vehicleTitle(v: Pick<Vehicle, 'year' | 'make' | 'model' | 'trim'>, includeTrim = false) {
   const year = normalizeYear(v.year);
-  const parts = [year || null, v.make, v.model, includeTrim ? v.trim : null].filter(Boolean);
+  const parts = [
+    year || null,
+    cleanVehicleText(v.make),
+    cleanVehicleText(v.model),
+    includeTrim ? cleanVehicleText(v.trim) : null,
+  ].filter(Boolean);
   return parts.join(' ');
+}
+
+function fmtStock(stock: string | undefined | null) {
+  const s = String(stock || '').trim();
+  if (!s || s === 'N/A' || s === 'NA' || /^(?:19|20)\d{2}$/.test(s)) return '—';
+  return `#${s}`;
 }
 
 function fmt(n: number) {
@@ -2578,7 +2676,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
 
                       {/* Stock # */}
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {(v.stock_number && v.stock_number !== 'N/A') ? `#${v.stock_number}` : '—'}
+                        {fmtStock(v.stock_number)}
                       </td>
 
                       {/* VIN */}

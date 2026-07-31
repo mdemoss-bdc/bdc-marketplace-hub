@@ -17,6 +17,10 @@ const {
   sanitizeInventoryList,
   sanitizeVehicleRecord,
   parseInventoryText,
+  cleanVehicleText,
+  resolveStockNumber,
+  isValidStockNumber,
+  stockFallbackFromVin,
 } = require('./inventoryParser');
 
 const DAILY_POST_CAP = 10;
@@ -301,23 +305,42 @@ async function listInventory(queryParams = {}) {
         Number(src.miles) ||
         Number(src.odometer) ||
         0;
-      const exterior =
+      const make = cleanVehicleText(row.make || src.make || '');
+      const model = cleanVehicleText(row.model || src.model || '');
+      const trim = cleanVehicleText(row.trim || src.trim || '');
+      const exterior = cleanVehicleText(
         row.exterior_color ||
-        src.exterior_color ||
-        src.exteriorColor ||
-        src.color ||
-        '';
-      const interior =
-        row.interior_color ||
-        src.interior_color ||
-        src.interiorColor ||
-        '';
+          src.exterior_color ||
+          src.exteriorColor ||
+          src.ext_color ||
+          src.ext_color_generic ||
+          src.color ||
+          '',
+      );
+      const interior = cleanVehicleText(
+        row.interior_color || src.interior_color || src.interiorColor || '',
+      );
+      let stock = resolveStockNumber(
+        { ...src, ...row, stock_number: row.stock_number || src.stock_number },
+        year,
+        make,
+        model,
+        row.vin || src.vin,
+      );
+      if (!isValidStockNumber(stock, year, make, model)) {
+        stock = stockFallbackFromVin(row.vin || src.vin);
+      }
       return {
         ...row,
         year,
+        make,
+        model,
+        trim,
         price,
         mileage,
         miles: mileage,
+        stock_number: stock,
+        stockNumber: stock,
         posted_status: inFeed ? 'posted' : String(src.posted_status || 'not_posted'),
         in_meta_feed: inFeed,
         exterior_color: exterior,
@@ -327,8 +350,8 @@ async function listInventory(queryParams = {}) {
         interiorColor: interior,
         image_url: row.image_url || src.image_url || '',
         vdp_url: row.vdp_url || src.vdp_url || '',
-        ai_description: row.ai_description || src.ai_description || '',
-        title: [year, row.make || src.make, row.model || src.model].filter(Boolean).join(' '),
+        ai_description: cleanVehicleText(row.ai_description || src.ai_description || ''),
+        title: [year, make, model].filter(Boolean).join(' '),
       };
     });
 

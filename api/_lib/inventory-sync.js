@@ -13,7 +13,11 @@ const {
   ensureCoreSchema,
   databaseUrl,
 } = require('./pg');
-const { sanitizeInventoryList } = require('./inventoryParser');
+const {
+  sanitizeInventoryList,
+  decodeHtmlEntities: decodeEntitiesShared,
+  cleanVehicleText,
+} = require('./inventoryParser');
 const {
   parseInventoryPage,
   detectPlatform,
@@ -99,12 +103,7 @@ async function readLastSync() {
 }
 
 function decodeHtmlEntities(value) {
-  return String(value || '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+  return decodeEntitiesShared(value);
 }
 
 function urlSeg(s) {

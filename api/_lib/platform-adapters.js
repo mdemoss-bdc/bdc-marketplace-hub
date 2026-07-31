@@ -10,6 +10,8 @@ const {
   parseInventoryText,
   scrubRawText,
   titleCaseColor,
+  cleanVehicleText,
+  resolveStockNumber,
 } = require('./inventoryParser');
 
 const VIN_RE = /\b([A-HJ-NPR-Z0-9]{17})\b/i;
@@ -188,16 +190,22 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
   const maxYear = new Date().getFullYear() + 2;
   if (year < 1980 || year > maxYear) year = 0;
 
-  const make = asStr(firstDefined(raw.make, raw.Make, raw.brand, raw.manufacturer));
-  const model = asStr(firstDefined(raw.model, raw.Model, raw.modelName));
-  const trim = asStr(
-    firstDefined(raw.trim, raw.Trim, raw.vehicleConfiguration, raw.bodyType, raw.trimLevel),
+  const make = cleanVehicleText(asStr(firstDefined(raw.make, raw.Make, raw.brand, raw.manufacturer)));
+  const model = cleanVehicleText(asStr(firstDefined(raw.model, raw.Model, raw.modelName)));
+  const trim = cleanVehicleText(
+    asStr(firstDefined(raw.trim, raw.Trim, raw.vehicleConfiguration, raw.bodyType, raw.trimLevel)),
   );
   const price = parsePrice(
     firstDefined(
       raw.internetPrice,
       raw.InternetPrice,
       raw.internet_price,
+      raw.selling_price,
+      raw.sellingPrice,
+      raw.SellingPrice,
+      raw.retail_price,
+      raw.retailPrice,
+      raw.RetailPrice,
       raw.listPrice,
       raw.list_price,
       raw.ListPrice,
@@ -205,8 +213,6 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
       raw.AskingPrice,
       raw.salePrice,
       raw.SalePrice,
-      raw.sellingPrice,
-      raw.SellingPrice,
       raw.finalPrice,
       raw.displayPrice,
       raw.ourPrice,
@@ -214,24 +220,12 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
       raw.Price,
       raw.msrp,
       raw.MSRP,
-      raw.retailPrice,
-      raw.RetailPrice,
       raw.VehiclePrice,
       raw.pricing?.internet,
       raw.pricing?.sale,
       raw.pricing?.price,
       raw.prices?.internet,
       raw.prices?.sale,
-    ),
-  );
-  const stockNumber = asStr(
-    firstDefined(
-      raw.stockNumber,
-      raw.stock_number,
-      raw.StockNumber,
-      raw.stock,
-      raw.sku,
-      raw.productID,
     ),
   );
   const mileage = parseMileage(
@@ -242,6 +236,8 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
       raw.Miles,
       raw.odometer,
       raw.Odometer,
+      raw.distance,
+      raw.Distance,
       raw.odometerReading,
       raw.milesNumeric,
       raw.mileageFromOdometer,
@@ -257,6 +253,8 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
       raw.ExteriorColor,
       raw.extColor,
       raw.ext_color,
+      raw.ext_color_generic,
+      raw.extColorGeneric,
       raw.color,
       raw.Color,
       raw.exterior,
@@ -303,6 +301,8 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
     conditionFallback,
   );
 
+  const stockNumber = resolveStockNumber(raw, year, make, model, vin);
+
   return {
     vin,
     year,
@@ -310,21 +310,22 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
     model,
     trim,
     price,
-    stock_number: stockNumber || 'N/A',
-    stockNumber: stockNumber || 'N/A',
+    stock_number: stockNumber,
+    stockNumber,
     mileage,
+    miles: mileage,
     image_url: imageUrl,
     imageUrl,
     vdp_url: vdpUrl,
     vdpUrl,
     status: status.toUpperCase() === 'SOLD' ? 'SOLD' : 'ACTIVE',
     condition,
-    exterior_color: titleCaseColor(exteriorColor),
-    exteriorColor: titleCaseColor(exteriorColor),
-    color: titleCaseColor(exteriorColor),
-    interior_color: titleCaseColor(interiorColor),
-    interiorColor: titleCaseColor(interiorColor),
-    location: asStr(firstDefined(raw.location, raw.Location, raw.city)),
+    exterior_color: titleCaseColor(cleanVehicleText(exteriorColor)),
+    exteriorColor: titleCaseColor(cleanVehicleText(exteriorColor)),
+    color: titleCaseColor(cleanVehicleText(exteriorColor)),
+    interior_color: titleCaseColor(cleanVehicleText(interiorColor)),
+    interiorColor: titleCaseColor(cleanVehicleText(interiorColor)),
+    location: cleanVehicleText(asStr(firstDefined(raw.location, raw.Location, raw.city))),
   };
 }
 
