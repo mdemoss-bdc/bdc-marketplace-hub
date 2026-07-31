@@ -110,13 +110,9 @@ function mapApiUser(raw: Record<string, unknown>): User {
   const rbac_role: User['rbac_role'] =
     rbacRaw === 'Admin' || rbacRaw === 'Reviewer'
       ? rbacRaw
-      : isMaster || (isAdmin && username.toLowerCase() === 'mdemoss')
+      : isMaster || isAdmin
         ? 'Admin'
-        : username.toLowerCase() === 'testreviewer'
-          ? 'Reviewer'
-          : isAdmin
-            ? 'Admin'
-            : 'Reviewer';
+        : 'Reviewer';
   return {
     id: Number(raw.id) || 0,
     username,
