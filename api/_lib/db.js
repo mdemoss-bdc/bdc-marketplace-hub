@@ -32,7 +32,16 @@ if (isServerless() && !databaseUrl()) {
   );
 }
 
-const impl = usePostgres() ? require('./db-pg') : require('./db-sqlite');
+// Prefer an if/else over a ternary require so serverless file-tracers do not
+// always pull in the local `node:sqlite` fallback. On Vercel, usePostgres() is
+// forced true (see isServerless above).
+let impl;
+if (usePostgres()) {
+  impl = require('./db-pg');
+} else {
+  // Local-only fallback (Node 22+). Not used when VERCEL=1.
+  impl = require('./db-sqlite');
+}
 
 /** Methods that stay synchronous (env helpers / constants). */
 const SYNC_KEYS = new Set(['adminEnvPassword', 'databaseUrl', 'usePostgres', 'backend']);

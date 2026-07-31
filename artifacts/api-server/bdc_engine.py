@@ -125,10 +125,8 @@ except Exception as _dc_cfg_err:
     _dealer_config = None  # type: ignore[assignment]
     print(f"[CONFIG] dealer_config unavailable: {_dc_cfg_err}")
 
-# Adaptive 3-tier scraper (JSON-LD → heuristics → LLM) under src/scraper.
-_SCRAPER_SRC = os.path.join(_SCRIPT_DIR, "src")
-if _SCRAPER_SRC not in sys.path:
-    sys.path.insert(0, _SCRAPER_SRC)
+# Adaptive 3-tier scraper (JSON-LD → heuristics → LLM) — Python package next to
+# this file (NOT under src/, which is reserved for the Node/TypeScript tree).
 try:
     from scraper.pipeline import extract_inventory as _adaptive_extract  # noqa: E402
     from scraper.pipeline import to_engine_rows as _adaptive_to_rows  # noqa: E402
