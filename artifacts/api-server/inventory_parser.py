@@ -142,7 +142,9 @@ def _clean_stock_candidate(raw: str) -> str | None:
     """Strip labels; reject model years and full VINs."""
     candidate = _STOCK_PREFIX_RE.sub("", scrub_raw_text(raw)).strip().upper()
     candidate = re.split(r"[\s|,;]+", candidate, maxsplit=1)[0].strip()
-    if not candidate or candidate in {"N/A", "NA", "NONE", "-", "UNAVAILABLE"}:
+    if not candidate or candidate in {
+        "N/A", "NA", "NONE", "-", "UNAVAILABLE", "IN TRANSIT", "TRANSIT",
+    }:
         return None
     if _YEAR_ONLY_RE.fullmatch(candidate):
         return None
@@ -153,6 +155,52 @@ def _clean_stock_candidate(raw: str) -> str | None:
     if not re.search(r"\d", candidate) and len(candidate) < 5:
         return None
     return candidate
+
+
+_URL_PATH_STOCK_PATTERNS = (
+    re.compile(r"/stk-([a-zA-Z0-9]+)", re.I),
+    re.compile(r"/stock-([a-zA-Z0-9]+)", re.I),
+    re.compile(r"/stock_([a-zA-Z0-9]+)", re.I),
+    re.compile(r"-stk([a-zA-Z0-9]+)", re.I),
+)
+_URL_STOCK_QUERY_KEYS = ("stock", "stocknumber", "stock_number", "stk", "vin_stock")
+
+
+def extract_stock_from_url(url: str, *, year: int = 0, vin: str = "") -> str | None:
+    """Parse stock from a VDP URL (query params then pathname patterns)."""
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    raw = scrub_raw_text(url)
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return None
+    try:
+        qs = parse_qs(parsed.query, keep_blank_values=False)
+    except Exception:
+        qs = {}
+    key_map = {k.lower(): v for k, v in qs.items()}
+    for key in _URL_STOCK_QUERY_KEYS:
+        for val in key_map.get(key) or []:
+            cleaned = _clean_stock_candidate(unquote(val))
+            if cleaned and (not year or cleaned != str(year)):
+                if vin and cleaned == vin.upper():
+                    continue
+                return cleaned
+    path = unquote(parsed.path or "")
+    for hay in (path, raw):
+        for pat in _URL_PATH_STOCK_PATTERNS:
+            m = pat.search(hay)
+            if not m:
+                continue
+            cleaned = _clean_stock_candidate(m.group(1))
+            if cleaned and (not year or cleaned != str(year)):
+                if vin and cleaned == vin.upper():
+                    continue
+                return cleaned
+    return None
 
 
 def extract_stock_number(text: str) -> str | None:
@@ -291,7 +339,18 @@ def sanitize_vehicle_record(
         stock = ""
     if stock and len(stock) == 17 and VIN_RE.fullmatch(stock):
         stock = ""
-    # No synthetic VIN/year codes. Fallback: In Transit → Unavailable.
+
+    link = (
+        _as_str(vehicle.get("link"))
+        or _as_str(vehicle.get("vdp_url"))
+        or _as_str(vehicle.get("vdpUrl"))
+        or _as_str(vehicle.get("url"))
+        or _as_str(vehicle.get("href"))
+    )
+
+    # Order: explicit/labeled → VDP URL → In Transit → Unavailable.
+    if not stock and link:
+        stock = extract_stock_from_url(link, year=year, vin=vin) or ""
     if not stock:
         status_blob = " ".join(
             _as_str(vehicle.get(k))
@@ -316,11 +375,6 @@ def sanitize_vehicle_record(
         or _as_str(vehicle.get("imageUrl"))
         or _as_str(vehicle.get("image_link"))
         or _as_str(vehicle.get("image"))
-    )
-    link = (
-        _as_str(vehicle.get("link"))
-        or _as_str(vehicle.get("vdp_url"))
-        or _as_str(vehicle.get("vdpUrl"))
     )
 
     out = dict(vehicle)

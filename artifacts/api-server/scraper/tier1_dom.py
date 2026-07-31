@@ -86,10 +86,12 @@ def _walk_ld(node: Any, out: list[dict], condition: str) -> None:
                     "stockNumber": node.get("sku") or node.get("mpn") or node.get("productID"),
                     "sku": node.get("sku"),
                     "mpn": node.get("mpn"),
+                    "link": node.get("url") or offer.get("url"),
                 },
                 "",
                 vin=str(node.get("vehicleIdentificationNumber") or node.get("vin") or ""),
                 year=node.get("vehicleModelDate") or node.get("modelDate") or 0,
+                link=str(node.get("url") or offer.get("url") or ""),
             ),
         }
         norm = normalize_vehicle(raw, condition=condition)
@@ -151,7 +153,7 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
             continue
         vin = attrs.get("vin") or ""
         year = attrs.get("year") or 0
-        # Selector priority: data-* → DOM class → labeled text → In Transit → Unavailable.
+        # Selector priority: DOM → VDP URL → In Transit → Unavailable.
         stock = extract_stock_from_html(card, vin=vin, year=year) or resolve_stock_number(
             {
                 "stockNumber": (
@@ -160,10 +162,12 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
                     or attrs.get("stockno")
                     or attrs.get("stock")
                 ),
+                "link": link,
             },
             card,
             vin=vin,
             year=year,
+            link=link,
         )
         raw = {
             "vin": vin,

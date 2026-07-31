@@ -1,15 +1,17 @@
 """Dealer stock-number extraction with strict selector priority + sanitization.
 
-Priority (3-step fallback before inventing anything):
+Priority (4-step fallback before inventing anything):
   1. Explicit dealer stock: data-stocknumber, .stockNumber, "Stock #:" labels
-  2. Card text/badges: "In Transit", "Transit", or "Arriving Soon" → "In Transit"
-  3. "Unavailable" — never invent VIN slices, years, or random codes
+  2. VDP URL query params / pathname patterns (stock, stk-, stock-, -stk…)
+  3. Card text/badges: "In Transit", "Transit", or "Arriving Soon" → "In Transit"
+  4. "Unavailable" — never invent VIN slices, years, or random codes
 """
 
 from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .html_utils import clean_text, decode_entities
 
@@ -75,6 +77,21 @@ _LABEL_STOCK_RE = re.compile(
 _PREFIX_STRIP_RE = re.compile(
     r'^(?:stock\s*(?:number|no\.?|#)?|stk\s*#?)\s*[:#]?\s*',
     re.I,
+)
+
+# ── URL path stock patterns (step 2) ─────────────────────────────────────────
+_URL_PATH_STOCK_PATTERNS = (
+    re.compile(r"/stk-([a-zA-Z0-9]+)", re.I),
+    re.compile(r"/stock-([a-zA-Z0-9]+)", re.I),
+    re.compile(r"/stock_([a-zA-Z0-9]+)", re.I),
+    re.compile(r"-stk([a-zA-Z0-9]+)", re.I),
+)
+_URL_STOCK_QUERY_KEYS = (
+    "stock",
+    "stocknumber",
+    "stock_number",
+    "stk",
+    "vin_stock",
 )
 
 
@@ -172,20 +189,92 @@ def extract_stock_from_html(
     return ""
 
 
+def extract_stock_from_url(
+    url: str,
+    *,
+    vin: str = "",
+    year: int | str = 0,
+) -> str:
+    """Extract a dealer stock code from a VDP URL (query params then path).
+
+    Query keys: stock, stockNumber, stock_number, stk, vin_stock.
+    Path patterns: /stk-CODE, /stock-CODE, /stock_CODE, -stkCODE.
+    Rejects years, full VINs, and In Transit / Unavailable sentinels.
+    Does not mutate or strip the original URL — read-only parse.
+    """
+    raw_url = clean_text(decode_entities(url or ""))
+    if not raw_url:
+        return ""
+
+    try:
+        parsed = urlparse(raw_url)
+    except Exception:
+        return ""
+
+    # 1) Query parameters (case-insensitive keys)
+    try:
+        qs = parse_qs(parsed.query, keep_blank_values=False)
+    except Exception:
+        qs = {}
+    key_map = {k.lower(): v for k, v in qs.items()}
+    for key in _URL_STOCK_QUERY_KEYS:
+        values = key_map.get(key) or []
+        for val in values:
+            cleaned = sanitize_stock_number(unquote(val), vin=vin, year=year)
+            # Never promote status sentinels from a URL param.
+            if cleaned and cleaned not in (IN_TRANSIT_STOCK, MISSING_STOCK):
+                return cleaned
+
+    # 2) Pathname patterns
+    path = unquote(parsed.path or "")
+    # Also scan the full URL string for `-stk` glued to path segments.
+    haystacks = (path, raw_url)
+    for hay in haystacks:
+        for pat in _URL_PATH_STOCK_PATTERNS:
+            m = pat.search(hay)
+            if not m:
+                continue
+            cleaned = sanitize_stock_number(m.group(1), vin=vin, year=year)
+            if cleaned and cleaned not in (IN_TRANSIT_STOCK, MISSING_STOCK):
+                return cleaned
+
+    return ""
+
+
+def _link_from_vehicle(raw_vehicle: dict[str, Any] | None, link: str = "", url: str = "") -> str:
+    """Prefer explicit link/url args, then common VDP fields on the vehicle dict."""
+    for candidate in (link, url):
+        s = clean_text(decode_entities(candidate or ""))
+        if s:
+            return s
+    if not isinstance(raw_vehicle, dict):
+        return ""
+    for key in ("link", "vdp_url", "vdpUrl", "url", "href", "VehicleDetailUrl", "detailUrl"):
+        if key in raw_vehicle and raw_vehicle[key] not in (None, ""):
+            s = clean_text(decode_entities(str(raw_vehicle[key])))
+            if s:
+                return s
+    return ""
+
+
 def resolve_stock_number(
     raw_vehicle: dict[str, Any] | None,
     html_fragment: str = "",
     *,
     vin: str = "",
     year: int | str = 0,
+    link: str = "",
+    url: str = "",
 ) -> str:
-    """Resolve stock: explicit dealer value → In Transit → Unavailable.
+    """Resolve stock: explicit DOM → URL → In Transit → Unavailable.
 
     Never invents VIN slices, model years, or random codes.
+    Optional ``link`` / ``url`` (or vehicle.link / vdp_url) feeds step 2.
     """
     vin_u = (vin or "").upper()
     year_n = year
 
+    # 1) Explicit DOM / labeled stock / structured dealer fields
     from_html = extract_stock_from_html(html_fragment, vin=vin_u, year=year_n)
     if from_html:
         return from_html
@@ -212,7 +301,14 @@ def resolve_stock_number(
                 if cleaned:
                     return cleaned
 
-        # Status fields on the vehicle dict (availability / badge copy).
+    # 2) VDP URL query params / pathname patterns
+    vdp = _link_from_vehicle(raw_vehicle, link=link, url=url)
+    from_url = extract_stock_from_url(vdp, vin=vin_u, year=year_n)
+    if from_url:
+        return from_url
+
+    # 3) In Transit badges / status copy
+    if isinstance(raw_vehicle, dict):
         status_blob = " ".join(
             str(raw_vehicle.get(k) or "")
             for k in (
@@ -231,4 +327,5 @@ def resolve_stock_number(
     if detect_in_transit(html_fragment):
         return IN_TRANSIT_STOCK
 
+    # 4) Final fallback
     return MISSING_STOCK

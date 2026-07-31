@@ -439,7 +439,51 @@ function isUnavailableStock(value: unknown): boolean {
   return !s || /^n\/?a$/i.test(s) || /^unavailable$/i.test(s) || s === '—' || s === '–';
 }
 
-/** Explicit dealer stock → In Transit → Unavailable — never invent VIN slices or years. */
+/** Pull a dealer stock code from a VDP URL (query + path) before Unavailable. */
+function extractStockFromVdpUrl(url: unknown, year: number, vin: string): string {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  let parsed: URL;
+  try {
+    parsed = new URL(raw, 'https://example.invalid');
+  } catch {
+    return '';
+  }
+  const queryKeys = new Set(['stock', 'stocknumber', 'stock_number', 'stk', 'vin_stock']);
+  for (const [k, v] of parsed.searchParams.entries()) {
+    if (!queryKeys.has(String(k).toLowerCase())) continue;
+    const stock = cleanVehicleText(decodeURIComponent(v || '')).toUpperCase();
+    if (!stock || stock === 'N/A' || stock === 'NA' || stock === 'NONE' || stock === 'UNAVAILABLE') continue;
+    if (isInTransitStock(stock)) continue;
+    if (/^(?:19|20)\d{2}$/.test(stock)) continue;
+    if (year > 0 && stock === String(year)) continue;
+    if (stock.length === 17 || (vin && stock === vin.toUpperCase())) continue;
+    if (/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(stock) && /[0-9]/.test(stock)) return stock;
+    if (/^[A-Z0-9][A-Z0-9\-_/]{4,14}$/i.test(stock)) return stock;
+  }
+  const pathPatterns = [
+    /\/stk-([a-zA-Z0-9]+)/i,
+    /\/stock-([a-zA-Z0-9]+)/i,
+    /\/stock_([a-zA-Z0-9]+)/i,
+    /-stk([a-zA-Z0-9]+)/i,
+  ];
+  const path = decodeURIComponent(parsed.pathname || '');
+  for (const hay of [path, raw]) {
+    for (const pat of pathPatterns) {
+      const m = hay.match(pat);
+      if (!m?.[1]) continue;
+      const stock = String(m[1]).toUpperCase();
+      if (/^(?:19|20)\d{2}$/.test(stock)) continue;
+      if (year > 0 && stock === String(year)) continue;
+      if (stock.length === 17 || (vin && stock === vin.toUpperCase())) continue;
+      if (/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(stock) && /[0-9]/.test(stock)) return stock;
+      if (/^[A-Z0-9][A-Z0-9\-_/]{4,14}$/i.test(stock)) return stock;
+    }
+  }
+  return '';
+}
+
+/** Explicit dealer stock → VDP URL → In Transit → Unavailable. */
 function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: string): string {
   const candidates = [
     raw.stock_number,
@@ -461,6 +505,10 @@ function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: s
     if (/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(stock) && /[0-9]/.test(stock)) return stock;
     if (/^[A-Z0-9][A-Z0-9\-_/]{4,14}$/i.test(stock)) return stock;
   }
+  const vdp =
+    String(raw.link ?? raw.vdp_url ?? raw.vdpUrl ?? raw.url ?? raw.href ?? '').trim();
+  const fromUrl = extractStockFromVdpUrl(vdp, year, _vin);
+  if (fromUrl) return fromUrl;
   const statusBlob = [
     raw.raw_text,
     raw.description,

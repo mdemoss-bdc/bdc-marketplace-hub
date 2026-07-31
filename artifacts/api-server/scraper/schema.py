@@ -95,8 +95,8 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
     trim = _str(g("trim", "trimLevel", "series"))
 
     # Stock first so In Transit / Unavailable cards are never dropped for
-    # missing dealer stock.
-    stock = resolve_stock_number(raw, html_blob, vin="", year=year)
+    # missing dealer stock. Order: DOM → VDP URL → In Transit → Unavailable.
+    stock = resolve_stock_number(raw, html_blob, vin="", year=year, link=link)
     if not stock:
         stock = sanitize_stock_number(
             g("stockNumber", "stock_number", "stock", "stockNo", "stock_no", "sku"),
@@ -133,7 +133,11 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
             return None
 
     # Re-resolve with known VIN so year/VIN are not mistaken for stock.
-    stock = resolve_stock_number(raw, html_blob, vin=vin, year=year) or stock or MISSING_STOCK
+    stock = (
+        resolve_stock_number(raw, html_blob, vin=vin, year=year, link=link)
+        or stock
+        or MISSING_STOCK
+    )
     if in_tr and stock == MISSING_STOCK:
         stock = IN_TRANSIT_STOCK
 

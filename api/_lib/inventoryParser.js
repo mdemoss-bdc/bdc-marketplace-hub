@@ -219,11 +219,52 @@ function extractStockNumber(text, year = 0, make = '', model = '') {
   return null;
 }
 
+const URL_STOCK_QUERY_KEYS = ['stock', 'stocknumber', 'stock_number', 'stk', 'vin_stock'];
+const URL_PATH_STOCK_PATTERNS = [
+  /\/stk-([a-zA-Z0-9]+)/i,
+  /\/stock-([a-zA-Z0-9]+)/i,
+  /\/stock_([a-zA-Z0-9]+)/i,
+  /-stk([a-zA-Z0-9]+)/i,
+];
+
+/** Extract stock from a VDP URL (query params then pathname patterns). */
+function extractStockFromUrl(url, year = 0, make = '', model = '', vin = '') {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  let parsed;
+  try {
+    parsed = new URL(raw, 'https://example.invalid');
+  } catch {
+    return '';
+  }
+  for (const [k, v] of parsed.searchParams.entries()) {
+    if (!URL_STOCK_QUERY_KEYS.includes(String(k).toLowerCase())) continue;
+    const upper = cleanVehicleText(decodeURIComponent(v || '')).toUpperCase();
+    if (isInTransitStock(upper) || upper === 'UNAVAILABLE') continue;
+    if (isValidStockNumber(upper, year, make, model) && (!vin || upper !== String(vin).toUpperCase())) {
+      return upper;
+    }
+  }
+  const path = decodeURIComponent(parsed.pathname || '');
+  for (const hay of [path, raw]) {
+    for (const pat of URL_PATH_STOCK_PATTERNS) {
+      const m = hay.match(pat);
+      if (!m?.[1]) continue;
+      const upper = String(m[1]).toUpperCase();
+      if (isInTransitStock(upper) || upper === 'UNAVAILABLE') continue;
+      if (isValidStockNumber(upper, year, make, model) && (!vin || upper !== String(vin).toUpperCase())) {
+        return upper;
+      }
+    }
+  }
+  return '';
+}
+
 /**
- * Resolve dealer stock from payload aliases.
- * Missing → "In Transit" if status indicates it, else "Unavailable" (never VIN/year).
+ * Resolve dealer stock: explicit → VDP URL → In Transit → Unavailable.
+ * Optional link/url (or vehicle.link / vdp_url) feeds step 2.
  */
-function resolveStockNumber(vehicle, year, make, model, _vin) {
+function resolveStockNumber(vehicle, year, make, model, _vin, link = '') {
   const candidates = [
     vehicle.stock_number,
     vehicle.stockNumber,
@@ -245,6 +286,16 @@ function resolveStockNumber(vehicle, year, make, model, _vin) {
     const upper = raw.toUpperCase();
     if (isValidStockNumber(upper, year, make, model)) return upper;
   }
+  const vdp =
+    cleanVehicleText(asNonEmptyString(link)) ||
+    asNonEmptyString(vehicle.link) ||
+    asNonEmptyString(vehicle.vdp_url) ||
+    asNonEmptyString(vehicle.vdpUrl) ||
+    asNonEmptyString(vehicle.url) ||
+    asNonEmptyString(vehicle.href) ||
+    '';
+  const fromUrl = extractStockFromUrl(vdp, year, make, model, _vin);
+  if (fromUrl) return fromUrl;
   const statusBlob = [
     vehicle.raw,
     vehicle.raw_html,
@@ -492,11 +543,22 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     asNonEmptyString(vehicle.description) || asNonEmptyString(vehicle.ai_description) || '',
   );
 
-  // Prefer structured dealer stock; "In Transit" status; else Unavailable.
-  let stock = resolveStockNumber(vehicle, year, make, model, vin);
+  const vdpLink =
+    asNonEmptyString(vehicle.link) ||
+    asNonEmptyString(vehicle.vdp_url) ||
+    asNonEmptyString(vehicle.vdpUrl) ||
+    asNonEmptyString(vehicle.url) ||
+    asNonEmptyString(vehicle.href) ||
+    '';
+  // Explicit → VDP URL → In Transit → Unavailable.
+  let stock = resolveStockNumber(vehicle, year, make, model, vin, vdpLink);
   if (!isValidStockNumber(stock, year, make, model)) {
     const labeled = extractStockNumber(blob, year, make, model);
-    stock = labeled || (detectInTransit(blob) ? IN_TRANSIT_STOCK : MISSING_STOCK);
+    const fromUrl = extractStockFromUrl(vdpLink, year, make, model, vin);
+    stock =
+      labeled ||
+      fromUrl ||
+      (detectInTransit(blob) ? IN_TRANSIT_STOCK : MISSING_STOCK);
   }
 
   const exterior = titleCaseColor(
@@ -589,6 +651,7 @@ module.exports = {
   extractPrice,
   extractMileage,
   extractStockNumber,
+  extractStockFromUrl,
   extractYearMakeModel,
   isolateListingCardTexts,
   parseInventoryText,

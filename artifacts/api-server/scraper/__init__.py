@@ -11,6 +11,7 @@ from .stock import (
     MISSING_STOCK,
     detect_in_transit,
     extract_stock_from_html,
+    extract_stock_from_url,
     resolve_stock_number,
     sanitize_stock_number,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "MISSING_STOCK",
     "detect_in_transit",
     "extract_stock_from_html",
+    "extract_stock_from_url",
     "resolve_stock_number",
     "sanitize_stock_number",
     "urls_changed",

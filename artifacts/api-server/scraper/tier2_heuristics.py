@@ -73,11 +73,6 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         if mm:
             mileage = int(mm.group(1).replace(",", ""))
 
-        # Stock: data-* / DOM class / "Stock #:" labels → In Transit → Unavailable.
-        stock = extract_stock_from_html(body, vin=vin, year=year) or resolve_stock_number(
-            {}, body, vin=vin, year=year,
-        )
-
         color = ""
         cm = _COLOR_RE.search(plain)
         if cm:
@@ -102,6 +97,11 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         # Without VIN, prefer a VDP link so normalize can mint a stable synthetic id.
         if not vin and not link and not (year and make):
             continue
+
+        # Stock: DOM → VDP URL → In Transit → Unavailable.
+        stock = extract_stock_from_html(body, vin=vin, year=year) or resolve_stock_number(
+            {"link": link}, body, vin=vin, year=year, link=link,
+        )
 
         image = ""
         im = _IMG_RE.search(body)

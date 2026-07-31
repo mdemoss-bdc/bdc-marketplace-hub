@@ -262,13 +262,73 @@ export function extractStockNumber(
   return null;
 }
 
-/** Resolve dealer stock: explicit value → In Transit → Unavailable (never VIN/year). */
+const URL_STOCK_QUERY_KEYS = [
+  "stock",
+  "stocknumber",
+  "stock_number",
+  "stk",
+  "vin_stock",
+];
+const URL_PATH_STOCK_PATTERNS = [
+  /\/stk-([a-zA-Z0-9]+)/i,
+  /\/stock-([a-zA-Z0-9]+)/i,
+  /\/stock_([a-zA-Z0-9]+)/i,
+  /-stk([a-zA-Z0-9]+)/i,
+];
+
+/** Extract stock from a VDP URL (query params then pathname patterns). */
+export function extractStockFromUrl(
+  url: unknown,
+  year = 0,
+  make = "",
+  model = "",
+  vin = "",
+): string {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  let parsed: URL;
+  try {
+    parsed = new URL(raw, "https://example.invalid");
+  } catch {
+    return "";
+  }
+  for (const [k, v] of parsed.searchParams.entries()) {
+    if (!URL_STOCK_QUERY_KEYS.includes(String(k).toLowerCase())) continue;
+    const upper = cleanVehicleText(decodeURIComponent(v || "")).toUpperCase();
+    if (isInTransitStock(upper) || upper === "UNAVAILABLE") continue;
+    if (
+      isValidStockNumber(upper, year, make, model) &&
+      (!vin || upper !== String(vin).toUpperCase())
+    ) {
+      return upper;
+    }
+  }
+  const path = decodeURIComponent(parsed.pathname || "");
+  for (const hay of [path, raw]) {
+    for (const pat of URL_PATH_STOCK_PATTERNS) {
+      const m = hay.match(pat);
+      if (!m?.[1]) continue;
+      const upper = String(m[1]).toUpperCase();
+      if (isInTransitStock(upper) || upper === "UNAVAILABLE") continue;
+      if (
+        isValidStockNumber(upper, year, make, model) &&
+        (!vin || upper !== String(vin).toUpperCase())
+      ) {
+        return upper;
+      }
+    }
+  }
+  return "";
+}
+
+/** Resolve dealer stock: explicit → VDP URL → In Transit → Unavailable. */
 export function resolveStockNumber(
   vehicle: Record<string, unknown>,
   year: number,
   make: string,
   model: string,
   _vin: string,
+  link = "",
 ): string {
   const candidates = [
     vehicle.stock_number,
@@ -291,6 +351,16 @@ export function resolveStockNumber(
     const upper = raw.toUpperCase();
     if (isValidStockNumber(upper, year, make, model)) return upper;
   }
+  const vdp =
+    cleanVehicleText(asNonEmptyString(link)) ||
+    asNonEmptyString(vehicle.link) ||
+    asNonEmptyString(vehicle.vdp_url) ||
+    asNonEmptyString(vehicle.vdpUrl) ||
+    asNonEmptyString(vehicle.url) ||
+    asNonEmptyString(vehicle.href) ||
+    "";
+  const fromUrl = extractStockFromUrl(vdp, year, make, model, _vin);
+  if (fromUrl) return fromUrl;
   const statusBlob = [
     vehicle.raw,
     vehicle.raw_html,
@@ -566,10 +636,21 @@ export function sanitizeVehicleRecord(
     asNonEmptyString(vehicle.trim) || asNonEmptyString(vehicle.Trim) || "",
   );
 
-  let stock = resolveStockNumber(vehicle, year, make, model, vin);
+  const link =
+    asNonEmptyString(vehicle.link) ||
+    asNonEmptyString(vehicle.vdp_url) ||
+    asNonEmptyString(vehicle.vdpUrl) ||
+    asNonEmptyString(vehicle.url) ||
+    asNonEmptyString(vehicle.href) ||
+    "";
+  let stock = resolveStockNumber(vehicle, year, make, model, vin, link);
   if (!isValidStockNumber(stock, year, make, model)) {
     const labeled = extractStockNumber(blob, year, make, model);
-    stock = labeled || (detectInTransit(blob) ? IN_TRANSIT_STOCK : MISSING_STOCK);
+    const fromUrl = extractStockFromUrl(link, year, make, model, vin);
+    stock =
+      labeled ||
+      fromUrl ||
+      (detectInTransit(blob) ? IN_TRANSIT_STOCK : MISSING_STOCK);
   }
 
   const exterior = titleCaseColor(
@@ -600,12 +681,6 @@ export function sanitizeVehicleRecord(
       ),
     ),
   );
-
-  const link =
-    asNonEmptyString(vehicle.link) ||
-    asNonEmptyString(vehicle.vdp_url) ||
-    asNonEmptyString(vehicle.vdpUrl) ||
-    "";
   const image =
     asNonEmptyString(vehicle.image_url) ||
     asNonEmptyString(vehicle.imageUrl) ||

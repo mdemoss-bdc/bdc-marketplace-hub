@@ -335,6 +335,16 @@ def _extract_vehicle(
     ext_color = _first_str(obj, _EXT_COLOR_FIELDS)
     int_color = _first_str(obj, _INT_COLOR_FIELDS)
     img   = _first_str(obj, _IMG_FIELDS)
+    vdp_early = _absolutise(_first_str(obj, _VDP_FIELDS), base_url)
+    # Step 2: parse stock from VDP URL before leaving Unavailable.
+    if stock == 'Unavailable' and vdp_early:
+        try:
+            from scraper.stock import extract_stock_from_url
+            from_url = extract_stock_from_url(vdp_early, vin=vin, year=year)
+            if from_url:
+                stock = from_url
+        except Exception:
+            pass
     doc_fee = 0
     savings = 0
 
@@ -410,7 +420,7 @@ def _extract_vehicle(
         'interior_color': int_color,
         'image_url':    _absolutise(img, base_url),
         'location':     location,
-        'vdp_url':      _absolutise(_first_str(obj, _VDP_FIELDS), base_url),
+        'vdp_url':      vdp_early or _absolutise(_first_str(obj, _VDP_FIELDS), base_url),
     }
 
 
