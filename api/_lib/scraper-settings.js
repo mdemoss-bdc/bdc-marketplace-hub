@@ -1,9 +1,6 @@
 /**
  * Marketplace scraper / Meta settings — persisted in marketplace_settings.
  * Used by Admin Console + inventory sync so Target URLs are never hardcoded.
- *
- * Do not import `fs`/`path` for cwd-relative cleanup here — Vercel NFT tracing
- * will try to bundle the whole repo and Hobby deploys fail.
  */
 const { query, queryOne, ensureCoreSchema } = require('./pg');
 
@@ -88,83 +85,6 @@ function normalizeSettings(raw = {}) {
   };
 }
 
-function normUrl(url) {
-  return String(url || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\/+$/, '');
-}
-
-function hostOf(url) {
-  try {
-    return new URL(url).hostname.replace(/^www\./i, '').toLowerCase();
-  } catch {
-    return '';
-  }
-}
-
-function urlFingerprint(used, neu, locations) {
-  const parts = new Set();
-  for (const u of [used, neu]) {
-    const n = normUrl(u);
-    if (n) parts.add(n);
-  }
-  for (const loc of locations || []) {
-    for (const key of ['inventory_url_used', 'inventory_url_new']) {
-      const n = normUrl(loc?.[key]);
-      if (n) parts.add(n);
-    }
-  }
-  return [...parts].sort();
-}
-
-/** True when Target URL set/domain meaningfully changes. */
-function urlsChanged(prev, next) {
-  const prevFp = urlFingerprint(
-    prev.inventory_url_used,
-    prev.inventory_url_new,
-    prev.inventory_locations,
-  );
-  const nextFp = urlFingerprint(
-    next.inventory_url_used,
-    next.inventory_url_new,
-    next.inventory_locations,
-  );
-  if (!nextFp.length) return false;
-  if (!prevFp.length) return true;
-  if (prevFp.join('|') !== nextFp.join('|')) return true;
-  const prevHosts = new Set(prevFp.map(hostOf).filter(Boolean));
-  const nextHosts = new Set(nextFp.map(hostOf).filter(Boolean));
-  if (!nextHosts.size) return false;
-  if (prevHosts.size !== nextHosts.size) return true;
-  for (const h of nextHosts) {
-    if (!prevHosts.has(h)) return true;
-  }
-  return false;
-}
-
-async function wipeUserInventory(userId) {
-  const uid = Number(userId) || 0;
-  if (uid > 0) {
-    const r = await query(`DELETE FROM marketplace_inventory WHERE user_id = $1`, [uid]);
-    return r?.rowCount ?? 0;
-  }
-  // Single-tenant / unset user_id — purge the whole showroom for the new URL.
-  const r = await query(`DELETE FROM marketplace_inventory`);
-  return r?.rowCount ?? 0;
-}
-
-/**
- * Feed cache cleanup hook after a Target URL wipe.
- *
- * No filesystem I/O: production feeds are regenerated from Postgres, and the
- * Python engine clears local caches itself. Keeping this free of `fs`/`path`
- * prevents Vercel NFT from bundling the entire monorepo into api/index.
- */
-function clearFeedCaches() {
-  return [];
-}
-
 async function getScraperSettings() {
   await ensureCoreSchema();
   const row = await queryOne(
@@ -183,31 +103,12 @@ async function saveScraperSettings(payload = {}) {
   await ensureCoreSchema();
   const current = await getScraperSettings();
   const next = normalizeSettings({ ...current, ...payload });
-  let inventoryWiped = false;
-  let wipedCount = 0;
-
-  if (urlsChanged(current, next)) {
-    wipedCount = await wipeUserInventory(next.user_id || current.user_id);
-    clearFeedCaches();
-    inventoryWiped = true;
-    console.log(
-      `[scraper-settings] Target URL change — wiped ${wipedCount} inventory rows + feed caches`,
-    );
-  }
-
   await query(
     `INSERT INTO marketplace_settings (key, value) VALUES ($1, $2)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     [SETTINGS_KEY, JSON.stringify(next)],
   );
-  return {
-    ...next,
-    inventoryWiped,
-    wipedCount,
-    message: inventoryWiped
-      ? 'Previous inventory purged for new target URL.'
-      : undefined,
-  };
+  return next;
 }
 
 /**
@@ -266,9 +167,6 @@ module.exports = {
   resolveInventoryTargetUrls,
   normalizeSettings,
   normalizeLocations,
-  urlsChanged,
-  wipeUserInventory,
-  clearFeedCaches,
   DEFAULTS,
   SETTINGS_KEY,
 };
