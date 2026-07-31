@@ -3522,55 +3522,28 @@ class UserManager:
         if not row:
             print(f"[AUTH] Login failed — no account for identifier: {normalized!r}")
             raise ValueError("Invalid username or password.")
-        _master_user = os.environ.get('ADMIN_USER', 'mdemoss').strip().lower()
-        _env_pass = (
-            os.environ.get('ADMIN_PASSWORD')
-            or os.environ.get('DASHBOARD_PASSWORD')
-            or os.environ.get('LOGIN_PASSWORD')
-            or 'Netsirk115!$'
-        ).strip()
-        _is_master = (
-            str(row["username"] or "").strip().lower() in (_master_user, "mdemoss")
-            or normalized in (_master_user, "mdemoss")
-        )
-        _env_ok = bool(_is_master and _env_pass and password == _env_pass)
-        if not _env_ok and not _verify_password(password, row["password_hash"]):
+        # Authenticate against the stored password hash for every account —
+        # no username allow-lists / hardcoded master-only password bypass.
+        if not _verify_password(password, row["password_hash"]):
             print(f"[LOGIN FAIL] Password mismatch for: {normalized}")
             print(f"[AUTH] Login failed — password mismatch "
                   f"(user id={row['id']}, username={row['username']!r})")
             raise ValueError("Invalid username or password.")
-        if _env_ok and not _verify_password(password, row["password_hash"]):
-            # Align stored hash with ADMIN_PASSWORD so Settings + future logins match.
+        _stored = str(row["password_hash"] or "")
+        if _stored and not _stored.startswith(("$2a$", "$2b$", "$2y$")):
             try:
-                _sync = sqlite3.connect(DB_FILE)
+                _up = sqlite3.connect(DB_FILE)
                 try:
-                    _sync.execute(
+                    _up.execute(
                         "UPDATE users SET password_hash = ? WHERE id = ?",
                         (_hash_password(password), row["id"]),
                     )
-                    _sync.commit()
-                    print(f"[AUTH] Synced master-admin hash from ADMIN_PASSWORD "
-                          f"(user id={row['id']})")
+                    _up.commit()
+                    print(f"[AUTH] Upgraded user id={row['id']} hash to bcrypt")
                 finally:
-                    _sync.close()
-            except Exception as _sync_exc:
-                print(f"[AUTH] Env password hash sync failed: {_sync_exc}")
-        elif _verify_password(password, row["password_hash"]):
-            _stored = str(row["password_hash"] or "")
-            if not _stored.startswith(("$2a$", "$2b$", "$2y$")):
-                try:
-                    _up = sqlite3.connect(DB_FILE)
-                    try:
-                        _up.execute(
-                            "UPDATE users SET password_hash = ? WHERE id = ?",
-                            (_hash_password(password), row["id"]),
-                        )
-                        _up.commit()
-                        print(f"[AUTH] Upgraded user id={row['id']} hash to bcrypt")
-                    finally:
-                        _up.close()
-                except Exception as _up_exc:
-                    print(f"[AUTH] bcrypt upgrade skipped: {_up_exc}")
+                    _up.close()
+            except Exception as _up_exc:
+                print(f"[AUTH] bcrypt upgrade skipped: {_up_exc}")
         if row["is_suspended"]:
             print(f"[AUTH] Login blocked — account suspended (user id={row['id']})")
             raise ValueError("This account has been suspended. Please contact support.")

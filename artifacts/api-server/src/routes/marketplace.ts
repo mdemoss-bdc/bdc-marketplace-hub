@@ -13,6 +13,25 @@ const router: IRouter = Router();
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+function loadScraperSettings(): {
+  getScraperSettings: () => Promise<Record<string, unknown>>;
+  saveScraperSettings: (p: Record<string, unknown>) => Promise<Record<string, unknown>>;
+} {
+  const candidates = [
+    path.resolve(__dirname, "../../../../api/_lib/scraper-settings.js"),
+    path.resolve(process.cwd(), "api/_lib/scraper-settings.js"),
+    path.resolve(process.cwd(), "../api/_lib/scraper-settings.js"),
+  ];
+  for (const file of candidates) {
+    try {
+      return require(file) as ReturnType<typeof loadScraperSettings>;
+    } catch {
+      /* try next */
+    }
+  }
+  throw new Error("scraper-settings.js not found");
+}
+
 /** Resolve root `api/_lib/marketplace.js` from artifacts/api-server/src/routes. */
 function loadMarketplaceLib(): Record<string, (...args: unknown[]) => unknown> {
   const candidates = [
@@ -184,6 +203,38 @@ router.post(
   ["/marketplace/save-description", "/save-description", "/v1/marketplace/save-description"],
   asExpress(saveDescriptionHandler),
 );
+
+/** GET|POST /api/marketplace/settings */
+router.get("/marketplace/settings", async (_req, res) => {
+  try {
+    const lib = loadScraperSettings();
+    res.status(200).json({ success: true, ...(await lib.getScraperSettings()) });
+  } catch (err) {
+    console.error("[marketplace/settings GET]", err);
+    res.status(200).json({
+      success: true,
+      inventory_url_used: "",
+      inventory_url_new: "",
+      inventory_locations: [],
+      dealer_name: "",
+    });
+  }
+});
+
+router.post("/marketplace/settings", async (req, res) => {
+  try {
+    const lib = loadScraperSettings();
+    const saved = await lib.saveScraperSettings((req.body || {}) as Record<string, unknown>);
+    res.status(200).json({ success: true, ...saved, message: "Settings saved." });
+  } catch (err: unknown) {
+    const e = err as { message?: string };
+    console.error("[marketplace/settings POST]", err);
+    res.status(500).json({
+      success: false,
+      error: e?.message || "Failed to save settings.",
+    });
+  }
+});
 
 /** GET|POST /api/marketplace/toggle-auto */
 router.get("/marketplace/toggle-auto", async (_req, res) => {

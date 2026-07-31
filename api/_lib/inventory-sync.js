@@ -13,11 +13,7 @@ const {
   ensureCoreSchema,
   databaseUrl,
 } = require('./pg');
-const {
-  sanitizeInventoryList,
-  decodeHtmlEntities: decodeEntitiesShared,
-  cleanVehicleText,
-} = require('./inventoryParser');
+const { sanitizeInventoryList, decodeHtmlEntities: decodeEntitiesShared } = require('./inventoryParser');
 const {
   parseInventoryPage,
   detectPlatform,
@@ -25,17 +21,9 @@ const {
   parseMileage,
   parseColor,
 } = require('./platform-adapters');
+const { resolveInventoryTargetUrls } = require('./scraper-settings');
 
 const VDP_ENRICH_CAP = Number(process.env.INVENTORY_VDP_ENRICH_CAP || 200);
-
-const MOSES_USED_URL =
-  process.env.INVENTORY_URL_USED ||
-  'https://www.mosescars.com/search-all-used-inventory.html';
-const MOSES_NEW_URL =
-  process.env.INVENTORY_URL_NEW ||
-  'https://www.mosescars.com/search-all-new-inventory.html';
-const MOSES_SITEMAP =
-  process.env.INVENTORY_SITEMAP_URL || 'https://www.mosescars.com/sitemap.xml';
 
 const SCRAPER_HEADERS = {
   'User-Agent':
@@ -151,6 +139,10 @@ function parseVdpUrl(rawUrl) {
   }
   const model = urlSeg(modelSegs.join('-'));
   if (!make || !year) return null;
+  let vdp = decoded;
+  if (!/^https?:\/\//i.test(vdp)) {
+    vdp = decoded.startsWith('/') ? decoded : `/${decoded}`;
+  }
   return {
     vin,
     year,
@@ -159,11 +151,9 @@ function parseVdpUrl(rawUrl) {
     trim,
     condition,
     location: locRaw,
-    vdp_url: decoded.startsWith('http')
-      ? decoded
-      : `https://www.mosescars.com/${path}`,
+    vdp_url: vdp,
     status: 'ACTIVE',
-    dealership_group: 'Moses Auto Group',
+    dealership_group: '',
   };
 }
 
@@ -183,14 +173,23 @@ async function fetchText(url, timeoutMs = 25000) {
   }
 }
 
-async function fetchSitemapVehicles() {
+async function fetchSitemapVehicles(siteOrigin) {
+  if (!siteOrigin) return [];
+  const sitemapUrl =
+    process.env.INVENTORY_SITEMAP_URL ||
+    `${String(siteOrigin).replace(/\/$/, '')}/sitemap.xml`;
   try {
-    const xml = await fetchText(MOSES_SITEMAP, 30000);
+    const xml = await fetchText(sitemapUrl, 30000);
     const locs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map((m) => m[1]);
     const vehicles = [];
     for (const loc of locs) {
       const parsed = parseVdpUrl(loc);
-      if (parsed) vehicles.push(parsed);
+      if (parsed) {
+        if (parsed.vdp_url.startsWith('/') && siteOrigin) {
+          parsed.vdp_url = `${siteOrigin.replace(/\/$/, '')}${parsed.vdp_url}`;
+        }
+        vehicles.push(parsed);
+      }
     }
     return vehicles;
   } catch (err) {
@@ -199,7 +198,7 @@ async function fetchSitemapVehicles() {
   }
 }
 
-async function fetchListingPageVehicles(url, condition) {
+async function fetchListingPageVehicles(url, condition, dealerName = '') {
   try {
     const html = await fetchText(url, 30000);
     const { platform, vehicles } = await parseInventoryPage(html, url, condition);
@@ -208,7 +207,7 @@ async function fetchListingPageVehicles(url, condition) {
     );
     return vehicles.map((v) => ({
       ...v,
-      dealership_group: v.dealership_group || 'Moses Auto Group',
+      dealership_group: v.dealership_group || dealerName || '',
       condition: condition || v.condition || 'Used',
     }));
   } catch (err) {
@@ -218,22 +217,27 @@ async function fetchListingPageVehicles(url, condition) {
 }
 
 /**
- * Probe homepage + inventory URLs to detect the Big-4 platform, then scrape
- * each inventory source through the matching adapter.
+ * Probe homepage + configured inventory Target URLs, then scrape each source.
  */
-async function collectViaAdapters(userId, onProgress) {
-  const sources = [
-    { url: MOSES_USED_URL, condition: 'Used' },
-    { url: MOSES_NEW_URL, condition: 'New' },
-  ];
+async function collectViaAdapters(targets, onProgress) {
+  const { url_used, url_new, dealer_name } = targets;
+  const sources = [];
+  if (url_used) sources.push({ url: url_used, condition: 'Used' });
+  if (url_new) sources.push({ url: url_new, condition: 'New' });
 
-  // Homepage probe for platform detection (also used as a fallback source).
+  if (!sources.length) {
+    throw new Error(
+      'No inventory Target URL configured. Save Used/New inventory URLs in Marketplace settings first.',
+    );
+  }
+
   let homepagePlatform = 'unknown';
+  let siteOrigin = '';
   try {
-    const origin = new URL(MOSES_USED_URL).origin;
-    const homeHtml = await fetchText(origin + '/', 20000);
-    homepagePlatform = detectPlatform(homeHtml, origin + '/');
-    console.log(`[inventory-sync] homepage platform=${homepagePlatform}`);
+    siteOrigin = new URL(sources[0].url).origin;
+    const homeHtml = await fetchText(`${siteOrigin}/`, 20000);
+    homepagePlatform = detectPlatform(homeHtml, `${siteOrigin}/`);
+    console.log(`[inventory-sync] homepage platform=${homepagePlatform} origin=${siteOrigin}`);
     onProgress?.({ phase: 'discovering', platform: homepagePlatform });
   } catch (err) {
     console.warn('[inventory-sync] homepage probe failed:', err.message || err);
@@ -241,7 +245,7 @@ async function collectViaAdapters(userId, onProgress) {
 
   const byVin = new Map();
   for (const src of sources) {
-    const rows = await fetchListingPageVehicles(src.url, src.condition);
+    const rows = await fetchListingPageVehicles(src.url, src.condition, dealer_name);
     for (const v of rows) {
       if (v?.vin) byVin.set(String(v.vin).toUpperCase(), v);
     }
@@ -253,12 +257,13 @@ async function collectViaAdapters(userId, onProgress) {
     });
   }
 
-  // DealerOn / Moses sitemap supplement when SRP adapters return a thin set.
+  // Sitemap supplement when SRP is thin (DealerOn / unknown shells).
   if (byVin.size < 25 || homepagePlatform === 'dealeron' || homepagePlatform === 'unknown') {
-    const sitemapRows = await fetchSitemapVehicles();
+    const sitemapRows = await fetchSitemapVehicles(siteOrigin);
     for (const v of sitemapRows) {
       const key = String(v.vin || '').toUpperCase();
       if (!key) continue;
+      if (dealer_name && !v.dealership_group) v.dealership_group = dealer_name;
       const prev = byVin.get(key);
       byVin.set(key, prev ? { ...v, ...prev, vin: key } : v);
     }
@@ -267,6 +272,8 @@ async function collectViaAdapters(userId, onProgress) {
   return {
     platform: homepagePlatform,
     vehicles: [...byVin.values()],
+    url_used,
+    url_new,
   };
 }
 
@@ -288,29 +295,43 @@ async function enrichVehiclesFromVdp(vehicles, onProgress) {
       const price =
         parsePrice(
           (html.match(/data-(?:internet-)?price=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/data-(?:selling|final)-price=["']([^"']+)["']/i) || [])[1] ||
             (html.match(/data-msrp=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/"(?:internetPrice|sellingPrice|finalPrice|price)"\s*:\s*"?([\d,.]+)"?/i) ||
+              [])[1] ||
             (html.match(/\$\s*([\d,]+)/) || [])[1],
         ) || Number(v.price) || 0;
       const mileage =
         parseMileage(
-          (html.match(/data-mileage=["']([^"']+)["']/i) || [])[1] ||
+          (html.match(/data-(?:mileage|miles|odometer)=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/"(?:mileage|miles|odometer)"\s*:\s*"?([\d,]+)"?/i) || [])[1] ||
             (html.match(/([\d,]+)\s*(?:mi|miles)\b/i) || [])[1],
         ) || Number(v.mileage) || 0;
       const exterior =
         parseColor(
-          (html.match(/data-exterior-color=["']([^"']+)["']/i) || [])[1] ||
-            (html.match(/"exteriorColor"\s*:\s*"([^"]+)"/i) || [])[1] ||
+          (html.match(/data-(?:exterior-)?color=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/data-ext(?:erior)?-color=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/"(?:exteriorColor|extColor|color|ext_color_generic)"\s*:\s*"([^"]+)"/i) ||
+              [])[1] ||
             (html.match(/Exterior(?:\s*Color)?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{2,40})/i) || [])[1],
         ) || v.exterior_color || '';
-      const interior =
-        parseColor(
-          (html.match(/data-interior-color=["']([^"']+)["']/i) || [])[1] ||
-            (html.match(/"interiorColor"\s*:\s*"([^"]+)"/i) || [])[1],
-        ) || v.interior_color || '';
+      const stock =
+        (html.match(/data-stock(?:-number)?=["']([^"']+)["']/i) || [])[1] ||
+        (html.match(/"(?:stockNumber|stock_number|stock)"\s*:\s*"([^"]+)"/i) || [])[1] ||
+        '';
       if (price > 0) v.price = price;
       if (mileage > 0) v.mileage = mileage;
       if (exterior) v.exterior_color = exterior;
+      const interior =
+        parseColor(
+          (html.match(/data-interior-color=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/"(?:interiorColor|intColor)"\s*:\s*"([^"]+)"/i) || [])[1],
+        ) || v.interior_color || '';
       if (interior) v.interior_color = interior;
+      if (stock && !/^(?:19|20)\d{2}$/.test(String(stock).trim())) {
+        v.stock_number = String(stock).trim();
+        v.stockNumber = v.stock_number;
+      }
       enriched += 1;
       onProgress?.({ enriched, total: slice.length });
     } catch {
@@ -396,9 +417,9 @@ function shouldCancel(userId) {
 }
 
 /**
- * Run a full inventory sync for the dealership (defaults to Moses Auto Group).
+ * Run a full inventory sync against the configured Target URLs.
  */
-async function runInventorySync(userId = 0, sessionId = '') {
+async function runInventorySync(userId = 0, sessionId = '', options = {}) {
   const uid = Number(userId) || 0;
   const sid = sessionId || `sync_${randomHex(8)}`;
   patchJob(uid, {
@@ -421,7 +442,15 @@ async function runInventorySync(userId = 0, sessionId = '') {
     }
     await ensureCoreSchema();
 
-    const collected = await collectViaAdapters(uid, (progress) => {
+    const targets = await resolveInventoryTargetUrls(options);
+    console.log(
+      `[inventory-sync] targets used=${targets.url_used || '(none)'} new=${targets.url_new || '(none)'} dealer=${targets.dealer_name || ''}`,
+    );
+    patchJob(uid, {
+      reason: `url:${targets.url_used || targets.url_new || 'unset'}`,
+    });
+
+    const collected = await collectViaAdapters(targets, (progress) => {
       patchJob(uid, {
         phase: progress.phase || 'discovering',
         synced: progress.synced || 0,
@@ -498,6 +527,8 @@ async function runInventorySync(userId = 0, sessionId = '') {
       reason: upserted > 0 ? 'ok' : 'empty',
       cancel_status: '',
       last_sync: iso,
+      url_used: targets.url_used,
+      url_new: targets.url_new,
     });
     console.log(`[inventory-sync] user=${uid} upserted=${upserted} session=${sid}`);
     return getJob(uid);
@@ -565,7 +596,7 @@ async function statusPayload(userId = 0) {
  * Schedule sync work so Vercel can keep the isolate alive after the response
  * when `@vercel/functions` waitUntil is available; otherwise run inline.
  */
-async function startInventorySync(userId = 0) {
+async function startInventorySync(userId = 0, options = {}) {
   const uid = Number(userId) || 0;
   const existing = getJob(uid);
   if (existing.syncing) {
@@ -579,6 +610,20 @@ async function startInventorySync(userId = 0) {
       message: 'A sync is already running.',
       user_id: uid,
       session_id: existing.session_id || '',
+    };
+  }
+
+  const targets = await resolveInventoryTargetUrls(options);
+  if (!targets.url_used && !targets.url_new) {
+    return {
+      status: 'error',
+      success: false,
+      error:
+        'No inventory Target URL configured. Save Used/New inventory URLs in Marketplace settings first.',
+      message:
+        'No inventory Target URL configured. Save Used/New inventory URLs in Marketplace settings first.',
+      count: 0,
+      user_id: uid,
     };
   }
 
@@ -596,7 +641,7 @@ async function startInventorySync(userId = 0) {
     cancel_status: 'running',
   });
 
-  const work = runInventorySync(uid, sessionId);
+  const work = runInventorySync(uid, sessionId, options);
 
   let deferred = false;
   try {
@@ -629,19 +674,19 @@ async function startInventorySync(userId = 0) {
     purged: 0,
     user_id: uid,
     session_id: sessionId,
-    url_used: MOSES_USED_URL,
-    url_new: MOSES_NEW_URL,
+    url_used: targets.url_used,
+    url_new: targets.url_new,
+    dealer_name: targets.dealer_name,
     timestamp: new Date().toISOString(),
   };
 }
 
 module.exports = {
-  MOSES_USED_URL,
-  MOSES_NEW_URL,
   getJob,
   startInventorySync,
   runInventorySync,
   requestCancel,
   statusPayload,
   readLastSync,
+  resolveInventoryTargetUrls,
 };

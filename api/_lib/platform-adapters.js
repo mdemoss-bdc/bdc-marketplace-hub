@@ -505,38 +505,81 @@ function parseDealerCom(html, pageUrl, condition) {
   return dedupeByVin(out);
 }
 
-/** Pull price / miles / color from a vehicle card HTML slice when data-* attrs are thin. */
+/** Pull price / miles / color / stock from a vehicle card HTML slice. */
+function attrFromHtml(slice, names) {
+  for (const name of names) {
+    const re = new RegExp(
+      `(?:data-${name}|${name})=["']([^"']+)["']`,
+      'i',
+    );
+    const m = slice.match(re);
+    if (m?.[1]) return m[1].trim();
+  }
+  return '';
+}
+
 function fieldsFromCardHtml(slice) {
   const text = scrubRawText(slice);
   const price =
     parsePrice(
-      (slice.match(/data-(?:internet-)?price=["']([^"']+)["']/i) || [])[1] ||
-        (slice.match(/data-msrp=["']([^"']+)["']/i) || [])[1] ||
+      attrFromHtml(slice, [
+        'internet-price',
+        'internetprice',
+        'selling-price',
+        'sellingprice',
+        'final-price',
+        'finalprice',
+        'price',
+        'msrp',
+        'list-price',
+      ]) ||
+        (slice.match(/"(?:internetPrice|sellingPrice|finalPrice|listPrice|price)"\s*:\s*"?([\d,.]+)"?/i) ||
+          [])[1] ||
         (slice.match(/\$\s*([\d,]+(?:\.\d{2})?)/) || [])[1] ||
         (text.match(/(?:price|asking|internet)\s*[:$]?\s*\$?\s*([\d,]+)/i) || [])[1],
     ) || 0;
   const mileage =
     parseMileage(
-      (slice.match(/data-mileage=["']([^"']+)["']/i) || [])[1] ||
+      attrFromHtml(slice, ['mileage', 'miles', 'odometer', 'distance']) ||
+        (slice.match(/"(?:mileage|miles|odometer|distance)"\s*:\s*"?([\d,]+)"?/i) || [])[1] ||
         (slice.match(/([\d,]+)\s*(?:mi|miles)\b/i) || [])[1] ||
         (text.match(/([\d,]+)\s*(?:mi|miles)\b/i) || [])[1],
     ) || 0;
   const exteriorColor =
     parseColor(
-      (slice.match(/data-exterior-color=["']([^"']+)["']/i) || [])[1] ||
-        (slice.match(/data-color=["']([^"']+)["']/i) || [])[1] ||
-        (slice.match(/"exteriorColor"\s*:\s*"([^"]+)"/i) || [])[1] ||
+      attrFromHtml(slice, [
+        'exterior-color',
+        'exteriorcolor',
+        'ext-color',
+        'extcolor',
+        'color',
+        'ext_color_generic',
+      ]) ||
+        (slice.match(/"(?:exteriorColor|extColor|color|ext_color_generic)"\s*:\s*"([^"]+)"/i) ||
+          [])[1] ||
         (text.match(/Exterior(?:\s*Color)?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i) ||
           [])[1],
     ) || '';
   const interiorColor =
     parseColor(
-      (slice.match(/data-interior-color=["']([^"']+)["']/i) || [])[1] ||
-        (slice.match(/"interiorColor"\s*:\s*"([^"]+)"/i) || [])[1] ||
+      attrFromHtml(slice, ['interior-color', 'interiorcolor', 'int-color', 'intcolor']) ||
+        (slice.match(/"(?:interiorColor|intColor)"\s*:\s*"([^"]+)"/i) || [])[1] ||
         (text.match(/Interior(?:\s*Color)?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i) ||
           [])[1],
     ) || '';
-  return { price, mileage, exteriorColor, interiorColor };
+  const stockNumber =
+    attrFromHtml(slice, [
+      'stock-number',
+      'stocknumber',
+      'stock-no',
+      'stockno',
+      'stock',
+      'dealer-stock',
+    ]) ||
+    (slice.match(/"(?:stockNumber|stock_number|stockNo|stock)"\s*:\s*"([^"]+)"/i) || [])[1] ||
+    (text.match(/\b(?:STK|STOCK)\s*#?\s*([A-Z0-9\-_]{3,14})\b/i) || [])[1] ||
+    '';
+  return { price, mileage, exteriorColor, interiorColor, stockNumber };
 }
 
 /** DealerOn — JSON-LD + .vehicle-card / [data-vin] */
@@ -576,11 +619,21 @@ function parseDealerOn(html, pageUrl, condition) {
     const priceRaw =
       da('internet-price') ||
       da('asking-price') ||
+      da('selling-price') ||
+      da('final-price') ||
       da('price') ||
       da('msrp') ||
       fromBody.price ||
       '';
-    const mileageRaw = da('mileage') || da('miles') || fromBody.mileage || '';
+    const mileageRaw =
+      da('mileage') || da('miles') || da('odometer') || fromBody.mileage || '';
+    const stockRaw =
+      da('stock') ||
+      da('stock-number') ||
+      da('stocknum') ||
+      da('stock-no') ||
+      fromBody.stockNumber ||
+      '';
     const v = normalizeVehicle(
       {
         vin,
@@ -589,7 +642,7 @@ function parseDealerOn(html, pageUrl, condition) {
         model: da('model'),
         trim: da('trim'),
         price: priceRaw,
-        stockNumber: da('stock') || da('stock-number') || da('stocknum'),
+        stockNumber: stockRaw,
         mileage: mileageRaw,
         imageUrl: da('image-url') || da('image'),
         vdpUrl: vdp,

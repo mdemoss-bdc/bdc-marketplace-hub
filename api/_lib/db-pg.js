@@ -431,34 +431,7 @@ async function authenticate(identifier, password) {
     return null;
   }
 
-  const canonical = String(row.username || '').toLowerCase();
-  const masterUser =
-    String(process.env.ADMIN_USER || 'mdemoss').trim().toLowerCase() || 'mdemoss';
-  const baselinePass = baselinePassword(canonical);
-  const acceptBaseline =
-    Boolean(baselinePass) &&
-    password === baselinePass &&
-    (canonical === 'mdemoss' ||
-      canonical === masterUser ||
-      canonical === 'testreviewer' ||
-      canonical === 'jdemoss');
-
-  if (acceptBaseline) {
-    try {
-      if (!verifyPassword(password, row.password_hash) || needsRehash(row.password_hash)) {
-        await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
-          hashPassword(password),
-          row.id,
-        ]);
-        console.log(`[auth-pg] synced ${row.username} password hash from baseline credentials`);
-      }
-    } catch (err) {
-      console.warn('[auth-pg] baseline password hash sync failed:', err);
-    }
-    console.log('[AUTH OK]', row.username, 'baseline password');
-    return rowToUser(row);
-  }
-
+  // Authenticate against the stored password hash only — no username allow-lists.
   if (!verifyPassword(password, row.password_hash)) {
     console.log('[LOGIN FAIL] Password mismatch for:', key);
     console.log('[AUTH FAIL]', key, 'password mismatch');

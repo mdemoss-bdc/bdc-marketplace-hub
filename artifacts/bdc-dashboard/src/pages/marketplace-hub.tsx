@@ -1754,14 +1754,30 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     setSyncProgress({ synced: 0, total: 0, enriched: 0 });
     setSyncSessionId('');
 
-    // Token-free trigger — the engine resolves the account and scrapes the
-    // configured Used/New inventory URLs.
+    // Pass configured Target URLs so the scraper never falls back to a hardcoded dealer.
+    const cached = readCachedSettings();
+    const locs = Array.isArray(cached?.inventory_locations)
+      ? (cached.inventory_locations as Array<Record<string, unknown>>)
+      : [];
+    const syncBody = {
+      inventory_url_used:
+        String(cached?.inventory_url_used || locs[0]?.inventory_url_used || ''),
+      inventory_url_new:
+        String(cached?.inventory_url_new || locs[0]?.inventory_url_new || ''),
+      inventory_locations: locs,
+      dealer_name: String(cached?.dealer_name || ''),
+    };
+
     try {
-      const startRes  = await fetch(`${API_BASE}/sync`, { method: 'POST' });
+      const startRes = await fetch(`${API_BASE}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(syncBody),
+      });
       const startData = await startRes.json().catch(() => ({}));
       if (!startRes.ok) {
         setSyncing(false); setSyncPhase('');
-        setSyncMsg(startData.error || 'Could not start the scraper.');
+        setSyncMsg(startData.error || startData.message || 'Could not start the scraper.');
         setTimeout(() => setSyncMsg(''), 6000);
         return;
       }
