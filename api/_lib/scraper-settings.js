@@ -1,9 +1,10 @@
 /**
  * Marketplace scraper / Meta settings — persisted in marketplace_settings.
  * Used by Admin Console + inventory sync so Target URLs are never hardcoded.
+ *
+ * Do not import `fs`/`path` for cwd-relative cleanup here — Vercel NFT tracing
+ * will try to bundle the whole repo and Hobby deploys fail.
  */
-const fs = require('fs');
-const path = require('path');
 const { query, queryOne, ensureCoreSchema } = require('./pg');
 
 const SETTINGS_KEY = 'scraper_config';
@@ -153,38 +154,15 @@ async function wipeUserInventory(userId) {
   return r?.rowCount ?? 0;
 }
 
+/**
+ * Feed cache cleanup hook after a Target URL wipe.
+ *
+ * No filesystem I/O: production feeds are regenerated from Postgres, and the
+ * Python engine clears local caches itself. Keeping this free of `fs`/`path`
+ * prevents Vercel NFT from bundling the entire monorepo into api/index.
+ */
 function clearFeedCaches() {
-  const roots = [
-    process.cwd(),
-    path.join(process.cwd(), 'artifacts', 'api-server'),
-    path.join(process.cwd(), 'api'),
-    '/tmp',
-  ];
-  const names = [
-    'meta-feed.csv',
-    'meta-feed.xml',
-    'tiktok-feed.xml',
-    'tiktok-feed.csv',
-    path.join('feeds', 'meta-feed.csv'),
-    path.join('feeds', 'tiktok-feed.xml'),
-    path.join('cache', 'meta-feed.csv'),
-    path.join('cache', 'tiktok-feed.xml'),
-  ];
-  const removed = [];
-  for (const root of roots) {
-    for (const rel of names) {
-      const full = path.isAbsolute(rel) ? rel : path.join(root, rel);
-      try {
-        if (fs.existsSync(full) && fs.statSync(full).isFile()) {
-          fs.unlinkSync(full);
-          removed.push(full);
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-  return removed;
+  return [];
 }
 
 async function getScraperSettings() {
