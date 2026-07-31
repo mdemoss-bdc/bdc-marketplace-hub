@@ -151,7 +151,16 @@ mount('/api/marketplace/inventory', require('../_routes/marketplace/inventory'))
 mount('/api/marketplace/schedule', require('../_routes/marketplace/schedule'));
 mount('/api/marketplace/toggle-auto', require('../_routes/marketplace/toggle-auto'));
 mount('/api/marketplace/generate-copy', require('../_routes/marketplace/generate-copy'));
+mount('/api/marketplace/generate-description', require('../_routes/generate-description'));
+mount('/api/marketplace/save-description', require('../_routes/marketplace/save-description'));
 mount('/api/v1/marketplace/queue', require('../_routes/v1/marketplace/queue'));
+mount('/api/v1/marketplace/posting', require('../_routes/v1/marketplace/posting'));
+mount('/api/inventory/feed-status', require('../_routes/inventory/feed-status'));
+mount('/api/generate-description', require('../_routes/generate-description'));
+mount('/api/v1/generate-description', require('../_routes/generate-description'));
+mount('/api/v1/marketplace/generate-description', require('../_routes/generate-description'));
+mount('/api/save-description', require('../_routes/marketplace/save-description'));
+mount('/api/v1/marketplace/save-description', require('../_routes/marketplace/save-description'));
 
 // ── Meta Commerce Manager catalog feed (public — Meta crawler) ──────────────
 mount('/api/catalog/feed', require('../_routes/catalog/feed'));

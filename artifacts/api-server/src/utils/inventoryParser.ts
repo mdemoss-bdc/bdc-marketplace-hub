@@ -19,6 +19,8 @@ export type ParsedVehicleFields = {
   price: number | null;
   mileage: number | null;
   stock_number: string | null;
+  exterior_color: string | null;
+  interior_color: string | null;
 };
 
 export type SanitizedVehicle = Record<string, unknown> & {
@@ -138,6 +140,30 @@ export function extractMileage(text: string): number | null {
   return n;
 }
 
+export function extractExteriorColor(text: string): string | null {
+  const scrubbed = scrubRawText(text);
+  const labeled = scrubbed.match(
+    /(?:Exterior(?:\s*Color)?|Ext\.?\s*Color|Color)\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i,
+  );
+  if (labeled?.[1]) {
+    const c = labeled[1].trim();
+    if (!/^(n\/?a|none|unknown|select)$/i.test(c)) return c;
+  }
+  return null;
+}
+
+export function extractInteriorColor(text: string): string | null {
+  const scrubbed = scrubRawText(text);
+  const labeled = scrubbed.match(
+    /(?:Interior(?:\s*Color)?|Int\.?\s*Color)\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i,
+  );
+  if (labeled?.[1]) {
+    const c = labeled[1].trim();
+    if (!/^(n\/?a|none|unknown|select)$/i.test(c)) return c;
+  }
+  return null;
+}
+
 export function extractStockNumber(text: string): string | null {
   const scrubbed = scrubRawText(text);
   // Prefer explicit STK/STOCK/ID labels.
@@ -224,6 +250,8 @@ export function parseInventoryText(raw: string): ParsedVehicleFields {
     price: extractPrice(text),
     mileage: extractMileage(text),
     stock_number: extractStockNumber(text),
+    exterior_color: extractExteriorColor(text),
+    interior_color: extractInteriorColor(text),
   };
 }
 
@@ -331,6 +359,18 @@ export function sanitizeVehicleRecord(
     if (fromField) stock = fromField;
   }
 
+  const exterior =
+    asNonEmptyString(vehicle.exterior_color) ||
+    asNonEmptyString(vehicle.exteriorColor) ||
+    asNonEmptyString(vehicle.color) ||
+    parsed.exterior_color ||
+    "";
+  const interior =
+    asNonEmptyString(vehicle.interior_color) ||
+    asNonEmptyString(vehicle.interiorColor) ||
+    parsed.interior_color ||
+    "";
+
   return {
     ...vehicle,
     vin,
@@ -340,6 +380,8 @@ export function sanitizeVehicleRecord(
     price,
     mileage,
     stock_number: stock,
+    exterior_color: exterior,
+    interior_color: interior,
   };
 }
 

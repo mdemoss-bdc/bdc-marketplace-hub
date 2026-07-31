@@ -120,26 +120,32 @@ function normalizeRow(vehicle) {
   };
 }
 
-async function fetchActiveVehicles({ userId, limit = 5000 } = {}) {
+async function fetchActiveVehicles({ userId, limit = 5000, feedOnly = true } = {}) {
   if (!databaseUrl()) {
     throw new Error('DATABASE_URL / POSTGRES_URL is required for the catalog feed.');
   }
   await ensureCoreSchema();
   const lim = Math.min(Math.max(Number(limit) || 5000, 1), 10000);
   const uid = userId == null || userId === '' ? null : Number(userId);
+  // Meta feed only includes vehicles explicitly added via "Add to Feed"
+  // (in_meta_feed=1) — fall back to legacy posted_status for older rows.
+  const feedClause = feedOnly
+    ? `AND (in_meta_feed = 1 OR LOWER(COALESCE(posted_status,'')) = 'posted')`
+    : '';
   if (uid != null && Number.isFinite(uid)) {
     return queryAll(
       `SELECT * FROM marketplace_inventory
        WHERE UPPER(status) = 'ACTIVE' AND user_id = $1
+       ${feedClause}
        ORDER BY year DESC, price ASC
        LIMIT $2`,
       [uid, lim],
     );
   }
-  // Public dealership feed — all ACTIVE rows (multi-tenant sync often uses user_id 0).
   return queryAll(
     `SELECT * FROM marketplace_inventory
      WHERE UPPER(status) = 'ACTIVE'
+     ${feedClause}
      ORDER BY year DESC, price ASC
      LIMIT $1`,
     [lim],
@@ -209,9 +215,9 @@ function toRssXml(items) {
   for (const item of items) {
     parts.push('    <item>');
     parts.push(`      <g:id>${escapeXml(item.id)}</g:id>`);
-    parts.push(`      <title>${escapeXml(item.title)}</title>`);
-    parts.push(`      <description>${escapeXml(item.description)}</description>`);
-    parts.push(`      <link>${escapeXml(item.url)}</link>`);
+    parts.push(`      <g:title>${escapeXml(item.title)}</g:title>`);
+    parts.push(`      <g:description>${escapeXml(item.description)}</g:description>`);
+    parts.push(`      <g:link>${escapeXml(item.url)}</g:link>`);
     parts.push(`      <g:image_link>${escapeXml(item.image_link)}</g:image_link>`);
     parts.push(`      <g:price>${escapeXml(item.price)}</g:price>`);
     parts.push(`      <g:availability>${escapeXml(item.availability)}</g:availability>`);
@@ -220,8 +226,9 @@ function toRssXml(items) {
     parts.push(`      <g:year>${escapeXml(item.year)}</g:year>`);
     parts.push(`      <g:make>${escapeXml(item.make)}</g:make>`);
     parts.push(`      <g:model>${escapeXml(item.model)}</g:model>`);
-    parts.push(`      <g:trim>${escapeXml(item.trim)}</g:trim>`);
+    if (item.trim) parts.push(`      <g:trim>${escapeXml(item.trim)}</g:trim>`);
     if (item.vin) parts.push(`      <g:vin>${escapeXml(item.vin)}</g:vin>`);
+    parts.push(`      <g:mileage>${escapeXml(item['mileage.value'])} ${escapeXml(item['mileage.unit'])}</g:mileage>`);
     parts.push(`      <g:mileage.value>${escapeXml(item['mileage.value'])}</g:mileage.value>`);
     parts.push(`      <g:mileage.unit>${escapeXml(item['mileage.unit'])}</g:mileage.unit>`);
     parts.push('    </item>');

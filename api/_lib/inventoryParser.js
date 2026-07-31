@@ -92,6 +92,30 @@ function extractMileage(text) {
   return n;
 }
 
+function extractExteriorColor(text) {
+  const scrubbed = scrubRawText(text);
+  const labeled = scrubbed.match(
+    /(?:Exterior(?:\s*Color)?|Ext\.?\s*Color|Color)\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i,
+  );
+  if (labeled?.[1]) {
+    const c = labeled[1].trim();
+    if (!/^(n\/?a|none|unknown|select)$/i.test(c)) return c;
+  }
+  return null;
+}
+
+function extractInteriorColor(text) {
+  const scrubbed = scrubRawText(text);
+  const labeled = scrubbed.match(
+    /(?:Interior(?:\s*Color)?|Int\.?\s*Color)\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i,
+  );
+  if (labeled?.[1]) {
+    const c = labeled[1].trim();
+    if (!/^(n\/?a|none|unknown|select)$/i.test(c)) return c;
+  }
+  return null;
+}
+
 function extractStockNumber(text) {
   const scrubbed = scrubRawText(text);
   const labeled = scrubbed.match(STOCK_LABELED_RE);
@@ -169,6 +193,8 @@ function parseInventoryText(raw) {
     price: extractPrice(text),
     mileage: extractMileage(text),
     stock_number: extractStockNumber(text),
+    exterior_color: extractExteriorColor(text),
+    interior_color: extractInteriorColor(text),
   };
 }
 
@@ -229,6 +255,18 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     if (fromField) stock = fromField;
   }
 
+  const exterior =
+    asNonEmptyString(vehicle.exterior_color) ||
+    asNonEmptyString(vehicle.exteriorColor) ||
+    asNonEmptyString(vehicle.color) ||
+    parsed.exterior_color ||
+    '';
+  const interior =
+    asNonEmptyString(vehicle.interior_color) ||
+    asNonEmptyString(vehicle.interiorColor) ||
+    parsed.interior_color ||
+    '';
+
   return {
     ...vehicle,
     vin,
@@ -238,6 +276,8 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     price,
     mileage,
     stock_number: stock,
+    exterior_color: exterior,
+    interior_color: interior,
   };
 }
 

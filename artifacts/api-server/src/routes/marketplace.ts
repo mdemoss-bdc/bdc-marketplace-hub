@@ -126,6 +126,65 @@ router.post("/marketplace/schedule", async (req, res) => {
   }
 });
 
+function loadCjsHandler(relCandidates: string[]): (req: Request, res: Response) => Promise<void> | void {
+  for (const file of relCandidates) {
+    try {
+      return require(file) as (req: Request, res: Response) => Promise<void> | void;
+    } catch {
+      /* try next */
+    }
+  }
+  throw new Error(`handler not found among: ${relCandidates.join(", ")}`);
+}
+
+function asExpress(
+  handler: (req: Request, res: Response) => Promise<void> | void,
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(handler(req, res)).catch(next);
+  };
+}
+
+const feedStatusHandler = loadCjsHandler([
+  path.resolve(__dirname, "../../../../api/_routes/inventory/feed-status.js"),
+  path.resolve(process.cwd(), "api/_routes/inventory/feed-status.js"),
+  path.resolve(process.cwd(), "../api/_routes/inventory/feed-status.js"),
+]);
+
+const generateDescriptionHandler = loadCjsHandler([
+  path.resolve(__dirname, "../../../../api/_routes/generate-description.js"),
+  path.resolve(process.cwd(), "api/_routes/generate-description.js"),
+  path.resolve(process.cwd(), "../api/_routes/generate-description.js"),
+]);
+
+const saveDescriptionHandler = loadCjsHandler([
+  path.resolve(__dirname, "../../../../api/_routes/marketplace/save-description.js"),
+  path.resolve(process.cwd(), "api/_routes/marketplace/save-description.js"),
+  path.resolve(process.cwd(), "../api/_routes/marketplace/save-description.js"),
+]);
+
+/** POST /api/v1/marketplace/posting + /api/inventory/feed-status */
+router.post(
+  ["/v1/marketplace/posting", "/inventory/feed-status", "/marketplace/feed-status"],
+  asExpress(feedStatusHandler),
+);
+
+/** POST AI description (internal OpenAI / template — never external Meta AI) */
+router.post(
+  [
+    "/marketplace/generate-description",
+    "/generate-description",
+    "/v1/generate-description",
+    "/v1/marketplace/generate-description",
+  ],
+  asExpress(generateDescriptionHandler),
+);
+
+router.post(
+  ["/marketplace/save-description", "/save-description", "/v1/marketplace/save-description"],
+  asExpress(saveDescriptionHandler),
+);
+
 /** GET|POST /api/marketplace/toggle-auto */
 router.get("/marketplace/toggle-auto", async (_req, res) => {
   try {

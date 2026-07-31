@@ -125,6 +125,7 @@ async function ensureCoreSchema() {
         dealership_group TEXT DEFAULT '',
         vdp_url TEXT DEFAULT '',
         posted_status TEXT DEFAULT 'not_posted',
+        in_meta_feed INTEGER NOT NULL DEFAULT 0,
         ai_description TEXT DEFAULT '',
         last_seen TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -200,6 +201,9 @@ async function ensureCoreSchema() {
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS fb_catalog_name TEXT DEFAULT ''",
       "ALTER TABLE users ADD COLUMN IF NOT EXISTS catalog_token TEXT DEFAULT ''",
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS facebook_connected_at TIMESTAMPTZ DEFAULT NULL',
+      'ALTER TABLE marketplace_inventory ADD COLUMN IF NOT EXISTS in_meta_feed INTEGER NOT NULL DEFAULT 0',
+      "ALTER TABLE marketplace_inventory ADD COLUMN IF NOT EXISTS exterior_color TEXT DEFAULT ''",
+      "ALTER TABLE marketplace_inventory ADD COLUMN IF NOT EXISTS interior_color TEXT DEFAULT ''",
     ];
     for (const ddl of fbAlters) {
       try {

@@ -59,8 +59,56 @@ const PLATFORM_URL_SIGS = {
 };
 
 function digits(value) {
-  const n = Number.parseInt(String(value ?? '').replace(/[^\d]/g, ''), 10);
+  if (value == null || value === '') return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.max(0, Math.trunc(value));
+  }
+  if (typeof value === 'object') {
+    return digits(value.value ?? value.amount ?? value.Price ?? value.price ?? '');
+  }
+  const raw = String(value).trim();
+  // Currency strings: "$24,995.00", "24995 USD", "USD 24995"
+  const money = raw.match(/(?:\$|USD\s*)?\s*([\d,]+(?:\.\d{2})?)/i);
+  if (money && (/\$|usd|price|msrp/i.test(raw) || /,\d{3}/.test(money[1]))) {
+    const n = Number.parseFloat(money[1].replace(/,/g, ''));
+    if (Number.isFinite(n) && n >= 500 && n <= 5_000_000) return Math.round(n);
+  }
+  const n = Number.parseInt(raw.replace(/[^\d]/g, ''), 10);
   return Number.isFinite(n) ? n : 0;
+}
+
+function parsePrice(value) {
+  const n = digits(value);
+  // Reject year-like leftovers mistaken for prices
+  if (n >= 1900 && n <= 2100) return 0;
+  if (n > 0 && n < 500) return 0;
+  return n;
+}
+
+function parseMileage(value) {
+  if (value == null || value === '') return 0;
+  if (typeof value === 'object') {
+    return parseMileage(value.value ?? value.Value ?? value.odometer ?? '');
+  }
+  const raw = String(value).trim();
+  const m = raw.match(/([\d,]+)\s*(?:mi|miles|kmi)?/i);
+  const n = Number.parseInt((m ? m[1] : raw).replace(/[^\d]/g, ''), 10);
+  if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return 0;
+  // Treat bare "45" with a trailing k as 45000 when marked
+  if (/^\d{1,3}\s*k\b/i.test(raw)) return n * 1000;
+  return n;
+}
+
+function parseColor(value) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'object') {
+    return asStr(value.name || value.Name || value.color || value.Color || value.value);
+  }
+  const s = String(value).trim();
+  if (!s || /^n\/?a$/i.test(s) || s === '-' || s === '—') return '';
+  // Drop overly long junk blobs
+  if (s.length > 60) return s.slice(0, 60).trim();
+  return s;
 }
 
 function asStr(value) {
@@ -129,16 +177,32 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
   const trim = asStr(
     firstDefined(raw.trim, raw.Trim, raw.vehicleConfiguration, raw.bodyType, raw.trimLevel),
   );
-  const price = digits(
+  const price = parsePrice(
     firstDefined(
+      raw.internetPrice,
+      raw.InternetPrice,
+      raw.internet_price,
+      raw.askingPrice,
+      raw.AskingPrice,
+      raw.salePrice,
+      raw.SalePrice,
+      raw.sellingPrice,
+      raw.SellingPrice,
+      raw.finalPrice,
+      raw.displayPrice,
+      raw.ourPrice,
       raw.price,
       raw.Price,
-      raw.internetPrice,
-      raw.askingPrice,
-      raw.salePrice,
       raw.msrp,
       raw.MSRP,
-      raw.sellingPrice,
+      raw.retailPrice,
+      raw.RetailPrice,
+      raw.VehiclePrice,
+      raw.pricing?.internet,
+      raw.pricing?.sale,
+      raw.pricing?.price,
+      raw.prices?.internet,
+      raw.prices?.sale,
     ),
   );
   const stockNumber = asStr(
@@ -151,14 +215,50 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
       raw.productID,
     ),
   );
-  const mileage = digits(
+  const mileage = parseMileage(
     firstDefined(
       raw.mileage,
       raw.Mileage,
+      raw.miles,
+      raw.Miles,
       raw.odometer,
-      typeof raw.mileageFromOdometer === 'object'
-        ? raw.mileageFromOdometer?.value
-        : raw.mileageFromOdometer,
+      raw.Odometer,
+      raw.odometerReading,
+      raw.milesNumeric,
+      raw.mileageFromOdometer,
+      raw.odometer_miles,
+      raw.specifications?.mileage,
+      raw.attributes?.mileage,
+    ),
+  );
+  const exteriorColor = parseColor(
+    firstDefined(
+      raw.exterior_color,
+      raw.exteriorColor,
+      raw.ExteriorColor,
+      raw.extColor,
+      raw.ext_color,
+      raw.color,
+      raw.Color,
+      raw.exterior,
+      raw.Exterior,
+      raw.bodyColor,
+      raw.paintColor,
+      raw.attributes?.exteriorColor,
+      raw.specifications?.exteriorColor,
+    ),
+  );
+  const interiorColor = parseColor(
+    firstDefined(
+      raw.interior_color,
+      raw.interiorColor,
+      raw.InteriorColor,
+      raw.intColor,
+      raw.int_color,
+      raw.interior,
+      raw.Interior,
+      raw.attributes?.interiorColor,
+      raw.specifications?.interiorColor,
     ),
   );
   let imageUrl = firstDefined(
@@ -198,8 +298,8 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
     vdpUrl,
     status: status.toUpperCase() === 'SOLD' ? 'SOLD' : 'ACTIVE',
     condition,
-    exterior_color: asStr(firstDefined(raw.exterior_color, raw.exteriorColor, raw.color)),
-    interior_color: asStr(firstDefined(raw.interior_color, raw.interiorColor)),
+    exterior_color: exteriorColor,
+    interior_color: interiorColor,
     location: asStr(firstDefined(raw.location, raw.Location, raw.city)),
   };
 }
@@ -380,6 +480,40 @@ function parseDealerCom(html, pageUrl, condition) {
   return dedupeByVin(out);
 }
 
+/** Pull price / miles / color from a vehicle card HTML slice when data-* attrs are thin. */
+function fieldsFromCardHtml(slice) {
+  const text = scrubRawText(slice);
+  const price =
+    parsePrice(
+      (slice.match(/data-(?:internet-)?price=["']([^"']+)["']/i) || [])[1] ||
+        (slice.match(/data-msrp=["']([^"']+)["']/i) || [])[1] ||
+        (slice.match(/\$\s*([\d,]+(?:\.\d{2})?)/) || [])[1] ||
+        (text.match(/(?:price|asking|internet)\s*[:$]?\s*\$?\s*([\d,]+)/i) || [])[1],
+    ) || 0;
+  const mileage =
+    parseMileage(
+      (slice.match(/data-mileage=["']([^"']+)["']/i) || [])[1] ||
+        (slice.match(/([\d,]+)\s*(?:mi|miles)\b/i) || [])[1] ||
+        (text.match(/([\d,]+)\s*(?:mi|miles)\b/i) || [])[1],
+    ) || 0;
+  const exteriorColor =
+    parseColor(
+      (slice.match(/data-exterior-color=["']([^"']+)["']/i) || [])[1] ||
+        (slice.match(/data-color=["']([^"']+)["']/i) || [])[1] ||
+        (slice.match(/"exteriorColor"\s*:\s*"([^"]+)"/i) || [])[1] ||
+        (text.match(/Exterior(?:\s*Color)?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i) ||
+          [])[1],
+    ) || '';
+  const interiorColor =
+    parseColor(
+      (slice.match(/data-interior-color=["']([^"']+)["']/i) || [])[1] ||
+        (slice.match(/"interiorColor"\s*:\s*"([^"]+)"/i) || [])[1] ||
+        (text.match(/Interior(?:\s*Color)?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i) ||
+          [])[1],
+    ) || '';
+  return { price, mileage, exteriorColor, interiorColor };
+}
+
 /** DealerOn — JSON-LD + .vehicle-card / [data-vin] */
 function parseDealerOn(html, pageUrl, condition) {
   const out = [];
@@ -396,24 +530,32 @@ function parseDealerOn(html, pageUrl, condition) {
     }
   }
 
-  // data-vin cards
+  // data-vin cards — read attrs + card body (price/miles/color often live in the body)
   const cardRe =
     /<(?:div|li|article|section)[^>]*data-vin=["']([A-HJ-NPR-Z0-9]{17})["'][^>]*>/gi;
   let cm;
   while ((cm = cardRe.exec(html))) {
     const vin = cm[1].toUpperCase();
     const tag = cm[0];
+    const slice = html.slice(cm.index, cm.index + 4500);
     const da = (name) => {
       const a = tag.match(new RegExp(`data-${name}=["']([^"']*)["']`, 'i'));
       return a ? a[1].trim() : '';
     };
     let vdp = da('href') || da('vdp-url') || da('vdp') || '';
     if (!vdp) {
-      const scan = html.slice(cm.index, cm.index + 900);
-      const am = scan.match(/<a\s[^>]*href=["']([^"']+)["']/i);
+      const am = slice.match(/<a\s[^>]*href=["']([^"']+)["']/i);
       if (am) vdp = am[1];
     }
-    const priceRaw = da('internet-price') || da('asking-price') || da('price') || da('msrp');
+    const fromBody = fieldsFromCardHtml(slice);
+    const priceRaw =
+      da('internet-price') ||
+      da('asking-price') ||
+      da('price') ||
+      da('msrp') ||
+      fromBody.price ||
+      '';
+    const mileageRaw = da('mileage') || da('miles') || fromBody.mileage || '';
     const v = normalizeVehicle(
       {
         vin,
@@ -423,11 +565,12 @@ function parseDealerOn(html, pageUrl, condition) {
         trim: da('trim'),
         price: priceRaw,
         stockNumber: da('stock') || da('stock-number') || da('stocknum'),
-        mileage: da('mileage'),
+        mileage: mileageRaw,
         imageUrl: da('image-url') || da('image'),
         vdpUrl: vdp,
         condition: da('condition') || condition,
-        exteriorColor: da('exterior-color') || da('color'),
+        exteriorColor: da('exterior-color') || da('color') || fromBody.exteriorColor,
+        interiorColor: da('interior-color') || fromBody.interiorColor,
       },
       condition,
       pageUrl,
@@ -689,4 +832,8 @@ module.exports = {
   fetchDealerSpikeApi,
   extractVehiclesRecursive,
   dedupeByVin,
+  parsePrice,
+  parseMileage,
+  parseColor,
+  digits,
 };

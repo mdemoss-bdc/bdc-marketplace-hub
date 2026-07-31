@@ -278,13 +278,27 @@ async function listInventory(queryParams = {}) {
     }
 
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-    const inventory = sanitizeInventoryList(
-      await queryAll(
-        `SELECT * FROM marketplace_inventory ${where}
-         ORDER BY condition ASC, year DESC, price ASC`,
-        params,
-      ),
+    const rawRows = await queryAll(
+      `SELECT * FROM marketplace_inventory ${where}
+       ORDER BY condition ASC, year DESC, price ASC`,
+      params,
     );
+    const inventory = sanitizeInventoryList(rawRows).map((row, idx) => {
+      const src = rawRows[idx] || {};
+      const inFeed =
+        Number(src.in_meta_feed) === 1 ||
+        String(src.posted_status || '').toLowerCase() === 'posted';
+      return {
+        ...row,
+        posted_status: inFeed ? 'posted' : String(src.posted_status || 'not_posted'),
+        in_meta_feed: inFeed,
+        exterior_color: row.exterior_color || src.exterior_color || '',
+        interior_color: row.interior_color || src.interior_color || '',
+        image_url: row.image_url || src.image_url || '',
+        vdp_url: row.vdp_url || src.vdp_url || '',
+        ai_description: row.ai_description || src.ai_description || '',
+      };
+    });
 
     const makes = (
       await queryAll(
@@ -319,7 +333,8 @@ async function listInventory(queryParams = {}) {
     );
     const posted = await queryOne(
       `SELECT COUNT(*)::int AS c FROM marketplace_inventory
-       WHERE LOWER(COALESCE(posted_status,'')) IN ('posted','queued')`,
+       WHERE in_meta_feed = 1
+          OR LOWER(COALESCE(posted_status,'')) IN ('posted','queued')`,
     );
     const last = await queryOne(
       `SELECT MAX(last_seen) AS last_sync FROM marketplace_inventory`,
@@ -528,6 +543,82 @@ async function getLatestQueueCopy(vin) {
   );
 }
 
+/**
+ * Toggle Meta catalog feed membership for one or more VINs.
+ * Sets both `in_meta_feed` and legacy `posted_status` for Hub badge parity.
+ */
+async function setFeedStatus({ vins, action, in_meta_feed }) {
+  await openMarketplaceDb();
+  const list = Array.isArray(vins)
+    ? vins.map((v) => String(v || '').trim().toUpperCase()).filter(Boolean)
+    : [];
+  if (!list.length) {
+    const err = new Error('vins must be a non-empty array');
+    err.status = 400;
+    throw err;
+  }
+
+  let enabled;
+  if (typeof in_meta_feed === 'boolean') {
+    enabled = in_meta_feed;
+  } else if (action === 'post' || action === 'add' || action === 'enable') {
+    enabled = true;
+  } else if (action === 'unpost' || action === 'remove' || action === 'disable') {
+    enabled = false;
+  } else {
+    const err = new Error("action must be 'post' or 'unpost'");
+    err.status = 400;
+    throw err;
+  }
+
+  const postedStatus = enabled ? 'posted' : 'not_posted';
+  let updated = 0;
+  for (const vin of list) {
+    const result = await query(
+      `UPDATE marketplace_inventory
+       SET in_meta_feed = $1, posted_status = $2, last_seen = CURRENT_TIMESTAMP
+       WHERE UPPER(vin) = UPPER($3)`,
+      [enabled ? 1 : 0, postedStatus, vin],
+    );
+    updated += result.rowCount || 0;
+  }
+  return {
+    status: 'ok',
+    success: true,
+    updated,
+    posted_status: postedStatus,
+    in_meta_feed: enabled,
+  };
+}
+
+async function saveVehicleAiDescription(vin, description) {
+  await openMarketplaceDb();
+  const cleanVin = String(vin || '').trim().toUpperCase();
+  const text = String(description || '').trim();
+  if (!cleanVin || !text) {
+    const err = new Error('vin and description are required.');
+    err.status = 400;
+    throw err;
+  }
+  const result = await query(
+    `UPDATE marketplace_inventory
+     SET ai_description = $1, last_seen = CURRENT_TIMESTAMP
+     WHERE UPPER(vin) = UPPER($2)`,
+    [text, cleanVin],
+  );
+  if (!result.rowCount) {
+    const err = new Error(`VIN ${cleanVin} not found in inventory`);
+    err.status = 404;
+    throw err;
+  }
+  return {
+    success: true,
+    vin: cleanVin,
+    ai_description: text,
+    description: text,
+  };
+}
+
 module.exports = {
   DAILY_POST_CAP,
   emptyPublisherQueue,
@@ -543,6 +634,8 @@ module.exports = {
   getInventoryByVin,
   getLatestQueueCopy,
   findVehicleByVin,
+  setFeedStatus,
+  saveVehicleAiDescription,
   sanitizeInventoryList,
   sanitizeVehicleRecord,
   parseInventoryText,

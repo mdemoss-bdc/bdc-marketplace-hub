@@ -14,7 +14,15 @@ const {
   databaseUrl,
 } = require('./pg');
 const { sanitizeInventoryList } = require('./inventoryParser');
-const { parseInventoryPage, detectPlatform } = require('./platform-adapters');
+const {
+  parseInventoryPage,
+  detectPlatform,
+  parsePrice,
+  parseMileage,
+  parseColor,
+} = require('./platform-adapters');
+
+const VDP_ENRICH_CAP = Number(process.env.INVENTORY_VDP_ENRICH_CAP || 200);
 
 const MOSES_USED_URL =
   process.env.INVENTORY_URL_USED ||
@@ -263,6 +271,56 @@ async function collectViaAdapters(userId, onProgress) {
   };
 }
 
+/**
+ * Best-effort VDP page enrichment for missing price / mileage / colors.
+ * Caps requests so serverless sync stays within timeout budgets.
+ */
+async function enrichVehiclesFromVdp(vehicles, onProgress) {
+  const targets = vehicles.filter(
+    (v) =>
+      v?.vdp_url &&
+      (!Number(v.price) || !Number(v.mileage) || !v.exterior_color),
+  );
+  const slice = targets.slice(0, Math.max(0, VDP_ENRICH_CAP));
+  let enriched = 0;
+  for (const v of slice) {
+    try {
+      const html = await fetchText(v.vdp_url, 12000);
+      const price =
+        parsePrice(
+          (html.match(/data-(?:internet-)?price=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/data-msrp=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/\$\s*([\d,]+)/) || [])[1],
+        ) || Number(v.price) || 0;
+      const mileage =
+        parseMileage(
+          (html.match(/data-mileage=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/([\d,]+)\s*(?:mi|miles)\b/i) || [])[1],
+        ) || Number(v.mileage) || 0;
+      const exterior =
+        parseColor(
+          (html.match(/data-exterior-color=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/"exteriorColor"\s*:\s*"([^"]+)"/i) || [])[1] ||
+            (html.match(/Exterior(?:\s*Color)?\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{2,40})/i) || [])[1],
+        ) || v.exterior_color || '';
+      const interior =
+        parseColor(
+          (html.match(/data-interior-color=["']([^"']+)["']/i) || [])[1] ||
+            (html.match(/"interiorColor"\s*:\s*"([^"]+)"/i) || [])[1],
+        ) || v.interior_color || '';
+      if (price > 0) v.price = price;
+      if (mileage > 0) v.mileage = mileage;
+      if (exterior) v.exterior_color = exterior;
+      if (interior) v.interior_color = interior;
+      enriched += 1;
+      onProgress?.({ enriched, total: slice.length });
+    } catch {
+      /* skip single VDP failures */
+    }
+  }
+  return enriched;
+}
+
 async function upsertVehicles(userId, vehicles) {
   if (!vehicles.length) return 0;
   await ensureCoreSchema();
@@ -271,15 +329,22 @@ async function upsertVehicles(userId, vehicles) {
   for (const v of clean) {
     const vin = String(v.vin || '').trim().toUpperCase();
     if (!vin) continue;
+    const inFeed = v.in_meta_feed === true || v.in_meta_feed === 1
+      ? 1
+      : String(v.posted_status || '').toLowerCase() === 'posted'
+        ? 1
+        : 0;
     await query(
       `INSERT INTO marketplace_inventory (
          user_id, vin, stock_number, condition, year, make, model, trim,
          mileage, price, exterior_color, interior_color, image_url, status,
-         location, dealership_group, vdp_url, posted_status, ai_description, last_seen
+         location, dealership_group, vdp_url, posted_status, in_meta_feed,
+         ai_description, last_seen
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,
          $9,$10,$11,$12,$13,$14,
-         $15,$16,$17,$18,$19, CURRENT_TIMESTAMP
+         $15,$16,$17,$18,$19,
+         $20, CURRENT_TIMESTAMP
        )
        ON CONFLICT (user_id, vin) DO UPDATE SET
          stock_number = COALESCE(NULLIF(EXCLUDED.stock_number, ''), marketplace_inventory.stock_number),
@@ -290,6 +355,9 @@ async function upsertVehicles(userId, vehicles) {
          trim = COALESCE(NULLIF(EXCLUDED.trim, ''), marketplace_inventory.trim),
          mileage = CASE WHEN EXCLUDED.mileage > 0 THEN EXCLUDED.mileage ELSE marketplace_inventory.mileage END,
          price = CASE WHEN EXCLUDED.price > 0 THEN EXCLUDED.price ELSE marketplace_inventory.price END,
+         exterior_color = COALESCE(NULLIF(EXCLUDED.exterior_color, ''), marketplace_inventory.exterior_color),
+         interior_color = COALESCE(NULLIF(EXCLUDED.interior_color, ''), marketplace_inventory.interior_color),
+         image_url = COALESCE(NULLIF(EXCLUDED.image_url, ''), marketplace_inventory.image_url),
          status = 'ACTIVE',
          location = COALESCE(NULLIF(EXCLUDED.location, ''), marketplace_inventory.location),
          dealership_group = COALESCE(NULLIF(EXCLUDED.dealership_group, ''), marketplace_inventory.dealership_group),
@@ -314,6 +382,7 @@ async function upsertVehicles(userId, vehicles) {
         String(v.dealership_group || 'Moses Auto Group'),
         String(v.vdp_url || ''),
         String(v.posted_status || 'not_posted'),
+        inFeed,
         String(v.ai_description || ''),
       ],
     );
@@ -381,6 +450,14 @@ async function runInventorySync(userId = 0, sessionId = '') {
     }
 
     patchJob(uid, { phase: 'enriching' });
+    await enrichVehiclesFromVdp(vehicles, (p) => {
+      patchJob(uid, {
+        phase: 'enriching',
+        enriched: p.enriched || 0,
+        total: vehicles.length,
+      });
+    });
+
     // Upsert in chunks so status polls see progress.
     const chunkSize = 40;
     let upserted = 0;

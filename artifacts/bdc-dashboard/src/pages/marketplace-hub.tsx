@@ -184,6 +184,7 @@ interface Vehicle {
   dealership_group?: string;
   status: 'ACTIVE' | 'SOLD';
   posted_status: PostedStatus;
+  in_meta_feed?: boolean;
   last_seen: string;
   ai_description?: string;
 }
@@ -1636,30 +1637,59 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     setPostingVins(prev => { const s = new Set(prev); vins.forEach(v => s.add(v)); return s; });
     if (vins.length > 1 || selectedVins.size > 1) setPosting(true);
     setPostMsg('');
+    const nextStatus = action === 'post' ? 'posted' : 'not_posted';
+    // Optimistic UI so "Add to Feed" feels instant even before the round-trip.
+    setInventory(prev => prev.map(row =>
+      vins.includes(row.vin)
+        ? { ...row, posted_status: nextStatus as PostedStatus, in_meta_feed: action === 'post' }
+        : row,
+    ));
+    setCounts(prev => ({
+      ...prev,
+      posted: Math.max(
+        0,
+        prev.posted + (action === 'post' ? vins.length : -vins.length),
+      ),
+    }));
     try {
-      const res = await authFetch(`${API_BASE}/v1/marketplace/posting`, {
+      const body = JSON.stringify({
+        vins,
+        action,
+        in_meta_feed: action === 'post',
+      });
+      let res = await authFetch(`${API_BASE}/v1/marketplace/posting`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vins, action }),
+        body,
       });
-      const data = await res.json();
+      // Fallback for environments that only mount the feed-status alias.
+      if (res.status === 404) {
+        res = await authFetch(`${API_BASE}/inventory/feed-status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        });
+      }
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         const label = action === 'post' ? 'Added to feed' : 'Removed from feed';
-        setPostMsg(`${label}: ${data.updated} vehicle${data.updated !== 1 ? 's' : ''}.`);
+        setPostMsg(`${label}: ${data.updated ?? vins.length} vehicle${(data.updated ?? vins.length) !== 1 ? 's' : ''}.`);
         setSelectedVins(new Set());
         await fetchInventory(true);
-        // Keep dashboard "Posted to Facebook" count in sync without waiting for the 15s poll
         queryClient.invalidateQueries({ queryKey: ['desk-analytics'] });
       } else {
         setPostMsg(data.error || 'Action failed.');
+        await fetchInventory(true);
       }
-    } catch { setPostMsg('Network error — please retry.'); }
-    finally {
+    } catch {
+      setPostMsg('Network error — please retry.');
+      await fetchInventory(true);
+    } finally {
       setPostingVins(prev => { const s = new Set(prev); vins.forEach(v => s.delete(v)); return s; });
       setPosting(false);
       setTimeout(() => setPostMsg(''), 5000);
     }
-  }, [authFetch, fetchInventory, selectedVins.size]);
+  }, [authFetch, fetchInventory, queryClient, selectedVins.size]);
 
   // Client-side sort (applied after server-side filters)
   const sortedInventory = useMemo(() => {
@@ -1840,6 +1870,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
 
   // ── AI Vehicle Description Generator ───────────────────────────────
   const openAiDescriptionModal = useCallback(async (vehicle: Vehicle) => {
+    // Keep generation inside the Hub modal — never navigate off-app.
     setAiDescVehicle(vehicle);
     setAiDescOpen(true);
     setAiDescError('');
@@ -1850,30 +1881,61 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     setAiDescText(vehicle.ai_description?.trim() || '');
     setAiDescLoading(true);
 
+    const payload = {
+      vin: vehicle.vin,
+      year: vehicle.year,
+      make: vehicle.make,
+      model: vehicle.model,
+      trim: vehicle.trim,
+      price: vehicle.price,
+      mileage: vehicle.mileage,
+      condition: vehicle.condition,
+      location: vehicle.location,
+      exterior_color: vehicle.exterior_color,
+      interior_color: vehicle.interior_color,
+      stock_number: vehicle.stock_number,
+    };
+
     try {
-      const res = await fetch(`${API_BASE}/generate-description`, {
+      // Prefer the dedicated description route; fall back to generate-copy.
+      let res = await fetch(`${API_BASE}/marketplace/generate-description`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          vin: vehicle.vin,
-          year: vehicle.year,
-          make: vehicle.make,
-          model: vehicle.model,
-          trim: vehicle.trim,
-          price: vehicle.price,
-          mileage: vehicle.mileage,
-          condition: vehicle.condition,
-          location: vehicle.location,
-          exterior_color: vehicle.exterior_color,
-          interior_color: vehicle.interior_color,
-          stock_number: vehicle.stock_number,
-        }),
+        body: JSON.stringify(payload),
       });
+      if (res.status === 404) {
+        res = await fetch(`${API_BASE}/generate-description`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+      if (res.status === 404) {
+        res = await fetch(`${API_BASE}/marketplace/generate-copy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        setAiDescError('Description service returned an unexpected response. Using local template.');
+        const local = [
+          [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' '),
+          vehicle.price ? `Asking $${Number(vehicle.price).toLocaleString()}` : null,
+          vehicle.mileage ? `${Number(vehicle.mileage).toLocaleString()} miles` : null,
+          vehicle.exterior_color ? `${vehicle.exterior_color} exterior` : null,
+          'Message us to schedule a test drive today!',
+        ].filter(Boolean).join('\n');
+        setAiDescText(local);
+        setAiDescSource('template');
+        return;
+      }
       const data = await res.json().catch(() => ({}));
       if (res.ok && (data.ai_description || data.description)) {
         setAiDescText(String(data.ai_description || data.description));
         if (data.title) setAiDescTitle(String(data.title));
-        setAiDescSource(String(data.source || ''));
+        setAiDescSource(String(data.source || 'template'));
       } else {
         setAiDescError(String(data.error || 'Description generation failed.'));
       }
@@ -2530,9 +2592,14 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
                                 </Button>
                               ) : (
                                 <Button size="sm"
-                                  onClick={() => handlePostVehicles([v.vin], 'post')}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    void handlePostVehicles([v.vin], 'post');
+                                  }}
                                   className="h-7 px-2 text-xs gap-1 bg-emerald-600 hover:bg-emerald-700 text-white border-0 whitespace-nowrap">
-                                  <Rss className="w-3 h-3" />Add
+                                  <Rss className="w-3 h-3" />Add to Feed
                                 </Button>
                               )}
                             </>
@@ -2541,7 +2608,11 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
                           <Button
                             size="sm"
                             type="button"
-                            onClick={() => void openFbPostDrawer(v)}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void openFbPostDrawer(v);
+                            }}
                             className="h-7 px-2.5 text-xs gap-1 whitespace-nowrap border-0 bg-amber-400/90 font-semibold text-slate-950 hover:bg-amber-300"
                           >
                             {isGenerating
@@ -2553,13 +2624,17 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
                             size="sm"
                             type="button"
                             variant="outline"
-                            onClick={() => void openAiDescriptionModal(v)}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              void openAiDescriptionModal(v);
+                            }}
                             className="h-7 px-2.5 text-xs gap-1 whitespace-nowrap border-violet-400/50 text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
                           >
                             {aiDescLoading && aiDescVehicle?.vin === v.vin
                               ? <Loader2 className="w-3 h-3 animate-spin" />
                               : <Sparkles className="w-3 h-3" />}
-                            ✨ Generate AI Description
+                            Generate AI Description
                           </Button>
                         </div>
                       </td>
