@@ -27,15 +27,11 @@ module.exports = async function handler(req, res) {
     if (req.method === 'POST' || req.method === 'PUT') {
       const body = parseBody(req);
       const saved = await saveScraperSettings(body);
-      const wiped = Boolean(saved.inventoryWiped);
       res.status(200).json({
         success: true,
         ...saved,
         sync_triggered: false,
-        inventoryWiped: wiped,
-        message: wiped
-          ? 'Previous inventory purged for new target URL.'
-          : 'Settings saved.',
+        message: 'Settings saved.',
       });
       return;
     }
