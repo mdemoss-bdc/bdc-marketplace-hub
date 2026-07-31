@@ -15,6 +15,7 @@ from .stock import (
     resolve_stock_number,
     sanitize_stock_number,
 )
+from .vdp_hydrate import extract_from_vdp_html, hydrate_vehicles, needs_hydration
 from .wipe import clear_feed_caches, urls_changed, wipe_user_inventory
 
 __all__ = [
@@ -27,6 +28,9 @@ __all__ = [
     "extract_stock_from_url",
     "resolve_stock_number",
     "sanitize_stock_number",
+    "extract_from_vdp_html",
+    "hydrate_vehicles",
+    "needs_hydration",
     "urls_changed",
     "wipe_user_inventory",
     "clear_feed_caches",

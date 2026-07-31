@@ -253,7 +253,7 @@ class _VehicleCardCollector(html.parser.HTMLParser):
                 if cm:
                     self._cur["exterior_color"] = cm.group(1).strip()
             if not self._cur.get("mileage"):
-                mm = re.search(r"([0-9,]+)\s*mi\.?\b", blob, re.I)
+                mm = re.search(r"([0-9,]+)\s*(?:mi\.?|miles)\b", blob, re.I)
                 if mm:
                     self._cur["mileage"] = mm.group(1)
             if not self._cur.get("price"):

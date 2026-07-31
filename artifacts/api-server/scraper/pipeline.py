@@ -11,6 +11,7 @@ from .stock import MISSING_STOCK
 from .tier1_dom import extract_tier1
 from .tier2_heuristics import extract_tier2
 from .tier3_llm import extract_tier3
+from .vdp_hydrate import hydrate_vehicles
 
 
 def _condition_from_url(url: str, fallback: str = "Used") -> str:
@@ -84,6 +85,16 @@ def extract_inventory(
             continue
         seen.add(n["vin"])
         clean.append(n)
+
+    # VDP hydration: fill stock/price/color/miles when SRP cards were thin.
+    # Bounded concurrency + max fetches keep sync within timeout budgets.
+    clean = hydrate_vehicles(
+        clean,
+        condition=cond,
+        max_fetches=40,
+        workers=8,
+        timeout=8,
+    )
 
     return {
         "vehicles": clean,

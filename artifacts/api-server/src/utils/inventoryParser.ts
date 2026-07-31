@@ -48,7 +48,7 @@ const PRICE_LABEL_RE =
 const PRICE_CARD_RE = /\$([0-9]{2,3},[0-9]{3})/;
 
 /** Mileage with mi/mi./miles suffix → sanitize to pure integers. */
-export const MILEAGE_RE = /([0-9,]+)\s*mi\.?\b/i;
+export const MILEAGE_RE = /([0-9,]+)\s*(?:mi\.?|miles)\b/i;
 
 /** Moses / DealerOn exact Stock: markers. */
 const MOSES_STOCK_RE = /Stock:\s*([A-Za-z0-9]+)/i;
@@ -198,7 +198,7 @@ export function extractExteriorColor(text: string): string | null {
   if (labeled?.[1]) {
     const c = labeled[1]
       .trim()
-      .split(/\s+(?:Stock|VIN|Mi\.?|Miles|\$)\b/i)[0]
+      .split(/\s+(?:Stock|VIN|Mi\.?|Miles?|\$|\d{1,3}(?:,\d{3})*(?:\s*(?:mi\.?|miles))?)\b/i)[0]
       .trim();
     if (c && !/^(n\/?a|none|unknown|select|color|ext\.?)$/i.test(c)) return c;
   }

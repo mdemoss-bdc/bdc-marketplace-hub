@@ -31,8 +31,13 @@ _DATA_COLOR_RE = re.compile(r'data-color\s*=\s*["\']([^"\']+)["\']', re.I)
 _BAD_COLOR_RE = re.compile(r"^(?:n/?a|none|unknown|select|color|ext\.?)$", re.I)
 
 # ── Mileage ──────────────────────────────────────────────────────────────────
-# Prefer "12,345 mi" / "12,345 mi." (Moses DealerOn SRP).
-_MILES_RE = re.compile(r"([0-9,]+)\s*mi\.?\b", re.I)
+# Prefer "12 mi" / "12,345 mi." / "12,345 miles" (Moses DealerOn SRP).
+_MILES_RE = re.compile(r"([0-9,]+)\s*(?:mi\.?|miles)\b", re.I)
+_MILES_DOM_RE = re.compile(
+    r'class=["\'][^"\']*\b(?:mileage-number|mileage|odometer)\b[^"\']*["\']'
+    r'[^>]*>\s*([0-9,]+)',
+    re.I,
+)
 
 # ── Price ────────────────────────────────────────────────────────────────────
 _PRICE_LABEL_RE = re.compile(
@@ -71,8 +76,13 @@ def extract_exterior_color(html_or_text: str) -> str:
     m = _EXT_COLOR_LABEL_RE.search(plain)
     if m:
         c = clean_text(m.group(1))
-        # Trim trailing noise (VIN / Stock / price fragments)
-        c = re.split(r"\s+(?:Stock|VIN|Mi\.?|Miles|\$)\b", c, maxsplit=1, flags=re.I)[0].strip()
+        # Trim trailing noise (VIN / Stock / mileage / price fragments)
+        c = re.split(
+            r"\s+(?:Stock|VIN|Mi\.?|Miles?|\$|\d{1,3}(?:,\d{3})*(?:\s*(?:mi\.?|miles))?)\b",
+            c,
+            maxsplit=1,
+            flags=re.I,
+        )[0].strip()
         if c and not _BAD_COLOR_RE.match(c):
             return c
     return ""
@@ -80,6 +90,15 @@ def extract_exterior_color(html_or_text: str) -> str:
 
 def extract_mileage(html_or_text: str, *, condition: str = "Used") -> int:
     """Extract mileage; New vehicles with omitted odometer default to 0."""
+    text = decode_entities(html_or_text or "")
+    m = _MILES_DOM_RE.search(text) if text else None
+    if m:
+        try:
+            n = int(m.group(1).replace(",", ""))
+            if 0 <= n <= 1_000_000:
+                return n
+        except ValueError:
+            pass
     plain = _plain(html_or_text)
     m = _MILES_RE.search(plain)
     if m:
@@ -99,6 +118,29 @@ def extract_mileage(html_or_text: str, *, condition: str = "Used") -> int:
 def extract_price(html_or_text: str) -> int:
     """Prefer MOSES/INTERNET/OUR PRICE / TSRP labels, then $NN,NNN card amounts."""
     plain = _plain(html_or_text)
+    # Prefer labeled price windows (MOSES PRICE / OUR PRICE near $NN,NNN).
+    for label in (
+        r"MOSES\s+PRICE",
+        r"OUR\s+PRICE",
+        r"INTERNET\s+PRICE",
+        r"TSRP",
+    ):
+        wm = re.search(
+            rf"({label}).{{0,40}}\$([0-9]{{2,3}},[0-9]{{3}})",
+            plain,
+            re.I,
+        ) or re.search(
+            rf"({label}).{{0,40}}\$([0-9]{{2,3}},[0-9]{{3}})",
+            html_or_text or "",
+            re.I,
+        )
+        if wm:
+            try:
+                n = int(wm.group(2).replace(",", ""))
+                if 500 <= n <= 5_000_000 and not (1900 <= n <= 2100):
+                    return n
+            except ValueError:
+                pass
     m = _PRICE_LABEL_RE.search(plain) or _PRICE_LABEL_RE.search(html_or_text or "")
     if m:
         try:

@@ -6216,7 +6216,7 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
         )
         miles_m = re.search(
             r'data-(?:mileage|miles|odometer)=["\']([^"\']+)["\']', chunk, re.IGNORECASE
-        ) or re.search(r'([0-9,]+)\s*mi\.?\b', chunk_plain, re.IGNORECASE) or re.search(
+        ) or re.search(r'([0-9,]+)\s*(?:mi\.?|miles)\b', chunk_plain, re.IGNORECASE) or re.search(
             r'class=["\'][^"\']*mileage[^"\']*["\'][^>]*>\s*'
             r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{1,24})',
             chunk, re.IGNORECASE,
@@ -6834,7 +6834,7 @@ def _parse_dealeron_html(url: str, html: str, condition: str) -> list[dict]:
                 ext_color = cm_col.group(1).strip()
 
         if not mile_s or mile_s == '0':
-            mm = re.search(r'([0-9,]+)\s*mi\.?\b', card_plain, re.I)
+            mm = re.search(r'([0-9,]+)\s*(?:mi\.?|miles)\b', card_plain, re.I)
             if mm:
                 mile_s = re.sub(r'[^\d]', '', mm.group(1))
 
@@ -8577,6 +8577,28 @@ def _fetch_dealer_page(
                 if v.get('vin') in ld_hits and not v.get('stock_number'):
                     v['stock_number'] = ld_hits[v['vin']]['stock_number']
 
+    # ── Step 6b: VDP hydrate when SRP left stock/price thin (Moses / DealerOn) ─
+    if vehicles:
+        try:
+            from scraper.vdp_hydrate import hydrate_vehicles as _hydrate_vdps
+            for v in vehicles:
+                if isinstance(v, dict) and not v.get('link') and v.get('vdp_url'):
+                    v['link'] = v['vdp_url']
+            vehicles = _hydrate_vdps(
+                vehicles,
+                condition=condition,
+                max_fetches=40,
+                workers=8,
+                timeout=8,
+            )
+            for v in vehicles:
+                if isinstance(v, dict) and v.get('stockNumber') and not v.get('stock_number'):
+                    v['stock_number'] = v['stockNumber']
+                if isinstance(v, dict) and v.get('exteriorColor') and not v.get('exterior_color'):
+                    v['exterior_color'] = v['exteriorColor']
+        except Exception as _hyd_exc:
+            print(f"[SCRAPE] VDP hydrate skipped (non-fatal): {_hyd_exc}")
+
     # ── Step 7: Safety sweep ─────────────────────────────────────────────────
     return _apply_safety(vehicles, condition)
 
@@ -8882,21 +8904,32 @@ def _fetch_moses_sitemap_vehicles() -> list[dict]:
 def _enrich_from_vdp(vdp_url: str) -> dict:
     """Fetch one VDP page and extract price, stock number, colors, mileage, location.
 
-    Returns a (possibly empty) dict of fields to merge into the inventory row.
-    Best-effort — exceptions are swallowed so the caller never crashes.
+    Prefer scraper.vdp_hydrate (JSON-LD / meta / Stock: / Ext. / mi / MOSES PRICE).
+    Then layer legacy DealerOn data-* / price-bloc / location fields. Best-effort.
     """
     result: dict = {}
     try:
         req = urllib.request.Request(vdp_url, headers=MOSES_SCRAPER_HEADERS)
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=12) as resp:
             html_text = resp.read().decode('utf-8', errors='replace')
+
+        # Shared DealerOn / Moses regex + JSON-LD / og:price hydration (one pass).
+        try:
+            from scraper.vdp_hydrate import extract_from_vdp_html as _vdp_parse
+            hydrated = _vdp_parse(html_text) or {}
+            for key in ('price', 'stock_number', 'exterior_color', 'mileage'):
+                if hydrated.get(key) not in (None, '', 0):
+                    result[key] = hydrated[key]
+        except Exception:
+            pass
 
         # Price — data-price is always initialised to 0 in DealerOn server HTML
         # (the real value is injected via JavaScript after page load).  Only
         # accept it when it is explicitly non-zero.
-        m = re.search(r'data-price=["\'](\d+)["\']', html_text)
-        if m and int(m.group(1)) > 0:
-            result['price'] = int(m.group(1))
+        if not result.get('price'):
+            m = re.search(r'data-price=["\'](\d+)["\']', html_text)
+            if m and int(m.group(1)) > 0:
+                result['price'] = int(m.group(1))
 
         # DealerOn VDP server HTML: data-msrp carries the sticker/retail price
         # in the static markup even when data-price is still 0.  Store it as
@@ -8905,6 +8938,8 @@ def _enrich_from_vdp(vdp_url: str) -> dict:
         m = re.search(r'data-msrp=["\'](\d+)["\']', html_text)
         if m and int(m.group(1)) > 0:
             result.setdefault('retail_price', int(m.group(1)))
+            if not result.get('price'):
+                result['price'] = int(m.group(1))
 
         # DealerOn VDP: data-name holds the dealer-assembled full vehicle title
         # (e.g. "2026 GMC Yukon XL AT4").  Stash it so the DB upsert can fill
@@ -8913,40 +8948,50 @@ def _enrich_from_vdp(vdp_url: str) -> dict:
         if m:
             result['_vdp_name'] = re.sub(r'\s+', ' ', m.group(1)).strip()
 
-        # Stock number — try HTML data attributes first, then JSON keys, then
-        # loose text patterns.  Stop at the first match so a later, weaker
-        # pattern can't clobber a clean one found earlier.
-        for pat in (
-            # HTML data-attribute variants (most reliable)
-            # DealerOn VDP uses data-stocknum (no separator) — check it first
-            r'data-stocknum=["\']([^"\']{2,20})["\']',
-            r'data-stock-number=["\']([^"\']{2,20})["\']',
-            r'data-stocknumber=["\']([^"\']{2,20})["\']',
-            r'data-stock-no=["\']([^"\']{2,20})["\']',
-            r'data-stockno=["\']([^"\']{2,20})["\']',
-            r'data-vehicle-stock=["\']([^"\']{2,20})["\']',
-            r'data-stock=["\']([^"\']{2,20})["\']',
-            # JSON key patterns (camelCase and snake_case variants)
-            r'"stockNumber"\s*:\s*"([^"]{2,20})"',
-            r'"StockNumber"\s*:\s*"([^"]{2,20})"',
-            r'"stock_number"\s*:\s*"([^"]{2,20})"',
-            r'"stockNo"\s*:\s*"([^"]{2,20})"',
-            r'"StockNo"\s*:\s*"([^"]{2,20})"',
-            r'"stock_no"\s*:\s*"([^"]{2,20})"',
-            r'"stockNum"\s*:\s*"([^"]{2,20})"',
-            r'"vehicleStockNumber"\s*:\s*"([^"]{2,20})"',
-            # Loose text fallback: "Stock # P12345" / "Stock No: P12345"
-            r'[Ss]tock\s*(?:#|No\.?|Num(?:ber)?)\s*:?\s*([A-Za-z0-9]{2,20})\b',
-        ):
-            m = re.search(pat, html_text)
-            if m:
-                result['stock_number'] = m.group(1).strip()
-                break
+        # Stock number — Moses "Stock: HT60456" must win; never leave Unavailable
+        # when the labeled code is present in the VDP body.
+        if not result.get('stock_number'):
+            for pat in (
+                r'Stock:\s*([A-Za-z0-9]+)',
+                r'STOCK:\s*([A-Za-z0-9]+)',
+                r'data-stocknum=["\']([^"\']{2,20})["\']',
+                r'data-stock-number=["\']([^"\']{2,20})["\']',
+                r'data-stocknumber=["\']([^"\']{2,20})["\']',
+                r'data-stock-no=["\']([^"\']{2,20})["\']',
+                r'data-stockno=["\']([^"\']{2,20})["\']',
+                r'data-vehicle-stock=["\']([^"\']{2,20})["\']',
+                r'data-stock=["\']([^"\']{2,20})["\']',
+                r'"stockNumber"\s*:\s*"([^"]{2,20})"',
+                r'"StockNumber"\s*:\s*"([^"]{2,20})"',
+                r'"stock_number"\s*:\s*"([^"]{2,20})"',
+                r'"stockNo"\s*:\s*"([^"]{2,20})"',
+                r'"StockNo"\s*:\s*"([^"]{2,20})"',
+                r'"stock_no"\s*:\s*"([^"]{2,20})"',
+                r'"stockNum"\s*:\s*"([^"]{2,20})"',
+                r'"vehicleStockNumber"\s*:\s*"([^"]{2,20})"',
+                r'[Ss]tock\s*(?:#|No\.?|Num(?:ber)?)\s*:?\s*([A-Za-z0-9]{2,20})\b',
+            ):
+                m = re.search(pat, html_text, re.I)
+                if m:
+                    cand = m.group(1).strip()
+                    if cand and cand.lower() not in ('unavailable', 'n/a', 'na', 'none'):
+                        result['stock_number'] = cand
+                        break
 
         # Colors
-        m = re.search(r'data-exterior-color=["\']([^"\']+)["\']', html_text)
-        if m:
-            result['exterior_color'] = m.group(1).strip()
+        if not result.get('exterior_color'):
+            m = re.search(r'data-exterior-color=["\']([^"\']+)["\']', html_text)
+            if m:
+                result['exterior_color'] = m.group(1).strip()
+        if not result.get('exterior_color'):
+            m = re.search(
+                r'(?:Ext(?:erior)?(?:\s*Color)?|Ext\.)\s*[:.]?\s*'
+                r'([A-Za-z][A-Za-z0-9 \-/]{1,40})',
+                re.sub(r'<[^>]+>', ' ', html_text),
+                re.I,
+            )
+            if m:
+                result['exterior_color'] = m.group(1).strip()
         m = re.search(r'data-interior-color=["\']([^"\']+)["\']', html_text)
         if m:
             result['interior_color'] = m.group(1).strip()
@@ -8957,21 +9002,23 @@ def _enrich_from_vdp(vdp_url: str) -> dict:
             if m:
                 result['exterior_color'] = m.group(1).strip()
 
-        # Mileage (used vehicles)
-        for pat in (
-            r'data-mileage=["\'](\d[\d,]*)["\']',
-            r'data-miles=["\'](\d[\d,]*)["\']',
-            r'"mileageFromOdometer"\s*:\s*"([\d,]+)"',
-        ):
-            m = re.search(pat, html_text)
-            if m:
-                try:
-                    result['mileage'] = int(m.group(1).replace(',', ''))
-                    break
-                except ValueError:
-                    pass
+        # Mileage (used vehicles) — "12 mi" / "12 miles" / data-* attrs
+        if not result.get('mileage'):
+            for pat in (
+                r'data-mileage=["\'](\d[\d,]*)["\']',
+                r'data-miles=["\'](\d[\d,]*)["\']',
+                r'"mileageFromOdometer"\s*:\s*"([\d,]+)"',
+                r'([0-9,]+)\s*(?:mi\.?|miles)\b',
+            ):
+                m = re.search(pat, html_text, re.I)
+                if m:
+                    try:
+                        result['mileage'] = int(m.group(1).replace(',', ''))
+                        break
+                    except ValueError:
+                        pass
 
-        # Pricing breakdown — DealerOn priceBlocItem pattern + generic fallbacks
+        # Pricing breakdown — DealerOn priceBlocItem + MOSES PRICE / $NN,NNN
         _bloc = _extract_price_bloc(html_text)
         if not result.get('price') and _bloc.get('internet_price'):
             result['price'] = _bloc['internet_price']
@@ -8981,6 +9028,18 @@ def _enrich_from_vdp(vdp_url: str) -> dict:
             result.setdefault('doc_fee', _bloc['doc_fee'])
         if _bloc.get('savings'):
             result.setdefault('savings', _bloc['savings'])
+        if not result.get('price'):
+            plain = re.sub(r'<[^>]+>', ' ', html_text)
+            pm = re.search(
+                r'(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*'
+                r'([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})',
+                plain, re.I,
+            ) or re.search(r'\$([0-9]{2,3},[0-9]{3})', plain)
+            if pm:
+                try:
+                    result['price'] = int(pm.group(1).replace(',', ''))
+                except ValueError:
+                    pass
 
         # Location from data attributes
         for pat in (
@@ -9252,18 +9311,22 @@ def _sync_full_crawl(
             return
 
         # ── Phase 2: VDP enrichment ───────────────────────────────────────────
-        # Only enrich vehicles that still have price=0 in the DB.
+        # Enrich rows still missing price OR stock (Unavailable / blank).
         conn = sqlite3.connect(DB_FILE)
         cur  = conn.cursor()
         cur.execute(
             "SELECT vin FROM marketplace_inventory "
-            "WHERE user_id=? AND (price IS NULL OR price=0) AND status='ACTIVE'",
+            "WHERE user_id=? AND status='ACTIVE' AND ("
+            "  price IS NULL OR price=0"
+            "  OR stock_number IS NULL OR TRIM(stock_number)=''"
+            "  OR LOWER(stock_number)='unavailable'"
+            ")",
             (user_id,),
         )
-        unpriced = {r[0] for r in cur.fetchall()}
+        needs_enrich = {r[0] for r in cur.fetchall()}
         conn.close()
 
-        to_enrich = [v for v in sitemap_vehicles if v['vin'] in unpriced]
+        to_enrich = [v for v in sitemap_vehicles if v['vin'] in needs_enrich]
         print(f"[CRAWL u{user_id}] Phase 2 — enriching {len(to_enrich)} VDPs (20 threads)…")
 
         enriched  = 0

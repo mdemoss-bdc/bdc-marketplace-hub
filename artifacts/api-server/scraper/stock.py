@@ -75,8 +75,13 @@ _DOM_CLASS_PATTERNS = (
 
 # ── 3) Labeled text nodes ────────────────────────────────────────────────────
 # Moses / DealerOn prefer exact "Stock:" / "STOCK:" before broader labels.
+# Must match plain text "Stock: HT60456" even when HTML tags wrap the code.
 _MOSES_STOCK_RE = re.compile(r"Stock:\s*([A-Za-z0-9]+)", re.I)
 _MOSES_STOCK_UPPER_RE = re.compile(r"STOCK:\s*([A-Za-z0-9]+)", re.I)
+_MOSES_STOCK_HTML_RE = re.compile(
+    r"Stock:\s*(?:<[^>]+>\s*)*([A-Za-z0-9]+)",
+    re.I,
+)
 _LABEL_STOCK_RE = re.compile(
     r'(?:Stock\s*#?\s*:|Stk\s*#?\s*:|Stock\s*Number\s*:|Stock\s*No\.?\s*:|'
     r'STK\s*#?\s*:|Stock\s*#)\s*([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\b',
@@ -194,7 +199,7 @@ def extract_stock_from_html(
 
     plain = clean_text(re.sub(r"<[^>]+>", " ", text))
     # Exact Moses / DealerOn "Stock:" / "STOCK:" — never skip to Unavailable.
-    for stock_re in (_MOSES_STOCK_RE, _MOSES_STOCK_UPPER_RE):
+    for stock_re in (_MOSES_STOCK_RE, _MOSES_STOCK_UPPER_RE, _MOSES_STOCK_HTML_RE):
         lm = stock_re.search(plain) or stock_re.search(text)
         if lm:
             cleaned = sanitize_stock_number(lm.group(1), vin=vin, year=year)

@@ -9,7 +9,7 @@ const PRICE_RE = /\$?\b\d{1,3}(?:,\d{3})*\b/;
 const PRICE_LABEL_RE =
   /(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})/i;
 const PRICE_CARD_RE = /\$([0-9]{2,3},[0-9]{3})/;
-const MILEAGE_RE = /([0-9,]+)\s*mi\.?\b/i;
+const MILEAGE_RE = /([0-9,]+)\s*(?:mi\.?|miles)\b/i;
 const MOSES_STOCK_RE = /Stock:\s*([A-Za-z0-9]+)/i;
 const MOSES_STOCK_UPPER_RE = /STOCK:\s*([A-Za-z0-9]+)/i;
 const STOCK_LABELED_RE =
@@ -155,7 +155,10 @@ function extractExteriorColor(text) {
   const scrubbed = scrubRawText(text);
   const labeled = scrubbed.match(EXT_COLOR_RE);
   if (labeled?.[1]) {
-    let c = labeled[1].trim().split(/\s+(?:Stock|VIN|Mi\.?|Miles|\$)\b/i)[0].trim();
+    let c = labeled[1]
+      .trim()
+      .split(/\s+(?:Stock|VIN|Mi\.?|Miles?|\$|\d{1,3}(?:,\d{3})*(?:\s*(?:mi\.?|miles))?)\b/i)[0]
+      .trim();
     if (c && !/^(n\/?a|none|unknown|select|color|ext\.?)$/i.test(c)) return c;
   }
   return null;

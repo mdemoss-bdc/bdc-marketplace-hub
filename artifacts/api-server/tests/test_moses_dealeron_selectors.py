@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -26,6 +27,11 @@ from scraper.stock import (  # noqa: E402
     extract_stock_from_html,
     resolve_stock_number,
 )
+from scraper.vdp_hydrate import (  # noqa: E402
+    extract_from_vdp_html,
+    hydrate_vehicles,
+    needs_hydration,
+)
 
 # Sample Moses / DealerOn SRP card HTML (trimmed)
 MOSES_CARD_HTML = """
@@ -38,6 +44,19 @@ MOSES_CARD_HTML = """
     <span class="price-label">MOSES PRICE</span>
     <span class="price-value">$32,995</span>
   </div>
+</div>
+"""
+
+# Realistic Moses Honda card — plain text patterns as seen in production SRP
+MOSES_PLAIN_CARD = """
+<div class="srp-vehicle-card" data-vin="1HGCV1F38PA123456">
+  <a href="https://www.mosescars.com/new-St+Albans-2025-Honda-Civic-Sport-1HGCV1F38PA123456">
+    2025 Honda Civic Sport
+  </a>
+  Stock: HT60456
+  Ext. Black
+  12 mi
+  MOSES PRICE $32,995
 </div>
 """
 
@@ -61,11 +80,34 @@ MOSES_NEW_NO_MILES = """
 </article>
 """
 
+MOSES_VDP_HTML = """
+<html><head>
+  <meta property="og:price:amount" content="32995" />
+  <script type="application/ld+json">
+  {
+    "@type": "Vehicle",
+    "vehicleIdentificationNumber": "1HGCV1F38PA123456",
+    "color": "Black",
+    "sku": "HT60456",
+    "offers": {"@type": "Offer", "price": "32995", "priceCurrency": "USD"},
+    "mileageFromOdometer": {"value": 12}
+  }
+  </script>
+</head><body>
+  <div>Stock: HT60456</div>
+  <div>Ext. Black</div>
+  <div>12 mi</div>
+  <div>MOSES PRICE $32,995</div>
+</body></html>
+"""
+
 
 class TestMosesStockSelectors(unittest.TestCase):
     def test_stock_colon_regex(self):
         self.assertEqual(extract_stock_from_html("Stock: HT60208"), "HT60208")
         self.assertEqual(extract_stock_from_html("STOCK: VT60109A"), "VT60109A")
+        self.assertEqual(extract_stock_from_html("Stock: HT60456"), "HT60456")
+        self.assertEqual(extract_stock_number("Stock: HT60456"), "HT60456")
         self.assertEqual(extract_stock_number("Stock: HT60208"), "HT60208")
 
     def test_stock_class_dom(self):
@@ -73,6 +115,8 @@ class TestMosesStockSelectors(unittest.TestCase):
         self.assertEqual(extract_stock_from_html(html), "HT60208")
         html2 = '<span class="stock-number">VT60109A</span>'
         self.assertEqual(extract_stock_from_html(html2), "VT60109A")
+        html3 = '<div data-stock="HT60456">x</div>'
+        self.assertEqual(extract_stock_from_html(html3), "HT60456")
 
     def test_stock_never_falls_to_unavailable(self):
         stock = resolve_stock_number(
@@ -82,6 +126,7 @@ class TestMosesStockSelectors(unittest.TestCase):
         )
         self.assertEqual(stock, "HT60208")
         self.assertNotEqual(stock, MISSING_STOCK)
+        self.assertNotEqual(stock.upper(), "UNAVAILABLE")
 
     def test_stock_beats_unavailable_in_sanitize(self):
         row = sanitize_vehicle_record(
@@ -96,6 +141,7 @@ class TestMosesColorMileagePrice(unittest.TestCase):
     def test_exterior_color_labels(self):
         self.assertEqual(extract_exterior_color("Ext: Crystal Black Pearl"), "Crystal Black Pearl")
         self.assertEqual(extract_exterior_color("Ext. Sonic Gray Pearl Stock: X"), "Sonic Gray Pearl")
+        self.assertEqual(extract_exterior_color("Ext. Black"), "Black")
         self.assertEqual(extract_exterior_color("Exterior: Rallye Red"), "Rallye Red")
         self.assertEqual(extract_exterior_color("Ext Color: Radiant Red Metallic"), "Radiant Red Metallic")
         self.assertEqual(
@@ -110,7 +156,11 @@ class TestMosesColorMileagePrice(unittest.TestCase):
     def test_mileage_mi_suffix(self):
         self.assertEqual(extract_mileage("28,450 mi."), 28450)
         self.assertEqual(extract_mileage("12,345 mi"), 12345)
+        self.assertEqual(extract_mileage("12 mi"), 12)
+        self.assertEqual(extract_mileage("12 miles"), 12)
         self.assertEqual(fields_mileage("28,450 mi."), 28450)
+        self.assertEqual(fields_mileage("12 mi"), 12)
+        self.assertEqual(fields_mileage("12 miles"), 12)
 
     def test_new_missing_mileage_defaults_zero(self):
         self.assertEqual(fields_mileage("Stock: NH1003 OUR PRICE $48,750", condition="New"), 0)
@@ -136,6 +186,7 @@ class TestMosesColorMileagePrice(unittest.TestCase):
         self.assertEqual(extract_price("OUR PRICE $48,750"), 48750)
         self.assertEqual(extract_price("TSRP $35,000"), 35000)
         self.assertEqual(fields_price("Ask about financing $19,995 today"), 19995)
+        self.assertEqual(fields_price("MOSES PRICE $32,995"), 32995)
 
 
 class TestMosesCardNormalize(unittest.TestCase):
@@ -159,6 +210,30 @@ class TestMosesCardNormalize(unittest.TestCase):
         self.assertEqual(norm["mileage"], 0)  # New, miles omitted
         self.assertTrue(norm["link"])
 
+    def test_plain_text_moses_card_ht60456(self):
+        """Production-shaped card: Stock: HT60456 / Ext. Black / 12 mi / MOSES PRICE."""
+        norm = normalize_vehicle(
+            {
+                "vin": "1HGCV1F38PA123456",
+                "year": 2025,
+                "make": "Honda",
+                "model": "Civic",
+                "link": (
+                    "https://www.mosescars.com/new-St+Albans-2025-Honda-Civic-Sport-"
+                    "1HGCV1F38PA123456"
+                ),
+                "_html": MOSES_PLAIN_CARD,
+            },
+            condition="New",
+        )
+        self.assertIsNotNone(norm)
+        assert norm is not None
+        self.assertEqual(norm["stockNumber"], "HT60456")
+        self.assertNotEqual(norm["stockNumber"], MISSING_STOCK)
+        self.assertEqual(norm["exteriorColor"], "Black")
+        self.assertEqual(norm["mileage"], 12)
+        self.assertEqual(norm["price"], 32995)
+
     def test_used_card_with_miles(self):
         norm = normalize_vehicle(
             {
@@ -177,6 +252,63 @@ class TestMosesCardNormalize(unittest.TestCase):
         self.assertEqual(norm["mileage"], 28450)
         self.assertEqual(norm["price"], 24990)
         self.assertIn("Red", norm["exteriorColor"])
+
+
+class TestMosesVdpHydrate(unittest.TestCase):
+    def test_extract_from_vdp_html(self):
+        data = extract_from_vdp_html(MOSES_VDP_HTML, condition="New")
+        self.assertEqual(data.get("stock_number"), "HT60456")
+        self.assertEqual(data.get("price"), 32995)
+        self.assertEqual(data.get("exterior_color"), "Black")
+        self.assertEqual(data.get("mileage"), 12)
+
+    def test_needs_hydration(self):
+        self.assertTrue(
+            needs_hydration(
+                {
+                    "stockNumber": MISSING_STOCK,
+                    "price": 0,
+                    "link": "https://www.mosescars.com/vdp/x",
+                }
+            )
+        )
+        self.assertFalse(
+            needs_hydration(
+                {
+                    "stockNumber": "HT60456",
+                    "price": 32995,
+                    "link": "https://www.mosescars.com/vdp/x",
+                }
+            )
+        )
+        self.assertFalse(needs_hydration({"stockNumber": MISSING_STOCK, "price": 0}))
+
+    def test_hydrate_vehicles_mocked(self):
+        thin = {
+            "vin": "1HGCV1F38PA123456",
+            "stockNumber": MISSING_STOCK,
+            "stock_number": MISSING_STOCK,
+            "year": 2025,
+            "make": "Honda",
+            "model": "Civic",
+            "price": 0,
+            "mileage": 0,
+            "exteriorColor": "",
+            "link": "https://www.mosescars.com/vdp/civic",
+            "condition": "New",
+        }
+        with mock.patch(
+            "scraper.vdp_hydrate.fetch_html",
+            return_value=MOSES_VDP_HTML,
+        ):
+            out = hydrate_vehicles([thin], condition="New", max_fetches=5, workers=2)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["stockNumber"], "HT60456")
+        self.assertEqual(out[0]["price"], 32995)
+        self.assertEqual(out[0]["exteriorColor"], "Black")
+        self.assertEqual(out[0]["mileage"], 12)
+        # Link must not be mangled
+        self.assertEqual(out[0]["link"], "https://www.mosescars.com/vdp/civic")
 
 
 if __name__ == "__main__":

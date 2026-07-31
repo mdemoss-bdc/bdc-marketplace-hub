@@ -25,7 +25,7 @@ PRICE_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 PRICE_CARD_RE = re.compile(r"\$([0-9]{2,3},[0-9]{3})")
-MILEAGE_RE = re.compile(r"([0-9,]+)\s*mi\.?\b", re.IGNORECASE)
+MILEAGE_RE = re.compile(r"([0-9,]+)\s*(?:mi\.?|miles)\b", re.IGNORECASE)
 # Moses / DealerOn exact "Stock:" / "STOCK:" — always wins over Unavailable
 MOSES_STOCK_RE = re.compile(r"Stock:\s*([A-Za-z0-9]+)", re.IGNORECASE)
 MOSES_STOCK_UPPER_RE = re.compile(r"STOCK:\s*([A-Za-z0-9]+)", re.IGNORECASE)
@@ -171,7 +171,12 @@ def extract_exterior_color(text: str) -> str | None:
     if not m:
         return None
     c = m.group(1).strip()
-    c = re.split(r"\s+(?:Stock|VIN|Mi\.?|Miles|\$)\b", c, maxsplit=1, flags=re.I)[0].strip()
+    c = re.split(
+        r"\s+(?:Stock|VIN|Mi\.?|Miles?|\$|\d{1,3}(?:,\d{3})*(?:\s*(?:mi\.?|miles))?)\b",
+        c,
+        maxsplit=1,
+        flags=re.I,
+    )[0].strip()
     if not c or re.fullmatch(r"(?:n/?a|none|unknown|select|color|ext\.?)", c, re.I):
         return None
     return c

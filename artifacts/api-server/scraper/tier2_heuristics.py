@@ -26,7 +26,7 @@ _PRICE_RE = re.compile(
     r'(?:price|internet|asking)\s*[:\s]*\$?\s*([\d,]{3,7})',
     re.I,
 )
-_MILES_RE = re.compile(r'([0-9,]+)\s*mi\.?\b', re.I)
+_MILES_RE = re.compile(r'([0-9,]+)\s*(?:mi\.?|miles)\b', re.I)
 _YMM_RE = re.compile(
     r'\b((?:19|20)\d{2})\s+([A-Z][A-Za-z0-9\-]+)\s+([A-Z0-9][A-Za-z0-9\-]+(?:\s+[A-Z0-9][A-Za-z0-9\-]*)?)',
 )
