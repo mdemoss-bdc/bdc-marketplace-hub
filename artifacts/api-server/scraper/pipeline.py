@@ -122,23 +122,28 @@ def to_engine_rows(result: dict[str, Any]) -> list[dict]:
     """Map pipeline vehicles into bdc_engine / marketplace_inventory rows."""
     rows: list[dict] = []
     for v in result.get("vehicles") or []:
+        stock = (
+            v.get("stock_number")
+            or v.get("stockNumber")
+            or "N/A"
+        )
+        link = v.get("link") or v.get("vdp_url") or ""
         rows.append({
             "vin": v.get("vin", ""),
-            "stock_number": v.get("stock_number") or (
-                "" if v.get("stockNumber") == "N/A" else v.get("stockNumber", "")
-            ),
+            "stock_number": stock,
             "condition": v.get("condition") or result.get("condition") or "Used",
             "year": int(v.get("year") or 0),
             "make": v.get("make") or "",
             "model": v.get("model") or "",
             "trim": v.get("trim") or "",
+            "title": v.get("title") or "",
             "mileage": int(v.get("mileage") or 0),
             "price": int(v.get("price") or 0),
             "exterior_color": v.get("exterior_color") or v.get("exteriorColor") or "",
             "interior_color": "",
             "image_url": v.get("image_url") or v.get("imageUrl") or "",
-            "vdp_url": v.get("vdp_url") or v.get("link") or "",
-            "link": v.get("link") or v.get("vdp_url") or "",
+            "vdp_url": link,
+            "link": link,
             "location": v.get("location") or "",
             "status": "ACTIVE",
         })

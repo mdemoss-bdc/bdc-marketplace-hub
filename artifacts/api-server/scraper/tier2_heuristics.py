@@ -7,7 +7,7 @@ from typing import Any
 
 from .html_utils import absolutize, clean_text, decode_entities
 from .schema import VIN_RE, normalize_vehicle
-from .stock import extract_stock_from_html, resolve_stock_number
+from .stock import detect_in_transit, extract_stock_from_html, resolve_stock_number
 from .tier1_dom import bind_vdp_anchors
 
 _CONTAINER_RE = re.compile(
@@ -47,10 +47,20 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         body = m.group("body")
         plain = clean_text(re.sub(r"<[^>]+>", " ", body))
         vin_m = VIN_RE.search(body) or VIN_RE.search(plain)
-        if not vin_m:
+        vin = vin_m.group(1).upper() if vin_m else ""
+        in_transit = detect_in_transit(body) or detect_in_transit(plain)
+
+        year, make, model = 0, "", ""
+        ym = _YMM_RE.search(plain)
+        if ym:
+            year = int(ym.group(1))
+            make = ym.group(2)
+            model = ym.group(3).split()[0] if ym.group(3) else ""
+
+        # Keep In Transit cards even when VIN is omitted on the SRP.
+        if not vin and not (in_transit and year and make):
             continue
-        vin = vin_m.group(1).upper()
-        if vin in seen:
+        if vin and vin in seen:
             continue
 
         price = 0
@@ -63,15 +73,7 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         if mm:
             mileage = int(mm.group(1).replace(",", ""))
 
-        year, make, model = 0, "", ""
-        ym = _YMM_RE.search(plain)
-        if ym:
-            year = int(ym.group(1))
-            make = ym.group(2)
-            model = ym.group(3).split()[0] if ym.group(3) else ""
-
-        # Stock: data-* / DOM class / "Stock #:" labels BEFORE generic fallbacks.
-        # Never accept a bare model year as the stock number.
+        # Stock: data-* / DOM class / "Stock #:" labels → In Transit → N/A.
         stock = extract_stock_from_html(body, vin=vin, year=year) or resolve_stock_number(
             {}, body, vin=vin, year=year,
         )
@@ -84,7 +86,11 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         link = ""
         for hm in _HREF_RE.finditer(body):
             href = absolutize(hm.group(1), page_url)
-            if href and (vin in href.upper() or "/vehicle" in href.lower() or "/vdp" in href.lower()):
+            if href and (
+                (vin and vin in href.upper())
+                or "/vehicle" in href.lower()
+                or "/vdp" in href.lower()
+            ):
                 link = href
                 break
         if not link:
@@ -93,6 +99,8 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
                 if href and href.rstrip("/") != page_url.rstrip("/"):
                     link = href
                     break
+        if in_transit and not vin and not link:
+            continue
 
         image = ""
         im = _IMG_RE.search(body)
@@ -114,7 +122,7 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         }
         norm = normalize_vehicle(raw, condition=condition)
         if norm:
-            seen.add(vin)
+            seen.add((norm.get("vin") or vin).upper())
             out.append(norm)
 
     return bind_vdp_anchors(out, html, page_url)

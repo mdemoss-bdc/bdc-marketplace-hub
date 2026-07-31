@@ -433,7 +433,7 @@ function isInTransitStock(value: unknown): boolean {
   return /^in[\s-]?transit$/i.test(s) || s === IN_TRANSIT_STOCK;
 }
 
-/** Explicit dealer stock only — never invent VIN slices or years. */
+/** Explicit dealer stock → In Transit → N/A — never invent VIN slices or years. */
 function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: string): string {
   const candidates = [
     raw.stock_number,
@@ -455,7 +455,21 @@ function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: s
     if (/^[A-Z0-9][A-Z0-9\-_/]{2,14}$/i.test(stock) && /[0-9]/.test(stock)) return stock;
     if (/^[A-Z0-9][A-Z0-9\-_/]{4,14}$/i.test(stock)) return stock;
   }
-  return '';
+  const statusBlob = [
+    raw.raw_text,
+    raw.description,
+    raw.title,
+    raw.availability,
+    raw.status_label,
+    raw.badge,
+    raw.vehicle_status,
+  ]
+    .map((v) => cleanVehicleText(v))
+    .join(' ');
+  if (/\b(?:in[\s-]?transit|arriving[\s-]?soon|in[\s-]?production|building)\b/i.test(statusBlob)) {
+    return IN_TRANSIT_STOCK;
+  }
+  return 'N/A';
 }
 
 /** Pull vehicle rows from either a direct array or nested API payloads. */
@@ -556,7 +570,7 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>, index = 0): Veh
     retail_price: asMoney(raw.retail_price ?? raw.retailPrice) || 0,
     doc_fee: asMoney(raw.doc_fee) || 0,
     savings: asMoney(raw.savings) || 0,
-    stock_number: stock_number || '',
+    stock_number: stock_number || 'N/A',
     exterior_color: exterior_color || '',
     interior_color: interior_color || '',
     image_url: String(raw.image_url ?? raw.imageUrl ?? '').trim(),
@@ -614,12 +628,12 @@ function resolveVehicleHref(
 
 function fmtStock(stock: string | undefined | null) {
   const s = String(stock || '').trim();
-  if (!s || s === 'N/A' || s === 'NA' || /^(?:19|20)\d{2}$/.test(s)) return '—';
+  if (!s || s === 'N/A' || s === 'NA' || /^(?:19|20)\d{2}$/.test(s)) return 'N/A';
   if (isInTransitStock(s)) return IN_TRANSIT_STOCK;
   return `#${s}`;
 }
 
-/** Stock cell: In Transit badge, else #CODE, else clean em-dash. */
+/** Stock cell: In Transit badge / #CODE / N/A — clickable when VDP link exists. */
 function StockNumberCell({
   stock,
   href,
@@ -629,17 +643,31 @@ function StockNumberCell({
 }) {
   const s = String(stock || '').trim();
   if (isInTransitStock(s)) {
-    return (
+    const badge = (
       <span className="inline-flex items-center rounded-md border border-amber-400/40 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
         In Transit
       </span>
     );
+    if (href && href !== '#') {
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex hover:opacity-90"
+          title="Open vehicle detail page"
+        >
+          {badge}
+        </a>
+      );
+    }
+    return badge;
   }
   const label = fmtStock(s);
-  if (label === '—') {
-    return <span className="text-muted-foreground/70">—</span>;
+  if (label === 'N/A') {
+    return <span className="text-muted-foreground/70">N/A</span>;
   }
-  if (href) {
+  if (href && href !== '#') {
     return (
       <a
         href={href}
@@ -2887,13 +2915,15 @@ function InventoryView({
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
                         <StockNumberCell
                           stock={stockNumber}
-                          href={!isInTransitStock(stockNumber) ? linkHref : null}
+                          href={linkHref && linkHref !== '#' ? linkHref : null}
                         />
                       </td>
 
                       {/* VIN */}
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap tracking-wide">
-                        {v.vin && v.vin.length === 17 ? v.vin : v.vin && !String(v.vin).startsWith('ROW-') ? <span className="text-muted-foreground/50 italic">—</span> : '—'}
+                        {v.vin && v.vin.length === 17 && !String(v.vin).startsWith('IT')
+                          ? v.vin
+                          : '—'}
                       </td>
 
                       {/* Vehicle title → VDP */}

@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 
 from .html_utils import absolutize, clean_text, decode_entities
 from .schema import VIN_RE, normalize_vehicle
-from .stock import extract_stock_from_html, resolve_stock_number
+from .stock import detect_in_transit, extract_stock_from_html, resolve_stock_number
 
 _LD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>([\s\S]*?)</script>',
@@ -125,13 +125,15 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
         attrs: dict[str, str] = {}
         for am in _ATTR_RE.finditer(card):
             attrs[am.group("k").lower().replace("-", "")] = clean_text(am.group("v"))
-        if not attrs.get("vin") and not (attrs.get("year") and attrs.get("make")):
-            # Still try VIN from card body
+        if not attrs.get("vin"):
             vm = VIN_RE.search(card)
             if vm:
                 attrs["vin"] = vm.group(1).upper()
-            else:
-                continue
+        has_ym = bool(attrs.get("year") and attrs.get("make"))
+        in_transit = detect_in_transit(card)
+        # Keep In Transit cards even when VIN is omitted on the SRP card.
+        if not attrs.get("vin") and not has_ym and not in_transit:
+            continue
         link = ""
         for hm in _VDP_HREF_RE.finditer(card):
             href = absolutize(hm.group(1), base_url)
@@ -144,9 +146,12 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
                 if href and href != base_url:
                     link = href
                     break
+        # In Transit without a VDP link cannot be retained usefully.
+        if in_transit and not link and not attrs.get("vin"):
+            continue
         vin = attrs.get("vin") or ""
         year = attrs.get("year") or 0
-        # Selector priority: data-* → DOM class → labeled text (never year/VIN).
+        # Selector priority: data-* → DOM class → labeled text → In Transit → N/A.
         stock = extract_stock_from_html(card, vin=vin, year=year) or resolve_stock_number(
             {
                 "stockNumber": (
@@ -206,7 +211,12 @@ def bind_vdp_anchors(vehicles: list[dict], html: str, base_url: str) -> list[dic
                 v["link"] = href
                 v["vdp_url"] = href
                 break
-            if stock and stock != "N/A" and stock in win_u and _VDP_PATH_HINT.search(href):
+            if (
+                stock
+                and stock not in ("N/A", "IN TRANSIT")
+                and stock in win_u
+                and _VDP_PATH_HINT.search(href)
+            ):
                 v["link"] = href
                 v["vdp_url"] = href
                 break

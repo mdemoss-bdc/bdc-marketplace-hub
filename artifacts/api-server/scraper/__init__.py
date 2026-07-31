@@ -8,6 +8,7 @@ Tier 3 — LLM schema normalization (AI safety net)
 from .pipeline import extract_inventory, scrape_url
 from .stock import (
     IN_TRANSIT_STOCK,
+    MISSING_STOCK,
     detect_in_transit,
     extract_stock_from_html,
     resolve_stock_number,
@@ -19,6 +20,7 @@ __all__ = [
     "extract_inventory",
     "scrape_url",
     "IN_TRANSIT_STOCK",
+    "MISSING_STOCK",
     "detect_in_transit",
     "extract_stock_from_html",
     "resolve_stock_number",

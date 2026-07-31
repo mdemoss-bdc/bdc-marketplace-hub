@@ -57,10 +57,16 @@ function siteBase() {
 function normalizeRow(vehicle) {
   const vinRaw = String(vehicle.vin || '').trim().toUpperCase();
   let stock = String(vehicle.stock_number || '').trim();
+  const inTransit = /^in[\s-]?transit$/i.test(stock);
   if (['n/a', 'na', 'none', '-', '—'].includes(stock.toLowerCase())) stock = '';
   const dbId = String(vehicle.id || '').trim();
-  const realVin = vinRaw.length === 17 ? vinRaw : '';
-  const id = realVin || stock || (dbId ? `STOCK-${dbId}` : '');
+  // Synthetic IT* ids and non-17-char placeholders are not Meta VINs.
+  const realVin =
+    vinRaw.length === 17 && !vinRaw.startsWith('IT') && /^[A-HJ-NPR-Z0-9]{17}$/.test(vinRaw)
+      ? vinRaw
+      : '';
+  // Keep In Transit rows in the catalog; never use "In Transit" as the item id.
+  const id = realVin || (!inTransit && stock ? stock : '') || (dbId ? `STOCK-${dbId}` : '');
   if (!id) return null;
 
   const make = String(vehicle.make || '').trim() || 'Vehicle';
@@ -81,14 +87,18 @@ function normalizeRow(vehicle) {
 
   const milesLabel = milesI > 0 ? `${milesI.toLocaleString()} miles` : 'mileage unavailable';
   const priceLabel = priceI > 0 ? `$${priceI.toLocaleString()}` : 'price available on request';
-  const stockBit = stock ? ` Stock #${stock}.` : '';
+  const stockBit = inTransit
+    ? ' In Transit.'
+    : stock
+      ? ` Stock #${stock}.`
+      : '';
   const description = (
     `${title} — ${milesLabel}, listed at ${priceLabel}. ` +
     `${condition === 'new' ? 'New' : 'Used'} inventory from ${DEALER_NAME}.${stockBit}`
   ).slice(0, 5000);
 
   let url = '';
-  const vdp = String(vehicle.vdp_url || '').trim();
+  const vdp = String(vehicle.vdp_url || vehicle.link || '').trim();
   if (validUrl(vdp)) url = httpsUrl(vdp);
   else url = siteBase();
 

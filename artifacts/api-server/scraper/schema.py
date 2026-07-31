@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
-from .stock import resolve_stock_number, sanitize_stock_number
+from .stock import (
+    IN_TRANSIT_STOCK,
+    MISSING_STOCK,
+    detect_in_transit,
+    resolve_stock_number,
+    sanitize_stock_number,
+)
 
 VIN_RE = re.compile(r"\b([A-HJ-NPR-Z0-9]{17})\b", re.I)
 
@@ -69,18 +76,43 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
                     return rv
         return None
 
-    vin = _str(g("vin", "VIN", "Vin")).upper()
-    if not vin:
-        blob = " ".join(str(v) for v in raw.values() if isinstance(v, str))
-        m = VIN_RE.search(blob)
-        if m:
-            vin = m.group(1).upper()
-    if not vin or len(vin) < 10:
-        return None
-
+    html_blob = _str(g("_html", "raw_html", "html", "raw_text", "description"))
+    link = _str(g("link", "vdp_url", "vdpUrl", "url", "href"))
     year = _digits(g("year", "modelYear", "model_year"))
     if year and (year < 1980 or year > 2100):
         year = 0
+
+    # Stock first so In Transit cards are never dropped for missing dealer stock.
+    stock = resolve_stock_number(raw, html_blob, vin="", year=year)
+    if not stock:
+        stock = sanitize_stock_number(
+            g("stockNumber", "stock_number", "stock", "stockNo", "stock_no", "sku"),
+            year=year,
+        ) or MISSING_STOCK
+
+    vin = _str(g("vin", "VIN", "Vin")).upper()
+    if not vin:
+        blob = " ".join(str(v) for v in raw.values() if isinstance(v, str))
+        m = VIN_RE.search(blob) or VIN_RE.search(link) or VIN_RE.search(html_blob)
+        if m:
+            vin = m.group(1).upper()
+    # In Transit vehicles must not be truncated: keep them with a stable id
+    # derived from the VDP link when the dealer page omits a VIN.
+    if (not vin or len(vin) < 10) and (
+        stock == IN_TRANSIT_STOCK or detect_in_transit(html_blob)
+    ):
+        if link:
+            # Stable non-VIN id (14 chars) so Meta feeds do not treat it as a real VIN.
+            digest = hashlib.sha1(link.encode("utf-8")).hexdigest()[:12].upper()
+            vin = f"IT{digest}"
+            stock = IN_TRANSIT_STOCK
+        else:
+            return None
+    elif not vin or len(vin) < 10:
+        return None
+
+    # Re-resolve with known VIN so year/VIN are not mistaken for stock.
+    stock = resolve_stock_number(raw, html_blob, vin=vin, year=year) or stock or MISSING_STOCK
 
     price = _digits(g("price", "internetPrice", "finalPrice", "sellingPrice", "msrp", "listPrice"))
     if 1900 <= price <= 2100:
@@ -91,26 +123,18 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
     model = _str(g("model", "modelName"))
     trim = _str(g("trim", "trimLevel", "series"))
     color = _str(g("exteriorColor", "exterior_color", "extColor", "color"))
-    link = _str(g("link", "vdp_url", "vdpUrl", "url", "href"))
     image = _str(g("imageUrl", "image_url", "image", "photo", "thumbnail"))
-
-    # Strict stock: explicit dealer value, else "In Transit", else "" — never invent.
-    html_blob = _str(g("_html", "raw_html", "html", "raw_text", "description"))
-    stock = resolve_stock_number(raw, html_blob, vin=vin, year=year)
-    if not stock:
-        stock = sanitize_stock_number(
-            g("stockNumber", "stock_number", "stock", "stockNo", "stock_no", "sku"),
-            vin=vin,
-            year=year,
-        )
+    title = _str(g("title", "name")) or " ".join(
+        p for p in (str(year) if year else "", make, model, trim) if p
+    ).strip()
 
     cond = (condition or "Used").strip().title()
     if cond not in ("New", "Used"):
         cond = "Used"
 
     return {
-        # Zod / LLM schema keys — "" when omitted; "In Transit" when status badge says so
-        "stockNumber": stock or "",
+        # Zod / LLM schema keys
+        "stockNumber": stock or MISSING_STOCK,
         "year": year,
         "make": make,
         "model": model,
@@ -121,8 +145,9 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
         "link": link,
         "imageUrl": image,
         "vin": vin,
-        # DB / engine aliases
-        "stock_number": stock or "",
+        "title": title,
+        # DB / engine aliases — always retain VDP link + full YMMT/price/miles
+        "stock_number": stock or MISSING_STOCK,
         "exterior_color": color,
         "image_url": image,
         "vdp_url": link,

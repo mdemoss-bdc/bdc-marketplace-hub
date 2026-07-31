@@ -6647,24 +6647,24 @@ def _int_safe(raw, default: int = 0) -> int:
 
 
 def _stock_safe(raw) -> str:
-    """Return a sanitised stock number, '' when missing, or 'In Transit'.
+    """Return a sanitised stock number, 'In Transit', or 'N/A'.
 
     Never invents VIN slices / years. Blocks bare 17-char VINs and pure
     auto-increment integers ≥ 5 digits with no letter prefix.
     """
     if not raw:
-        return ''
+        return 'N/A'
     s = str(raw).strip()
     if not s or s.lower() in ('n/a', 'na', 'none', '0', '-', '—', 'null', 'undefined'):
-        return ''
+        return 'N/A'
     if re.fullmatch(r'in[\s\-]?transit', s, re.I):
         return 'In Transit'
     if re.fullmatch(r'[A-HJ-NPR-Z0-9]{17}', s, re.I):
-        return ''   # bare VIN — do not use as stock
+        return 'N/A'   # bare VIN — do not use as stock
     if re.fullmatch(r'(?:19|20)\d{2}', s):
-        return ''   # model year — never a stock number
+        return 'N/A'   # model year — never a stock number
     if re.fullmatch(r'\d{5,}', s):
-        return ''   # pure auto-increment integer
+        return 'N/A'   # pure auto-increment integer
     return s
 
 

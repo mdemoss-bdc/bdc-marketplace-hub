@@ -40,6 +40,7 @@ _IN_TRANSIT_RE = re.compile(
     re.IGNORECASE,
 )
 IN_TRANSIT_STOCK = "In Transit"
+MISSING_STOCK = "N/A"
 # Year Make Model — standard keyword extraction from SRP headings.
 YMM_RE = re.compile(
     r"\b((?:19|20)\d{2})\s+([A-Za-z][A-Za-z0-9\-]+)\s+([A-Za-z0-9][A-Za-z0-9 \-/]{1,40})"
@@ -290,7 +291,7 @@ def sanitize_vehicle_record(
         stock = ""
     if stock and len(stock) == 17 and VIN_RE.fullmatch(stock):
         stock = ""
-    # No synthetic VIN/year codes. "In Transit" is the only non-dealer fallback.
+    # No synthetic VIN/year codes. Fallback: In Transit → N/A.
     if not stock:
         status_blob = " ".join(
             _as_str(vehicle.get(k))
@@ -301,6 +302,8 @@ def sanitize_vehicle_record(
         )
         if _IN_TRANSIT_RE.search(status_blob) or _IN_TRANSIT_RE.search(blob):
             stock = IN_TRANSIT_STOCK
+        else:
+            stock = MISSING_STOCK
 
     out = dict(vehicle)
     out["vin"] = vin
@@ -309,7 +312,11 @@ def sanitize_vehicle_record(
     out["model"] = model
     out["price"] = int(price or 0)
     out["mileage"] = int(mileage or 0)
-    out["stock_number"] = stock or ""
+    out["stock_number"] = stock or MISSING_STOCK
+    if "link" not in out and vehicle.get("vdp_url"):
+        out["link"] = _as_str(vehicle.get("vdp_url"))
+    if "vdp_url" not in out and vehicle.get("link"):
+        out["vdp_url"] = _as_str(vehicle.get("link"))
     return out
 
 

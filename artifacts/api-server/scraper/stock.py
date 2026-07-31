@@ -5,7 +5,7 @@ Priority (before generic regex / VIN / year fallbacks):
   2. DOM class selectors: .stockNumber .value, .stock-number .value, …
   3. Labeled text: "Stock #:" / "Stk #:" + alphanumeric code
   4. "In Transit" / "Building" / "Arriving Soon" status badges (literal stockNumber)
-  5. Empty string — never invent VIN slices, years, or random codes
+  5. "N/A" — never invent VIN slices, years, or random codes
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 STOCK_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9\-_/]{2,14}$", re.I)
 
 IN_TRANSIT_STOCK = "In Transit"
+MISSING_STOCK = "N/A"
 
 # Status / availability badges when no explicit stock exists.
 _IN_TRANSIT_RE = re.compile(
@@ -176,7 +177,7 @@ def resolve_stock_number(
     vin: str = "",
     year: int | str = 0,
 ) -> str:
-    """Resolve stock: explicit dealer value → In Transit → "".
+    """Resolve stock: explicit dealer value → In Transit → N/A.
 
     Never invents VIN slices, model years, or random codes.
     """
@@ -228,4 +229,4 @@ def resolve_stock_number(
     if detect_in_transit(html_fragment):
         return IN_TRANSIT_STOCK
 
-    return ""
+    return MISSING_STOCK

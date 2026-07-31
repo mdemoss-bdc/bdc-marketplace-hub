@@ -253,7 +253,7 @@ export function extractStockNumber(
   return null;
 }
 
-/** Resolve dealer stock: explicit value → In Transit → "" (never VIN/year). */
+/** Resolve dealer stock: explicit value → In Transit → N/A (never VIN/year). */
 export function resolveStockNumber(
   vehicle: Record<string, unknown>,
   year: number,
@@ -296,7 +296,7 @@ export function resolveStockNumber(
     .map((v) => asNonEmptyString(v))
     .join(" ");
   if (detectInTransit(statusBlob)) return IN_TRANSIT_STOCK;
-  return "";
+  return "N/A";
 }
 
 /** Standard keyword extraction for Year / Make / Model. */

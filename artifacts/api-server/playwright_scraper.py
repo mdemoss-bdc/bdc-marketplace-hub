@@ -70,18 +70,18 @@ def _lock_condition(raw: Any, target: str) -> str:
 
 
 def _stock_safe(val: Any) -> str:
-    """Return explicit dealer stock, 'In Transit', or '' — never invent codes."""
+    """Return explicit dealer stock, 'In Transit', or 'N/A' — never invent codes."""
     if not val:
-        return ''
+        return 'N/A'
     s = str(val).strip()
     if not s or s.lower() in ('null', 'none', 'n/a', 'na', '0', '-', '—'):
-        return ''
+        return 'N/A'
     if re.fullmatch(r'in[\s\-]?transit', s, re.I):
         return 'In Transit'
     if re.fullmatch(r'(?:19|20)\d{2}', s):
-        return ''
+        return 'N/A'
     if re.fullmatch(r'[A-HJ-NPR-Z0-9]{17}', s, re.I):
-        return ''
+        return 'N/A'
     return s
 
 

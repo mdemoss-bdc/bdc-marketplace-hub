@@ -212,7 +212,7 @@ function extractStockNumber(text, year = 0, make = '', model = '') {
 
 /**
  * Resolve dealer stock from payload aliases.
- * Missing → "In Transit" if status indicates it, else "" (never VIN/year).
+ * Missing → "In Transit" if status indicates it, else "N/A" (never VIN/year).
  */
 function resolveStockNumber(vehicle, year, make, model, _vin) {
   const candidates = [
@@ -250,7 +250,7 @@ function resolveStockNumber(vehicle, year, make, model, _vin) {
     .map((v) => asNonEmptyString(v))
     .join(' ');
   if (detectInTransit(statusBlob)) return IN_TRANSIT_STOCK;
-  return '';
+  return 'N/A';
 }
 
 function extractYearMakeModel(text) {
