@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearch } from 'wouter';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
@@ -450,8 +450,39 @@ function resolveDisplayStock(raw: Record<string, unknown>, year: number, vin: st
   return 'N/A';
 }
 
+/** Pull vehicle rows from either a direct array or nested API payloads. */
+function extractInventoryRows(data: Record<string, unknown> | unknown[] | null | undefined): Record<string, unknown>[] {
+  if (Array.isArray(data)) {
+    return data.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object');
+  }
+  if (!data || typeof data !== 'object') return [];
+  const payload = data as Record<string, unknown>;
+  const candidates = [
+    payload.inventory,
+    payload.vehicles,
+    payload.items,
+    payload.results,
+    payload.data,
+  ];
+  for (const c of candidates) {
+    if (Array.isArray(c)) {
+      return c.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object');
+    }
+    if (c && typeof c === 'object') {
+      const nested = c as Record<string, unknown>;
+      if (Array.isArray(nested.inventory)) {
+        return nested.inventory.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object');
+      }
+      if (Array.isArray(nested.vehicles)) {
+        return nested.vehicles.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object');
+      }
+    }
+  }
+  return [];
+}
+
 /** Normalize a raw inventory API row into Hub Vehicle field names. */
-function normalizeInventoryVehicle(raw: Record<string, unknown>): Vehicle {
+function normalizeInventoryVehicle(raw: Record<string, unknown>, index = 0): Vehicle {
   const year = normalizeYear(raw.year ?? raw.Year ?? raw.model_year);
   const price = asMoney(
     raw.price ??
@@ -476,7 +507,7 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>): Vehicle {
   const make = cleanVehicleText(raw.make);
   const model = cleanVehicleText(raw.model);
   const trim = cleanVehicleText(raw.trim);
-  const vin = String(raw.vin || '').trim().toUpperCase();
+  const vin = String(raw.vin || '').trim().toUpperCase() || `ROW-${index + 1}`;
   const exterior_color = titleCaseColor(
     cleanVehicleText(
       raw.exterior_color ??
@@ -490,28 +521,61 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>): Vehicle {
   const interior_color = titleCaseColor(
     cleanVehicleText(raw.interior_color ?? raw.interiorColor ?? raw.int_color),
   );
-  const stock_number = resolveDisplayStock(raw, year, vin);
+  const stock_number =
+    resolveDisplayStock(raw, year, vin) ||
+    String(raw.stockNumber ?? raw.stock_number ?? 'N/A').trim() ||
+    'N/A';
   const vdp_url = String(
-    raw.vdp_url ?? raw.vdpUrl ?? raw.link ?? raw.url ?? raw.href ?? '',
+    raw.link ?? raw.vdp_url ?? raw.vdpUrl ?? raw.url ?? raw.href ?? '',
   ).trim();
+  const titleFromApi = cleanVehicleText(raw.title);
+  const title =
+    titleFromApi ||
+    [year || '', make, model].filter(Boolean).join(' ').trim() ||
+    'Vehicle';
+  const conditionRaw = String(raw.condition || 'Used').trim();
+  const condition: 'New' | 'Used' = /^new$/i.test(conditionRaw) ? 'New' : 'Used';
+  const statusRaw = String(raw.status || 'ACTIVE').trim().toUpperCase();
+  const status: 'ACTIVE' | 'SOLD' = statusRaw === 'SOLD' ? 'SOLD' : 'ACTIVE';
+  const postedRaw = String(raw.posted_status || 'not_posted').toLowerCase();
+  const posted_status: PostedStatus = postedRaw === 'posted' ? 'posted' : 'not_posted';
   return {
-    ...(raw as unknown as Vehicle),
+    id: Number(raw.id) || index + 1,
     vin,
-    year,
-    make,
-    model,
-    trim,
-    price,
-    mileage,
-    stock_number,
-    exterior_color,
-    interior_color,
-    vdp_url,
-    link: vdp_url,
-  };
+    year: year || 0,
+    make: make || '',
+    model: model || '',
+    trim: trim || '',
+    price: price || 0,
+    mileage: mileage || 0,
+    retail_price: asMoney(raw.retail_price ?? raw.retailPrice) || 0,
+    doc_fee: asMoney(raw.doc_fee) || 0,
+    savings: asMoney(raw.savings) || 0,
+    stock_number: stock_number || 'N/A',
+    exterior_color: exterior_color || '',
+    interior_color: interior_color || '',
+    image_url: String(raw.image_url ?? raw.imageUrl ?? '').trim(),
+    location: cleanVehicleText(raw.location) || '',
+    dealership_group: cleanVehicleText(raw.dealership_group) || undefined,
+    condition,
+    status,
+    posted_status,
+    in_meta_feed: Boolean(raw.in_meta_feed),
+    last_seen: String(raw.last_seen || ''),
+    ai_description: cleanVehicleText(raw.ai_description) || undefined,
+    vdp_url: vdp_url || '',
+    link: vdp_url || '',
+    // Keep a display title for table fallbacks.
+    ...(title ? { title } as Partial<Vehicle> : {}),
+  } as Vehicle & { title?: string };
 }
 
-function vehicleTitle(v: Pick<Vehicle, 'year' | 'make' | 'model' | 'trim'>, includeTrim = false) {
+function vehicleTitle(
+  v: Pick<Vehicle, 'year' | 'make' | 'model' | 'trim'> & { title?: string },
+  includeTrim = false,
+) {
+  const fromApi = cleanVehicleText((v as { title?: string }).title);
+  if (fromApi) return fromApi;
   const year = normalizeYear(v.year);
   const parts = [
     year || null,
@@ -519,7 +583,7 @@ function vehicleTitle(v: Pick<Vehicle, 'year' | 'make' | 'model' | 'trim'>, incl
     cleanVehicleText(v.model),
     includeTrim ? cleanVehicleText(v.trim) : null,
   ].filter(Boolean);
-  return parts.join(' ');
+  return parts.join(' ') || 'Vehicle';
 }
 
 /** Resolve clickable VDP href: vehicle.link / vdp_url, else Base Inventory URL. */
@@ -529,7 +593,7 @@ function resolveVehicleHref(
   baseNew = '',
   baseAny = '',
 ): string {
-  const raw = String(v.vdp_url || v.link || '').trim();
+  const raw = String(v.link || v.vdp_url || '').trim();
   const fallback =
     (v.condition === 'New' ? baseNew : baseUsed) || baseUsed || baseNew || baseAny || '';
   if (/^https?:\/\//i.test(raw)) return raw;
@@ -540,7 +604,7 @@ function resolveVehicleHref(
       /* fall through */
     }
   }
-  return fallback;
+  return fallback || '#';
 }
 
 function fmtStock(stock: string | undefined | null) {
@@ -1679,11 +1743,8 @@ function InventoryView({
         setCounts({ ACTIVE: 0, SOLD: 0, total: 0, posted: 0 });
         return;
       }
-      setInventory(
-        Array.isArray(data.inventory)
-          ? (data.inventory as Record<string, unknown>[]).map(normalizeInventoryVehicle)
-          : [],
-      );
+      const rows = extractInventoryRows(data);
+      setInventory(rows.map((row, idx) => normalizeInventoryVehicle(row, idx)));
       setMakes(Array.isArray(data.makes) ? (data.makes as string[]) : []);
       setModels(Array.isArray(data.models) ? (data.models as string[]) : []);
       setYears(Array.isArray(data.years) ? (data.years as number[]) : []);
@@ -2737,9 +2798,9 @@ function InventoryView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredInventory.flatMap(v => {
+                {filteredInventory.map((v, rowIdx) => {
                   const isSold      = v.status === 'SOLD';
-                  const isPosted    = v.posted_status === 'posted';
+                  const isPosted    = (v.posted_status || 'not_posted') === 'posted';
                   const isOrphaned  = isSold && isPosted;   // removed from feed but still marked posted
                   const isPosting   = postingVins.has(v.vin);
                   const isGenerating = generatingVin === v.vin;
@@ -2753,12 +2814,21 @@ function InventoryView({
                     inventoryUrlNew,
                     inventoryUrl,
                   );
-                  const stockLabel = fmtStock(v.stock_number);
-                  const titleLabel = vehicleTitle(v);
+                  const stockNumber =
+                    v.stock_number ||
+                    (v as Vehicle & { stockNumber?: string }).stockNumber ||
+                    'N/A';
+                  const stockLabel = fmtStock(stockNumber);
+                  const titleLabel =
+                    vehicleTitle(v) ||
+                    `${v.year || ''} ${v.make || ''} ${v.model || ''}`.trim() ||
+                    'Vehicle';
+                  const rowKey = v.vin || `inv-${v.id || rowIdx}`;
+                  const linkHref = vdpHref && vdpHref !== '#' ? vdpHref : null;
 
                   const mainRow = (
                     <tr
-                      key={v.vin}
+                      key={rowKey}
                       className={`transition-colors hover:bg-muted/20 ${isSold && !isOrphaned ? 'opacity-60' : ''} ${isOrphaned ? 'bg-amber-50/40' : ''} ${isSelected ? 'bg-primary/5' : ''} ${isExpanded ? 'bg-muted/30' : ''}`}
                     >
                       {/* Checkbox */}
@@ -2774,9 +2844,9 @@ function InventoryView({
 
                       {/* Stock # → VDP */}
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
-                        {vdpHref && stockLabel !== '—' ? (
+                        {linkHref && stockLabel !== '—' ? (
                           <a
-                            href={vdpHref}
+                            href={linkHref}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-primary hover:underline underline-offset-2"
@@ -2791,15 +2861,15 @@ function InventoryView({
 
                       {/* VIN */}
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap tracking-wide">
-                        {v.vin && v.vin.length === 17 ? v.vin : v.vin && v.vin.length > 0 ? <span className="text-muted-foreground/50 italic">—</span> : '—'}
+                        {v.vin && v.vin.length === 17 ? v.vin : v.vin && !String(v.vin).startsWith('ROW-') ? <span className="text-muted-foreground/50 italic">—</span> : '—'}
                       </td>
 
                       {/* Vehicle title → VDP */}
                       <td className="px-3 py-3">
                         <div className="font-semibold text-sm leading-tight">
-                          {vdpHref ? (
+                          {linkHref ? (
                             <a
-                              href={vdpHref}
+                              href={linkHref}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-foreground hover:text-primary hover:underline underline-offset-2"
@@ -2830,17 +2900,17 @@ function InventoryView({
 
                       {/* Miles */}
                       <td className="px-3 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                        {fmtMiles(v.mileage)}
+                        {fmtMiles(v.mileage || 0)}
                       </td>
 
                       {/* Color */}
                       <td className="px-3 py-3 text-xs text-muted-foreground">
-                        {fmtColor(v.exterior_color)}
+                        {fmtColor(v.exterior_color || '')}
                       </td>
 
                       {/* Price */}
                       <td className="px-3 py-3 font-bold text-primary whitespace-nowrap">
-                        {fmt(v.price)}
+                        {fmt(v.price || 0)}
                       </td>
 
                       {/* Status */}
@@ -2950,22 +3020,24 @@ function InventoryView({
                   );
 
                   if (isExpanded && post) {
-                    return [
-                      mainRow,
-                      <tr key={`${v.vin}-post`} className="bg-muted/30">
-                        <td colSpan={10} className="px-5 py-4 border-b border-border">
-                          <AiPostPanel
-                            post={post}
-                            onCopy={() => handleCopy(v)}
-                            copyDone={copyDone}
-                            videoFile={videoFiles[v.vin] ?? null}
-                            onVideoChange={(file) => setVideoFiles(prev => ({ ...prev, [v.vin]: file }))}
-                          />
-                        </td>
-                      </tr>,
-                    ];
+                    return (
+                      <Fragment key={rowKey}>
+                        {mainRow}
+                        <tr className="bg-muted/30">
+                          <td colSpan={11} className="px-5 py-4 border-b border-border">
+                            <AiPostPanel
+                              post={post}
+                              onCopy={() => handleCopy(v)}
+                              copyDone={copyDone}
+                              videoFile={videoFiles[v.vin] ?? null}
+                              onVideoChange={(file) => setVideoFiles(prev => ({ ...prev, [v.vin]: file }))}
+                            />
+                          </td>
+                        </tr>
+                      </Fragment>
+                    );
                   }
-                  return [mainRow];
+                  return mainRow;
                 })}
               </tbody>
             </table>

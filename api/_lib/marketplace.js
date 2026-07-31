@@ -233,6 +233,12 @@ async function listInventory(queryParams = {}) {
     const params = [];
     let i = 1;
 
+    const userId = Number(queryParams.user_id) || 0;
+    if (userId > 0) {
+      clauses.push(`user_id = $${i++}`);
+      params.push(userId);
+    }
+
     const status = String(queryParams.status || 'ACTIVE').trim() || 'ACTIVE';
     if (status.toUpperCase() !== 'ALL') {
       clauses.push(`UPPER(status) = UPPER($${i++})`);
@@ -355,49 +361,66 @@ async function listInventory(queryParams = {}) {
       };
     });
 
+    const userClause = userId > 0 ? 'user_id = $1 AND ' : '';
+    const userParams = userId > 0 ? [userId] : [];
+
     const makes = (
       await queryAll(
         `SELECT DISTINCT make FROM marketplace_inventory
-         WHERE make != '' AND UPPER(status)='ACTIVE' ORDER BY make`,
+         WHERE ${userClause}make != '' AND UPPER(status)='ACTIVE' ORDER BY make`,
+        userParams,
       )
     ).map((r) => r.make);
     const models = (
       await queryAll(
         `SELECT DISTINCT model FROM marketplace_inventory
-         WHERE model != '' AND UPPER(status)='ACTIVE' ORDER BY model`,
+         WHERE ${userClause}model != '' AND UPPER(status)='ACTIVE' ORDER BY model`,
+        userParams,
       )
     ).map((r) => r.model);
     const years = (
       await queryAll(
         `SELECT DISTINCT year FROM marketplace_inventory
-         WHERE year > 0 ORDER BY year ASC`,
+         WHERE ${userClause}year > 0 ORDER BY year ASC`,
+        userParams,
       )
     ).map((r) => r.year);
     const locations = (
       await queryAll(
         `SELECT DISTINCT location FROM marketplace_inventory
-         WHERE location != '' ORDER BY location`,
+         WHERE ${userClause}location != '' ORDER BY location`,
+        userParams,
       )
     ).map((r) => r.location);
 
     const active = await queryOne(
-      `SELECT COUNT(*)::int AS c FROM marketplace_inventory WHERE UPPER(status)='ACTIVE'`,
+      `SELECT COUNT(*)::int AS c FROM marketplace_inventory
+       WHERE ${userClause}UPPER(status)='ACTIVE'`,
+      userParams,
     );
     const sold = await queryOne(
-      `SELECT COUNT(*)::int AS c FROM marketplace_inventory WHERE UPPER(status)='SOLD'`,
+      `SELECT COUNT(*)::int AS c FROM marketplace_inventory
+       WHERE ${userClause}UPPER(status)='SOLD'`,
+      userParams,
     );
     const posted = await queryOne(
       `SELECT COUNT(*)::int AS c FROM marketplace_inventory
-       WHERE in_meta_feed = 1
-          OR LOWER(COALESCE(posted_status,'')) IN ('posted','queued')`,
+       WHERE ${userClause}(
+         in_meta_feed = 1
+         OR LOWER(COALESCE(posted_status,'')) IN ('posted','queued')
+       )`,
+      userParams,
     );
     const last = await queryOne(
-      `SELECT MAX(last_seen) AS last_sync FROM marketplace_inventory`,
+      `SELECT MAX(last_seen) AS last_sync FROM marketplace_inventory
+       ${userId > 0 ? 'WHERE user_id = $1' : ''}`,
+      userParams,
     );
 
     return {
       success: true,
       inventory,
+      vehicles: inventory,
       makes,
       models,
       years,

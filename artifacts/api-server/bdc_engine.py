@@ -9416,34 +9416,34 @@ def _sync_user_inventory(
         'mosescars.com' in effective_new.lower()
     )
 
-    # ── Pre-sync purge for non-Moses dealers ──────────────────────────────────
-    # Moses uses a delta/upsert strategy (VINs persist across syncs so posted
-    # status is preserved).  Every other dealer gets a full replace: wipe the
-    # user's inventory table first so no historical rows from a different source
-    # can bleed into the new sync or be mis-flagged as SOLD by the delta check.
-    #
-    # IMPORTANT: rows with posted_status='posted' are intentionally excluded
-    # from the purge.  Managers may have live Facebook/Marketplace listings for
-    # those vehicles; deleting them loses the audit trail.  After the re-sync,
-    # mark_sold_by_condition will flip any surviving posted row to SOLD if the
-    # VIN does not appear in the new source, giving the manager a clear
-    # "previously posted, now removed from feed" indicator in the UI.
-    if _has_custom_urls and not _is_moses_source:
-        try:
-            _pre_conn = sqlite3.connect(DB_FILE)
-            _pre_conn.execute(
-                "DELETE FROM marketplace_inventory "
-                "WHERE user_id = ? AND posted_status != 'posted'",
-                (user_id,),
-            )
-            _pre_conn.commit()
-            _pre_conn.close()
-            print(f"[SYNC u{user_id}] Pre-sync purge: cleared non-posted "
-                  f"inventory rows for clean import from custom dealer URLs "
-                  f"(posted vehicles preserved to maintain feed audit trail).")
-        except Exception as _pre_err:
-            print(f"[SYNC u{user_id}] Pre-sync purge warning (non-fatal): "
-                  f"{_pre_err}")
+    # ── Hard pre-sync purge ───────────────────────────────────────────────────
+    # Always wipe this rooftop's inventory BEFORE inserting scraped rows so
+    # totals never accumulate across Target URL / location changes (e.g. 3,010
+    # leftover VINs from a prior dealer). Moses and custom dealers both get a
+    # clean slate for the active user_id; the scrape then re-inserts the live set.
+    try:
+        _pre_conn = sqlite3.connect(DB_FILE)
+        _pre_cur = _pre_conn.execute(
+            "DELETE FROM marketplace_inventory WHERE user_id = ?",
+            (user_id,),
+        )
+        _purged_n = int(_pre_cur.rowcount or 0)
+        _pre_conn.commit()
+        _pre_conn.close()
+        # Also clear local feed caches tied to this rooftop sync.
+        if _clear_feed_caches is not None:
+            try:
+                _clear_feed_caches(_SCRIPT_DIR)
+            except Exception:
+                pass
+        print(
+            f"[SYNC u{user_id}] Hard pre-sync purge: deleted {_purged_n} "
+            f"marketplace_inventory row(s) before import "
+            f"(moses={_is_moses_source}, custom={_has_custom_urls})."
+        )
+    except Exception as _pre_err:
+        print(f"[SYNC u{user_id}] Hard pre-sync purge warning (non-fatal): "
+              f"{_pre_err}")
 
     total_synced  = 0
     total_sold    = 0
@@ -13314,6 +13314,10 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     return 0
 
+            # Hub table must show the full scraped set. Apply the explicit
+            # ?location= query filter only — do NOT hide rows via user_locations
+            # enable/disable (that was blanking the table after a successful sync
+            # when rooftop labels from backfill did not match enabled names).
             self._json({
                 "success": True,
                 "inventory": MarketplaceDB.get_inventory(
@@ -13329,7 +13333,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     search=_miq('search'),
                     posted_status=_miq('posted_status'),
                     location=_miq('location'),
-                    enabled_locations=LocationDB.get_enabled_locations(_mi_uid),
+                    enabled_locations=None,
                 ),
                 "makes": MarketplaceDB.get_makes(
                     _mi_uid,

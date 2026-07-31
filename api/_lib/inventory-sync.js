@@ -448,7 +448,23 @@ async function runInventorySync(userId = 0, sessionId = '', options = {}) {
     );
     patchJob(uid, {
       reason: `url:${targets.url_used || targets.url_new || 'unset'}`,
+      phase: 'purging',
     });
+
+    // Hard purge BEFORE insert so rooftop totals never accumulate across
+    // Target URL / location changes (DELETE … WHERE user_id = current).
+    try {
+      const { wipeUserInventory } = require('./scraper-settings');
+      const purged = await wipeUserInventory(uid);
+      console.log(`[inventory-sync] hard purge user=${uid} deleted=${purged}`);
+    } catch (purgeErr) {
+      console.warn('[inventory-sync] hard purge failed (continuing):', purgeErr.message || purgeErr);
+      if (uid > 0) {
+        await query(`DELETE FROM marketplace_inventory WHERE user_id = $1`, [uid]);
+      } else {
+        await query(`DELETE FROM marketplace_inventory`);
+      }
+    }
 
     const collected = await collectViaAdapters(targets, (progress) => {
       patchJob(uid, {
@@ -567,9 +583,15 @@ async function statusPayload(userId = 0) {
   try {
     if (databaseUrl()) {
       await ensureCoreSchema();
-      const row = await queryOne(
-        `SELECT COUNT(*)::int AS c FROM marketplace_inventory WHERE UPPER(status)='ACTIVE'`,
-      );
+      const row = uid > 0
+        ? await queryOne(
+            `SELECT COUNT(*)::int AS c FROM marketplace_inventory
+             WHERE user_id = $1 AND UPPER(status)='ACTIVE'`,
+            [uid],
+          )
+        : await queryOne(
+            `SELECT COUNT(*)::int AS c FROM marketplace_inventory WHERE UPPER(status)='ACTIVE'`,
+          );
       vehicleCount = Number(row?.c) || 0;
     }
   } catch {
