@@ -1,10 +1,14 @@
 /**
- * GET /tiktok-developers-site-verification.txt
- * GET /tiktok-developers-site-verification
- * TikTok URL Property Verification — exact text/plain body.
+ * TikTok URL Property Verification — signature file handler.
+ * Mounted at multiple root paths (.html / .txt / token-suffixed / bare).
  */
 const BODY =
   'tiktok-developers-site-verification=kuNRyNnbQ1VmMSCYfvKT7kqGHbLlaTX7';
+
+function contentTypeForUrl(url) {
+  const path = String(url || '').split('?')[0].toLowerCase();
+  return path.endsWith('.html') || path.endsWith('.html/') ? 'text/html' : 'text/plain';
+}
 
 module.exports = async function handler(req, res) {
   if (req.method === 'OPTIONS') {
@@ -15,12 +19,12 @@ module.exports = async function handler(req, res) {
 
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     res.setHeader('Content-Type', 'text/plain');
-    res.status(405).send('Method not allowed');
+    res.status(405).end('Method not allowed');
     return;
   }
 
   res.statusCode = 200;
-  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Content-Type', contentTypeForUrl(req.url || req.path || ''));
   res.setHeader('Cache-Control', 'public, max-age=300');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Length', Buffer.byteLength(BODY, 'utf8'));

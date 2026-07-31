@@ -144,12 +144,18 @@ mount('/api/scrape', require('../_routes/sync'));
 mount('/api/v1/sync', require('../_routes/sync'));
 mount('/api/v1/scrape', require('../_routes/sync'));
 
-// ── TikTok URL Property Verification (plain text at site root) ──────────────
+// ── TikTok URL Property Verification (signature files at site root) ─────────
 const tiktokVerify = require('../_routes/tiktok-developers-site-verification');
-mount('/tiktok-developers-site-verification.txt', tiktokVerify);
-mount('/tiktok-developers-site-verification', tiktokVerify);
-mount('/api/tiktok-developers-site-verification.txt', tiktokVerify);
-mount('/api/tiktok-developers-site-verification', tiktokVerify);
+const tiktokVerifyPaths = [
+  '/tiktok-developers-site-verification.html',
+  '/tiktok-developers-site-verification.txt',
+  '/tiktok-developers-site-verification-kuNRyNnbQ1VmMSCYfvKT7kqGHbLlaTX7.txt',
+  '/tiktok-developers-site-verification',
+];
+for (const p of tiktokVerifyPaths) {
+  mount(p, tiktokVerify);
+  mount(`/api${p}`, tiktokVerify);
+}
 
 // ── Marketplace publisher / inventory ───────────────────────────────────────
 mount('/api/marketplace/queue/status', require('../_routes/marketplace/queue/status'));

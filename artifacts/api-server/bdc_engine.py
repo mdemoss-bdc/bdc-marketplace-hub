@@ -11905,15 +11905,18 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]  # strip query string
 
-        # ── TikTok URL Property Verification (plain text file, no auth) ──
-        if path in ("/tiktok-developers-site-verification.txt",
-                    "/tiktok-developers-site-verification.txt/",
-                    "/tiktok-developers-site-verification",
-                    "/tiktok-developers-site-verification/"):
+        # ── TikTok URL Property Verification (signature files, no auth) ──
+        if path.rstrip("/") in (
+            "/tiktok-developers-site-verification.html",
+            "/tiktok-developers-site-verification.txt",
+            "/tiktok-developers-site-verification-kuNRyNnbQ1VmMSCYfvKT7kqGHbLlaTX7.txt",
+            "/tiktok-developers-site-verification",
+        ):
             _body = b"tiktok-developers-site-verification=kuNRyNnbQ1VmMSCYfvKT7kqGHbLlaTX7"
+            _ctype = "text/html" if path.rstrip("/").lower().endswith(".html") else "text/plain"
             self.send_response(200)
-            self.send_header('Content-Type', 'text/plain')
-            self.send_header('Content-Length', str(len(_body)))
+            self.send_header("Content-Type", _ctype)
+            self.send_header("Content-Length", str(len(_body)))
             self.end_headers()
             self.wfile.write(_body)
             return

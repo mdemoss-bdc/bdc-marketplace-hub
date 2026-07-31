@@ -6,12 +6,16 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/tiktok-developers-site-verification.html",
+      "destination": "/api/index?__route=tiktok-developers-site-verification.html"
+    },
+    {
       "source": "/tiktok-developers-site-verification.txt",
       "destination": "/api/index?__route=tiktok-developers-site-verification.txt"
     },
     {
-      "source": "/tiktok-developers-site-verification.txt/",
-      "destination": "/api/index?__route=tiktok-developers-site-verification.txt"
+      "source": "/tiktok-developers-site-verification-kuNRyNnbQ1VmMSCYfvKT7kqGHbLlaTX7.txt",
+      "destination": "/api/index?__route=tiktok-developers-site-verification-kuNRyNnbQ1VmMSCYfvKT7kqGHbLlaTX7.txt"
     },
     {
       "source": "/tiktok-developers-site-verification",
