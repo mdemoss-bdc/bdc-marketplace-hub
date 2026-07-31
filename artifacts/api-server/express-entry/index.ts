@@ -153,7 +153,7 @@ app.use(inventoryRouter);
 app.use(marketplaceRouter);
 
 app.get(["/api/healthz", "/healthz"], (_req, res) => {
-  res.status(200).json({ status: "UP", router: "artifacts/api-server/api/index", success: true });
+  res.status(200).json({ status: "UP", router: "artifacts/api-server/express-entry", success: true });
 });
 
 app.get(["/api", "/"], (_req, res) => {

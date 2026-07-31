@@ -1,6 +1,9 @@
 # Keep the Vercel deploy payload lean and Node-only.
 # Python BDC engine / Playwright / local DBs are not used on Vercel serverless.
 
+requirements.txt
+pyproject.toml
+main.py
 artifacts/api-server/**/*.py
 artifacts/api-server/**/*.pyc
 artifacts/api-server/**/__pycache__
@@ -9,6 +12,7 @@ artifacts/api-server/**/*.db-*
 artifacts/api-server/bdc_production.db
 artifacts/api-server/playwright_scraper.py
 artifacts/api-server/scraper/
+artifacts/api-server/express-entry/
 artifacts/mockup-sandbox/
 artifacts/bdc-dashboard/tests/
 **/node_modules/
