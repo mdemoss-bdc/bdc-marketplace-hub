@@ -11,15 +11,25 @@ import {
   Link2, Copy, Check, MapPin,
   RefreshCw, CreditCard, AlertTriangle, Film,
 } from 'lucide-react';
+import { SetupGuideButton } from '@/components/SetupGuideDrawer';
 
 const API_BASE = '/api';
 
 // ── Small shared sub-components ────────────────────────────────────────
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function SectionLabel({
+  children,
+  guideId,
+}: {
+  children: React.ReactNode;
+  guideId?: string;
+}) {
   return (
-    <div className="text-sm font-semibold text-foreground/80 uppercase tracking-wider pb-1 border-b border-border">
-      {children}
+    <div className="flex items-center justify-between gap-2 pb-1 border-b border-border">
+      <div className="text-sm font-semibold text-foreground/80 uppercase tracking-wider">
+        {children}
+      </div>
+      {guideId && <SetupGuideButton guideId={guideId} label="❓ Setup Guide" />}
     </div>
   );
 }
@@ -633,9 +643,10 @@ export default function Settings() {
       {/* ── 2. Facebook / Meta Integration ────────────────────────────── */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 flex-wrap">
             <Link2 className="w-4 h-4 text-blue-500" />
             Facebook / Meta Integration
+            <SetupGuideButton guideId="meta-api-credentials" label="❓ Setup Guide" />
           </CardTitle>
           <CardDescription>
             Connect Facebook Business via Meta OAuth, or paste credentials manually.
@@ -651,7 +662,7 @@ export default function Settings() {
             <div className="space-y-6">
               {/* Connect Facebook Business (OAuth) */}
               <div className="space-y-3">
-                <SectionLabel>Connect Facebook Business</SectionLabel>
+                <SectionLabel guideId="meta-api-credentials">Connect Facebook Business</SectionLabel>
                 {fbOAuthMsg && (
                   <StatusBanner ok={fbOAuthMsgOk} message={fbOAuthMsg} />
                 )}
@@ -732,7 +743,7 @@ export default function Settings() {
               {/* Catalog Feed */}
               {catalogUrl && (
                 <div className="space-y-3">
-                  <SectionLabel>Catalog Feed</SectionLabel>
+                  <SectionLabel guideId="meta-catalog-feed">Catalog Feed</SectionLabel>
 
                   <div className="space-y-2">
                     <Label>Feed URL</Label>
@@ -773,7 +784,7 @@ export default function Settings() {
 
               {/* Meta API Credentials */}
               <div className="space-y-3">
-                <SectionLabel>Meta API Credentials</SectionLabel>
+                <SectionLabel guideId="meta-api-credentials">Meta API Credentials</SectionLabel>
 
                 <div className="space-y-2">
                   <Label htmlFor="fbPageId">Facebook Page ID</Label>
@@ -818,9 +829,10 @@ export default function Settings() {
       {/* ── 3. Scraper & Sync Schedules ───────────────────────────────── */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 flex-wrap">
             <RefreshCw className="w-4 h-4 text-emerald-500" />
             Scraper &amp; Sync Schedules
+            <SetupGuideButton guideId="scraper-inventory-url" label="❓ Setup Guide" />
           </CardTitle>
           <CardDescription>
             Inventory source URLs, salesperson scope filter, and sync frequency.
@@ -837,7 +849,7 @@ export default function Settings() {
 
               {/* Source URLs */}
               <div className="space-y-3">
-                <SectionLabel>Inventory Source URLs</SectionLabel>
+                <SectionLabel guideId="scraper-inventory-url">Inventory Source URLs</SectionLabel>
 
                 <div className="space-y-2">
                   <Label htmlFor="invUrlUsed">Used Inventory Page</Label>
@@ -1035,11 +1047,12 @@ export default function Settings() {
       {/* ── TikTok Account ──────────────────────────────────────────── */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 flex-wrap">
             <div className="w-4 h-4 rounded bg-[#ff0050] flex items-center justify-center flex-shrink-0">
               <Film className="w-2.5 h-2.5 text-white" />
             </div>
             TikTok Account
+            <SetupGuideButton guideId="tiktok-oauth-connect" label="❓ Setup Guide" />
           </CardTitle>
           <CardDescription>
             Connect your TikTok account to post vehicle videos directly from the TikTok Hub.

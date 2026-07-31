@@ -9,6 +9,7 @@ import {
   Building2, ChevronDown, Users, User, Crown, Key,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { SetupGuideButton } from '@/components/SetupGuideDrawer';
 
 /* ── Types ──────────────────────────────────────────────────────── */
 
@@ -423,7 +424,11 @@ function TikTokConfigPanel({ authFetch }: { authFetch: ReturnType<typeof useAuth
             <Film className="w-4 h-4 text-[#ff0050]" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold">TikTok Integration</h2>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-sm font-semibold">TikTok Integration</h2>
+              <SetupGuideButton guideId="tiktok-developer-app" label="❓ Setup Guide" />
+              <SetupGuideButton guideId="tiktok-verification-file" label="❓ Verification File" />
+            </div>
             <p className="text-xs text-muted-foreground">
               Global API credentials — active for all subscribers instantly on save
             </p>
@@ -675,6 +680,22 @@ export default function AdminPage() {
       {/* ── TikTok panel ────────────────────────────────────────── */}
       <TikTokConfigPanel authFetch={authFetch} />
 
+      {/* ── Webhooks & API endpoints (env-backed; guide only) ───── */}
+      <div className="rounded-xl border border-border bg-card overflow-hidden">
+        <div className="px-5 py-4 flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-sm font-semibold">Webhook Endpoints &amp; API Keys</h2>
+              <SetupGuideButton guideId="webhooks-api-keys" label="❓ Setup Guide" />
+            </div>
+            <p className="text-xs text-muted-foreground mt-1 max-w-xl">
+              Stripe, Twilio, and inbound lead URLs are registered in provider consoles and
+              configured via server environment variables — never wipe user passwords when rotating keys.
+            </p>
+          </div>
+        </div>
+      </div>
+
       {/* ── Stats ───────────────────────────────────────────────── */}
       {!isLoading && !error && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -712,11 +733,12 @@ export default function AdminPage() {
           <div className="rounded-xl border overflow-hidden">
 
             {/* Section header */}
-            <div className="px-4 py-2.5 bg-amber-50/70 dark:bg-amber-950/20 border-b flex items-center gap-2">
+            <div className="px-4 py-2.5 bg-amber-50/70 dark:bg-amber-950/20 border-b flex items-center gap-2 flex-wrap">
               <Building2 className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
               <span className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
                 Rooftop Accounts
               </span>
+              <SetupGuideButton guideId="user-rooftop-management" label="❓ Setup Guide" />
               <span className="ml-auto text-xs text-amber-600/70 dark:text-amber-400/60">
                 {rooftopGroups.length} rooftop{rooftopGroups.length !== 1 ? 's' : ''}
                 {' · '}

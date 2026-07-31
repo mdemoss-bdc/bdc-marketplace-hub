@@ -37,6 +37,7 @@ import {
   daysOnLot,
   type ScriptVehicle,
 } from '@/lib/tiktok-scripter';
+import { SetupGuideButton } from '@/components/SetupGuideDrawer';
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -1142,7 +1143,17 @@ export default function TikTokHub() {
               <Settings className={cn('w-3.5 h-3.5', isConnected ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground')} />
             </div>
             <div className="text-left min-w-0">
-              <p className="text-sm font-semibold">⚙️ TikTok Connection &amp; Account Setup</p>
+              <p className="text-sm font-semibold flex items-center gap-2 flex-wrap">
+                ⚙️ TikTok Connection &amp; Account Setup
+                <span
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  className="inline-flex gap-2"
+                >
+                  <SetupGuideButton guideId="tiktok-oauth-connect" label="❓ Setup Guide" />
+                  <SetupGuideButton guideId="tiktok-developer-app" label="❓ App Keys" />
+                </span>
+              </p>
               {!setupOpen && (
                 <p className="text-xs mt-0.5 font-medium">
                   {isConnected

@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Loader2 } from 'lucide-react';
+import { SetupGuideButton } from '@/components/SetupGuideDrawer';
 
 export default function LeadGateway() {
   const [phone, setPhone] = useState('');
@@ -59,7 +60,11 @@ export default function LeadGateway() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-display font-bold tracking-tight">Lead Gateway</h1>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 className="text-3xl font-display font-bold tracking-tight">Lead Gateway</h1>
+          <SetupGuideButton guideId="lead-gateway" label="❓ Setup Guide" />
+          <SetupGuideButton guideId="webhooks-api-keys" label="❓ Webhooks" />
+        </div>
         <p className="text-muted-foreground mt-1">Test the BDC automation engine with sample leads</p>
       </div>
 

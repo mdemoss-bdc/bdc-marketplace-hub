@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useLocation } from 'wouter';
 import { useAuth } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,10 @@ import {
   AlertCircle, AlertTriangle, RefreshCw, Sparkles,
   Rss, Store, Heart, Settings, LayoutDashboard,
   MailOpen, Zap, Bot, Trash2, Film, Users, Video,
+  HelpCircle, Shield, FileText,
 } from 'lucide-react';
+import { ROUTE_SETUP_GUIDES, SETUP_GUIDES } from '@/lib/setupGuides';
+import { SetupGuideDrawer } from '@/components/SetupGuideDrawer';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ChatMsg { role: 'user' | 'assistant'; content: string }
@@ -247,6 +250,108 @@ const GUIDES: Record<string, Guide[]> = {
       ],
     },
   ],
+  '/admin': [
+    {
+      title: 'Configure TikTok Developer keys',
+      icon: Film,
+      steps: [
+        'Open Admin Console → TikTok Integration panel.',
+        'In TikTok Developer Portal, create an app and copy Client Key + Client Secret.',
+        'Register Redirect URI: https://[your-domain]/api/tiktok/callback',
+        'Paste both keys here and click Save Credentials — active instantly for all users.',
+        'Click ❓ Setup Guide next to the panel for the full portal walkthrough.',
+      ],
+    },
+    {
+      title: 'Reset / temporary password for a user',
+      icon: Shield,
+      steps: [
+        'Find the user under Rooftop Accounts or Individual Accounts.',
+        'Click Reset / Temp Password → enter or auto-generate a temporary password.',
+        'Click Set Temporary Password — hash updates and must_change_password becomes true.',
+        'On next login the user must set a new password before accessing the desk.',
+        'Other users\' credentials are never modified by this action.',
+      ],
+    },
+    {
+      title: 'Webhook endpoints for Twilio & Stripe',
+      icon: Settings,
+      steps: [
+        'Click ❓ Setup Guide on Webhook Endpoints in Admin Console.',
+        'Register Stripe: POST /api/v1/billing/webhook with STRIPE_WEBHOOK_SECRET.',
+        'Register Twilio inbound SMS: POST /api/v1/twilio/inbound.',
+        'Set APP_BASE_URL to your public HTTPS origin before going live.',
+      ],
+    },
+  ],
+  '/leads': [
+    {
+      title: 'Work the Lead Center pipeline',
+      icon: Users,
+      steps: [
+        'Open Lead Center to see sessions with status badges.',
+        'Escalated leads are highlighted — take those first.',
+        'Open a session to review bot replies and customer messages.',
+        'Use Lead Gateway to dry-run NLP before wiring Twilio.',
+      ],
+    },
+  ],
+  '/lead-gateway': [
+    {
+      title: 'Test the inbound lead engine',
+      icon: Zap,
+      steps: [
+        'Enter a phone number and a natural-language message.',
+        'Submit — review intent, reply, escalated flag, and booked_slot.',
+        'Confirm the lead appears in Lead Center.',
+        'When ready, point Twilio at /api/v1/twilio/inbound (see Setup Guide).',
+      ],
+    },
+  ],
+  '/forms': [
+    {
+      title: 'Paperwork Desk basics',
+      icon: FileText,
+      steps: [
+        'Paperwork Desk holds deal jackets and document workflows for the desk.',
+        'Complete required fields for the active deal before marking ready.',
+        'Inbound leads still flow through Lead Center / Lead Gateway — not this page.',
+      ],
+    },
+  ],
+  '/team': [
+    {
+      title: 'Invite reps and manage seats',
+      icon: Users,
+      steps: [
+        'Copy your referral link from Referrals / Profile and share with sales reps.',
+        'New signups via your link join the rooftop and consume one seat.',
+        'Use Add More Seats to purchase extras through Stripe when the base 10 are full.',
+      ],
+    },
+  ],
+  '/email-desk': [
+    {
+      title: 'Email Desk follow-ups',
+      icon: MailOpen,
+      steps: [
+        'Review queued customer emails and send or schedule follow-ups.',
+        'SMTP credentials are configured via server environment variables (not per-user UI).',
+        'APP_BASE_URL must be set so links inside emails resolve correctly.',
+      ],
+    },
+  ],
+  '/appointments': [
+    {
+      title: 'Appointment board',
+      icon: LayoutDashboard,
+      steps: [
+        'Appointments are created when the BDC NLP books a slot from SMS or Lead Gateway.',
+        'Open Appointments to see customer, time, and vehicle interest.',
+        'Follow up on no-shows from Lead Center sessions.',
+      ],
+    },
+  ],
 };
 
 const DEFAULT_GUIDES: Guide[] = [
@@ -277,11 +382,13 @@ const DEFAULT_GUIDES: Guide[] = [
 
 const SUGGESTED_QUESTIONS: Record<string, string[]> = {
   '/tiktok': [
-    'How do I connect my TikTok account?',
-    'Why is my TikTok video not showing on my profile yet?',
+    'How do I pair my account?',
+    'Why is my feed push failing?',
+    'How do I set Client Key and Redirect URI?',
     'What are the TikTok trial limits for free users?',
   ],
   '/marketplace-hub': [
+    'How do I set the scraper Target Inventory URL?',
     'Why is my Meta feed showing "invalid price" errors?',
     'How do I add vehicles to the posting queue?',
     'My feed URL returns 0 vehicles — what\'s wrong?',
@@ -300,11 +407,44 @@ const SUGGESTED_QUESTIONS: Record<string, string[]> = {
     'Where do I find my Facebook Page ID?',
     'How do I get a Meta catalog access token?',
     'My inventory isn\'t syncing — how do I fix it?',
+    'How do I connect TikTok from Settings?',
   ],
   '/customer-mail': [
     'How do I add my store logo to letters?',
     'What\'s the difference between a thank-you and an anniversary letter?',
     'Where does the return address on letters come from?',
+  ],
+  '/admin': [
+    'How do I set TikTok Client Key and Secret?',
+    'How do I assign a temporary password?',
+    'What redirect URI do I register in TikTok?',
+    'Where do I configure Stripe and Twilio webhooks?',
+  ],
+  '/leads': [
+    'How does the lead pipeline work?',
+    'How do I wire Twilio inbound SMS?',
+    'Why was a lead escalated?',
+  ],
+  '/lead-gateway': [
+    'How do I test the BDC lead engine?',
+    'What URL should external forms POST to?',
+    'How do I book an appointment from a test message?',
+  ],
+  '/forms': [
+    'What is Paperwork Desk used for?',
+    'How do leads from forms reach the BDC engine?',
+  ],
+  '/team': [
+    'How do I invite a rep to my rooftop?',
+    'How do I add more seats?',
+  ],
+  '/email-desk': [
+    'How does Email Desk send follow-ups?',
+    'Where do I configure SMTP?',
+  ],
+  '/appointments': [
+    'Where do appointments come from?',
+    'How do I confirm a booked slot?',
   ],
   '/': [
     'How do I post vehicle walkarounds to TikTok?',
@@ -314,17 +454,43 @@ const SUGGESTED_QUESTIONS: Record<string, string[]> = {
 };
 
 const PAGE_LABELS: Record<string, string> = {
-  '/': 'Dashboard',
-  '/tiktok': 'TikTok AI Video Studio',
+  '/': 'Dashboard Hub',
+  '/dashboard': 'Dashboard Hub',
+  '/tiktok': 'TikTok Hub',
   '/marketplace-hub': 'Marketplace Hub',
   '/wishlist': 'Inventory Wishlist',
   '/free-generator': 'Free AI Generator',
   '/customer-mail': 'Customer Cards & Mail',
-  '/settings': 'Settings',
+  '/settings': 'Settings / Integrations',
   '/leads': 'Lead Center',
+  '/lead-gateway': 'Lead Gateway',
   '/forms': 'Paperwork Desk',
   '/appointments': 'Appointments',
+  '/admin': 'Admin Console',
+  '/team': 'Team & Seats',
+  '/email-desk': 'Email Desk',
+  '/referrals': 'Referrals',
+  '/pricing': 'Pricing',
 };
+
+/** Normalize wouter path → guide/suggestion key. */
+function resolveHelpRoute(location: string): string {
+  const path = (location.split('?')[0] || '/').replace(/\/+$/, '') || '/';
+  if (GUIDES[path] || SUGGESTED_QUESTIONS[path]) return path;
+  if (path === '/dashboard') return '/';
+  const aliases: Record<string, string> = {
+    '/tiktok-hub': '/tiktok',
+    '/lead-center': '/leads',
+    '/paperwork-desk': '/forms',
+  };
+  if (aliases[path]) return aliases[path];
+  // Prefix match longest known key
+  const keys = Object.keys(PAGE_LABELS).filter((k) => k !== '/').sort((a, b) => b.length - a.length);
+  for (const k of keys) {
+    if (path === k || path.startsWith(`${k}/`)) return k;
+  }
+  return path;
+}
 
 // ── Guide accordion item ───────────────────────────────────────────────────────
 function GuideItem({ guide }: { guide: Guide }) {
@@ -406,6 +572,7 @@ export function HelpAssistant() {
 
   const [open, setOpen]       = useState(false);
   const [tab, setTab]         = useState<'guides' | 'diagnostics' | 'chat'>('guides');
+  const [setupGuideId, setSetupGuideId] = useState<string | null>(null);
 
   // Chat
   const [history, setHistory]     = useState<ChatMsg[]>([]);
@@ -418,6 +585,8 @@ export function HelpAssistant() {
   const [diagState, setDiagState]     = useState<'idle' | 'running' | 'done'>('idle');
   const [diagResults, setDiagResults] = useState<DiagResult[]>([]);
   const [userId, setUserId]           = useState<number | null>(null);
+
+  const helpRoute = useMemo(() => resolveHelpRoute(location), [location]);
 
   // Load user_id for diagnostics feed URL
   useEffect(() => {
@@ -433,10 +602,11 @@ export function HelpAssistant() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history, chatLoading]);
 
-  // Guides for current page
-  const guides = GUIDES[location] ?? DEFAULT_GUIDES;
-  const suggestions = SUGGESTED_QUESTIONS[location] ?? SUGGESTED_QUESTIONS['/'];
-  const pageLabel = PAGE_LABELS[location] ?? 'this page';
+  // Guides for current page (route-aware)
+  const guides = GUIDES[helpRoute] ?? DEFAULT_GUIDES;
+  const suggestions = SUGGESTED_QUESTIONS[helpRoute] ?? SUGGESTED_QUESTIONS['/'];
+  const pageLabel = PAGE_LABELS[helpRoute] ?? PAGE_LABELS[location] ?? 'this page';
+  const setupGuideIds = ROUTE_SETUP_GUIDES[helpRoute] ?? [];
 
   // ── Diagnostics ────────────────────────────────────────────────────────────
   const runDiagnostics = useCallback(async () => {
@@ -580,6 +750,7 @@ export function HelpAssistant() {
         body: JSON.stringify({
           message: text,
           context: pageLabel,
+          route: helpRoute,
           history: history.slice(-8),
         }),
       });
@@ -623,6 +794,12 @@ export function HelpAssistant() {
 
   return (
     <>
+      <SetupGuideDrawer
+        guideId={setupGuideId}
+        open={!!setupGuideId}
+        onClose={() => setSetupGuideId(null)}
+      />
+
       {/* ── Panel ──────────────────────────────────────────────────────── */}
       {open && (
         <>
@@ -744,9 +921,37 @@ export function HelpAssistant() {
                   </div>
                   {guides.map((g, i) => <GuideItem key={i} guide={g} />)}
 
+                  {setupGuideIds.length > 0 && (
+                    <div className="pt-2 border-t border-border space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Manual Settings — Setup Guides
+                      </p>
+                      <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Exhaustive walkthroughs for the configurable fields on this page.
+                      </p>
+                      <div className="space-y-1.5">
+                        {setupGuideIds.map((id) => {
+                          const g = SETUP_GUIDES[id];
+                          if (!g) return null;
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              onClick={() => setSetupGuideId(id)}
+                              className="w-full text-left px-3 py-2 rounded-lg border border-sky-500/25 bg-sky-500/5 text-xs hover:bg-sky-500/10 transition-colors flex items-center gap-2"
+                            >
+                              <HelpCircle className="w-3.5 h-3.5 flex-shrink-0 text-sky-600 dark:text-sky-400" />
+                              <span className="font-medium text-foreground/90">{g.title}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="pt-2 border-t border-border">
                     <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2.5">
-                      Common Questions
+                      Common Questions for {pageLabel}
                     </p>
                     <div className="space-y-1.5">
                       {suggestions.map((q, i) => (

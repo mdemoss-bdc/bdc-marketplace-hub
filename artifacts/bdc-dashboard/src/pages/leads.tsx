@@ -44,6 +44,7 @@ import {
   Sparkles,
   User,
 } from 'lucide-react';
+import { SetupGuideButton } from '@/components/SetupGuideDrawer';
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -324,9 +325,13 @@ export default function Leads() {
               Incoming Lead Tracking
             </span>
           </div>
-          <h1 className="bg-gradient-to-b from-white to-slate-400 bg-clip-text font-display text-2xl font-bold tracking-tight text-transparent md:text-3xl">
-            BDC Lead Center
-          </h1>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="bg-gradient-to-b from-white to-slate-400 bg-clip-text font-display text-2xl font-bold tracking-tight text-transparent md:text-3xl">
+              BDC Lead Center
+            </h1>
+            <SetupGuideButton guideId="lead-gateway" label="❓ Setup Guide" />
+            <SetupGuideButton guideId="webhooks-api-keys" label="❓ Webhooks" />
+          </div>
           <p className="mt-1.5 text-sm tracking-tight text-slate-400">
             15-minute response SLA · AI reply drafts · one-tap log &amp; schedule
           </p>

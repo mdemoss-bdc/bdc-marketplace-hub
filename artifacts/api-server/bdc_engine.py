@@ -17033,6 +17033,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             # ── AI Help Assistant Chat ────────────────────────────────────
             _msg = str(payload.get('message', '') or '').strip()
             _ctx = str(payload.get('context', '') or '').strip()
+            _route = str(payload.get('route', '') or '').strip()
             _history = payload.get('history', [])  # list of {role, content}
             if not _msg:
                 self._json({'error': 'message is required'}, 400); return
@@ -17041,10 +17042,16 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             _base_url = os.environ.get(
                 'AI_INTEGRATIONS_OPENAI_BASE_URL', 'https://api.openai.com/v1'
             ).rstrip('/')
+            _origin = (APP_BASE_URL or '').rstrip('/') or 'https://your-domain.com'
 
             _SYSTEM = (
                 "You are the BDC AI Assistant embedded inside BDC Manager Desk — an automotive "
                 "dealership sales automation platform used by BDC managers and salespeople.\n\n"
+                "Give direct operational support for the user's CURRENT page (see route context). "
+                "Prefer numbered steps that name exact UI labels. Point users to the inline "
+                "'❓ Setup Guide' buttons next to manual settings when a full portal walkthrough "
+                "is needed. Never invent credentials and NEVER suggest wiping or reseeding passwords "
+                "for existing users.\n\n"
                 "## Navigation & Role-Based Home Screen\n\n"
                 "### Individual Sales Reps (Pro accounts)\n"
                 "- After login, reps land directly on Marketplace Hub (/marketplace-hub) — "
@@ -17152,6 +17159,35 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 "- Required fields: fb_page_id, vehicle_id, title, description, availability, "
                 "condition, state_of_vehicle, price, link, image_link\n"
                 "- Submit as a Scheduled Feed in Meta Commerce Manager -> Catalogs -> Data Sources.\n\n"
+                "### Manual Settings & ❓ Setup Guides\n"
+                "Every configurable field has an inline '❓ Setup Guide' drawer with overview, "
+                "numbered portal steps, copyable URLs, and troubleshooting.\n"
+                f"- TikTok OAuth Redirect URI (exact): {_origin}/api/tiktok/callback\n"
+                f"- TikTok verification paths: {_origin}/tiktok-developers-site-verification.html "
+                f"(and .txt variants served by the API)\n"
+                "- Admin Console → TikTok Integration: paste Client Key + Client Secret "
+                "(global; live immediately). Also documentable via TIKTOK_CLIENT_KEY / "
+                "TIKTOK_CLIENT_SECRET env vars.\n"
+                "- Admin → Reset / Temp Password: sets password hash + must_change_password=true; "
+                "user must complete Forced Password Change modal on next login. Other accounts untouched.\n"
+                f"- Stripe webhook: {_origin}/api/v1/billing/webhook (STRIPE_WEBHOOK_SECRET)\n"
+                f"- Twilio inbound SMS: {_origin}/api/v1/twilio/inbound\n"
+                f"- Lead intake POST: {_origin}/api/v1/lead\n"
+                f"- Meta CSV feed: {_origin}/api/feeds/meta?format=csv&user_id=[id] "
+                "(or catalog_id=…)\n"
+                "- Marketplace Hub scraper: Location Name + New/Used inventory listing URLs "
+                "(not VDPs), optional Salesperson ID, sync frequency, Meta BM/Catalog/Pixel IDs.\n"
+                "- Settings → Facebook: OAuth Connect or manual Page ID + long-lived Access Token; "
+                "optional Catalog Token for ?token= feed gate.\n"
+                "- Cox CRM optional: COX_CLIENT_ID, COX_CLIENT_SECRET, COX_DEALER_ID — without them "
+                "leads stay local only.\n\n"
+                "### Page-specific coaching\n"
+                "- /tiktok: pairing, privacy, catchphrase, publish failures, trial limits, app keys.\n"
+                "- /marketplace-hub: scraper URLs, CSV feed, Meta catalog, posting queue, diagnostics.\n"
+                "- /settings: Meta credentials, scraper schedules, TikTok reconnect.\n"
+                "- /admin: TikTok keys, verification file, rooftop users, temp passwords, webhooks.\n"
+                "- /leads & /lead-gateway: pipeline, escalation, Twilio wiring, test leads.\n"
+                "- /forms (Paperwork Desk): deal documents — leads still enter via Lead Gateway/SMS.\n\n"
                 "### Master Admin Tools (user: mdemoss)\n"
                 "- The '⚡ AI Fix' button appears in the sidebar beside the Engine Status indicator "
                 "and is visible ONLY to the master admin account (mdemoss / is_master_admin = true).\n"
@@ -17182,10 +17218,14 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             )
 
             _messages = [{'role': 'system', 'content': _SYSTEM}]
-            if _ctx:
+            if _ctx or _route:
                 _messages.append({
                     'role': 'system',
-                    'content': f'The user is currently viewing the "{_ctx}" page.'
+                    'content': (
+                        f'The user is currently on route "{_route or "unknown"}" '
+                        f'(page label: "{_ctx or "unknown"}"). '
+                        'Answer with steps for THIS view first; mention other pages only if needed.'
+                    ),
                 })
             # Append conversation history (last 8 turns to stay within context)
             for _h in (_history or [])[-8:]:
@@ -17196,6 +17236,78 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             # ── Keyword-based smart fallback (used when AI key is absent or call fails)
             def _smart_fallback(msg: str) -> str:
                 ml = msg.lower()
+                route = (_route or '').lower()
+
+                # Pair / connect TikTok account
+                if any(k in ml for k in (
+                    'pair my account', 'pair account', 'connect my tiktok',
+                    'how do i pair', 'reconnect tiktok',
+                )) or (route.startswith('/tiktok') and 'pair' in ml):
+                    return (
+                        "Pair / connect your TikTok account:\n\n"
+                        "1. Confirm a master admin saved Client Key + Client Secret under "
+                        "Admin Console → TikTok Integration (or env vars).\n"
+                        "2. Open TikTok Hub → expand ⚙️ TikTok Connection & Account Setup.\n"
+                        "3. Click Connect TikTok Account and authorize BDC Manager Desk.\n"
+                        "4. Set Default Video Privacy (Public for reach).\n"
+                        "5. If publish fails after connect, click Reconnect TikTok — tokens expire.\n\n"
+                        "Use the ❓ Setup Guide buttons on that card for Redirect URI and "
+                        "verification-file steps."
+                    )
+
+                # Feed push / publish failing
+                if any(k in ml for k in (
+                    'feed push', 'push failing', 'publish fail', 'video not showing',
+                    'not posting', 'upload failed', 'post failed',
+                )):
+                    return (
+                        "TikTok feed push / publish troubleshooting:\n\n"
+                        "1. Status must show Connected — Reconnect if session expired.\n"
+                        "2. Video must be MP4/MOV under 500 MB.\n"
+                        "3. Caption ≤ 2,200 characters; title uses the first 150.\n"
+                        "4. Free trial: 3 posts/day for 5 days — upgrade if locked.\n"
+                        "5. TikTok may take several minutes to process after a 200 OK upload.\n"
+                        "6. Admin keys + exact Redirect URI "
+                        f"({_origin}/api/tiktok/callback) must be registered in the "
+                        "TikTok Developer Portal.\n\n"
+                        "Open ❓ Setup Guide on TikTok Hub for the full checklist."
+                    )
+
+                # Temp password / forced reset
+                if any(k in ml for k in (
+                    'temporary password', 'temp password', 'must_change_password',
+                    'forced password', 'force change password', 'reset / temp',
+                )):
+                    return (
+                        "Admin temporary password flow:\n\n"
+                        "1. Admin Console → find the user → Reset / Temp Password.\n"
+                        "2. Enter or auto-generate a temp password → Set Temporary Password.\n"
+                        "3. That user's hash updates and must_change_password = true. "
+                        "No other accounts are changed.\n"
+                        "4. On login they see an un-dismissible Forced Password Change modal.\n"
+                        "5. After POST /api/auth/force-change-password succeeds, the flag clears "
+                        "and they get a full session into the desk."
+                    )
+
+                # Webhooks / API keys
+                if any(k in ml for k in (
+                    'webhook', 'twilio inbound', 'stripe webhook', 'api key',
+                    'redirect uri', 'client key', 'client secret', 'verification file',
+                )):
+                    return (
+                        "Webhooks, Redirect URIs, and API keys:\n\n"
+                        f"• TikTok Redirect URI: {_origin}/api/tiktok/callback\n"
+                        f"• Stripe webhook: {_origin}/api/v1/billing/webhook "
+                        "(set STRIPE_WEBHOOK_SECRET)\n"
+                        f"• Twilio SMS: {_origin}/api/v1/twilio/inbound\n"
+                        f"• Lead POST: {_origin}/api/v1/lead\n"
+                        f"• TikTok verification: {_origin}/tiktok-developers-site-verification.html\n"
+                        "• TikTok Client Key/Secret: Admin Console → TikTok Integration "
+                        "(or TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET).\n"
+                        "• Set APP_BASE_URL to your public HTTPS origin.\n\n"
+                        "Click ❓ Setup Guide next to Webhook Endpoints in Admin Console "
+                        "for the full provider walkthrough."
+                    )
 
                 # TikTok / walkaround / video posting
                 if any(k in ml for k in (

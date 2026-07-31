@@ -76,6 +76,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import VideoUploadDropzone from '@/components/VideoUploadDropzone';
+import { SetupGuideButton } from '@/components/SetupGuideDrawer';
 
 const API_BASE = '/api';
 
@@ -3345,7 +3346,16 @@ export default function MarketplaceHub() {
               <Settings className="w-3.5 h-3.5 text-primary" />
             </div>
             <div className="text-left min-w-0">
-              <p className="text-sm font-semibold">⚙️ Inventory Scraper &amp; Source Setup</p>
+              <p className="text-sm font-semibold flex items-center gap-2 flex-wrap">
+                ⚙️ Inventory Scraper &amp; Source Setup
+                <span
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  className="inline-flex"
+                >
+                  <SetupGuideButton guideId="scraper-inventory-url" label="❓ Setup Guide" />
+                </span>
+              </p>
               {!scraperOpen && hasAnyInventoryUrl && (
                 <p className="text-xs text-muted-foreground mt-0.5 truncate">
                   {locationSummary || primaryUsedUrl || primaryNewUrl}
@@ -3554,14 +3564,17 @@ export default function MarketplaceHub() {
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                       Meta Catalog &amp; Facebook Marketplace Integration
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => setShowMetaGuide(true)}
-                      className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-300 dark:text-blue-400 hover:underline underline-offset-2"
-                    >
-                      <BookOpen className="w-3 h-3" />
-                      Setup Guide
-                    </button>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <SetupGuideButton guideId="meta-api-credentials" label="❓ Setup Guide" />
+                      <button
+                        type="button"
+                        onClick={() => setShowMetaGuide(true)}
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-300 dark:text-blue-400 hover:underline underline-offset-2"
+                      >
+                        <BookOpen className="w-3 h-3" />
+                        Feed Connect Steps
+                      </button>
+                    </div>
                   </div>
 
                   <div className="space-y-3">
