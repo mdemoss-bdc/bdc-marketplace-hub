@@ -607,6 +607,187 @@ async function getDailyPostingQueue(userId, date) {
   }
 }
 
+const QUEUE_DAILY_LIMIT = 10;
+const QUEUE_WINDOW_START_HR = 8; // 8:00 AM
+const QUEUE_WINDOW_END_HR = 21; // 9:00 PM
+const NO_INVENTORY_MSG =
+  'No active inventory available to queue. Run Sync All Inventory first.';
+
+function enrichQueueItem(row, inventoryByVin = {}) {
+  const inv = inventoryByVin[String(row.vin || '').toUpperCase()] || {};
+  const year = Number(row.year) || Number(inv.year) || 0;
+  const make = row.make || inv.make || '';
+  const model = row.model || inv.model || '';
+  const trim = row.trim || inv.trim || '';
+  const title = [year || '', make, model, trim]
+    .filter((p) => p !== null && p !== undefined && String(p).trim() !== '')
+    .join(' ')
+    .trim();
+  const stockNumber = row.stock_number || inv.stock_number || '';
+  const price = Number(inv.price) || 0;
+  const link = inv.vdp_url || '';
+  const imageUrl = inv.image_url || '';
+  const scheduledFor = row.scheduled_time || '';
+  return {
+    ...row,
+    stockNumber,
+    stock_number: stockNumber,
+    title,
+    price,
+    link,
+    imageUrl,
+    image_url: imageUrl,
+    vdp_url: link,
+    vin: row.vin || '',
+    scheduled_for: scheduledFor,
+    scheduled_time: scheduledFor,
+    status: row.status || 'Pending',
+  };
+}
+
+/**
+ * Build today's Marketplace Hub posting_queue (max 10, 8 AM–9 PM rotation).
+ * Mirrors Python PostingQueueManager.generate_queue.
+ */
+async function generateDailyPostingQueue(userId, { date = '', force = false } = {}) {
+  await openMarketplaceDb();
+  const uid = Number(userId) || 0;
+  const target = date || new Date().toISOString().slice(0, 10);
+
+  const existing = await queryAll(
+    `SELECT * FROM posting_queue WHERE user_id = $1 AND queue_date = $2
+     ORDER BY scheduled_time ASC, id ASC`,
+    [uid, target],
+  );
+
+  if (existing.length && !force) {
+    return {
+      success: true,
+      skipped: true,
+      generated: 0,
+      count: 0,
+      total_existing: existing.length,
+      queue: existing.map((r) => enrichQueueItem(r)),
+      message: `Queue already exists (${existing.length} items). Use Regenerate to replace it.`,
+      date: target,
+    };
+  }
+
+  if (force) {
+    await query(`DELETE FROM posting_queue WHERE user_id = $1 AND queue_date = $2`, [
+      uid,
+      target,
+    ]);
+  }
+
+  const active = await queryAll(
+    `SELECT * FROM marketplace_inventory
+     WHERE user_id = $1 AND UPPER(status) = 'ACTIVE'
+     ORDER BY year DESC, price ASC`,
+    [uid],
+  );
+
+  if (!active.length) {
+    return {
+      success: false,
+      generated: 0,
+      count: 0,
+      total_existing: 0,
+      skipped: false,
+      queue: [],
+      message: NO_INVENTORY_MSG,
+      error: NO_INVENTORY_MSG,
+      reason: NO_INVENTORY_MSG,
+      date: target,
+    };
+  }
+
+  const vinMap = {};
+  const activeVins = [];
+  for (const v of active) {
+    const vin = String(v.vin || '').trim().toUpperCase();
+    if (!vin) continue;
+    vinMap[vin] = v;
+    activeVins.push(vin);
+  }
+
+  let available = activeVins;
+  if (activeVins.length) {
+    const placeholders = activeVins.map((_, i) => `$${i + 2}`).join(', ');
+    const cycledRows = await queryAll(
+      `SELECT vin FROM posting_cycle WHERE user_id = $1 AND vin IN (${placeholders})`,
+      [uid, ...activeVins],
+    );
+    const cycled = new Set(cycledRows.map((r) => String(r.vin || '').toUpperCase()));
+    available = activeVins.filter((vin) => !cycled.has(vin));
+    if (!available.length) {
+      await query(`DELETE FROM posting_cycle WHERE user_id = $1`, [uid]);
+      available = [...activeVins];
+      console.log(`[QUEUE u${uid}] Full cycle complete — resetting posting rotation.`);
+    }
+  }
+
+  // Fisher–Yates shuffle
+  for (let i = available.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [available[i], available[j]] = [available[j], available[i]];
+  }
+  const selected = available.slice(0, QUEUE_DAILY_LIMIT);
+  const windowMin = (QUEUE_WINDOW_END_HR - QUEUE_WINDOW_START_HR) * 60;
+  const slotPool = Array.from({ length: windowMin }, (_, i) => i);
+  for (let i = slotPool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [slotPool[i], slotPool[j]] = [slotPool[j], slotPool[i]];
+  }
+  const timeSlots = slotPool.slice(0, selected.length).sort((a, b) => a - b);
+
+  for (let i = 0; i < selected.length; i += 1) {
+    const vin = selected[i];
+    const v = vinMap[vin] || {};
+    const totalMin = QUEUE_WINDOW_START_HR * 60 + timeSlots[i];
+    const hh = Math.floor(totalMin / 60);
+    const mm = totalMin % 60;
+    const schedTime = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+    await query(
+      `INSERT INTO posting_queue
+         (user_id, queue_date, vin, stock_number, year, make, model, trim,
+          scheduled_time, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'Pending')
+       ON CONFLICT (user_id, queue_date, vin) DO NOTHING`,
+      [
+        uid,
+        target,
+        vin,
+        v.stock_number || '',
+        Number(v.year) || 0,
+        v.make || '',
+        v.model || '',
+        v.trim || '',
+        schedTime,
+      ],
+    );
+  }
+
+  const queue = await queryAll(
+    `SELECT * FROM posting_queue WHERE user_id = $1 AND queue_date = $2
+     ORDER BY scheduled_time ASC, id ASC`,
+    [uid, target],
+  );
+  const enriched = queue.map((r) => enrichQueueItem(r, vinMap));
+  const count = enriched.length;
+
+  return {
+    success: true,
+    skipped: false,
+    generated: count,
+    count,
+    total_existing: existing.length,
+    queue: enriched,
+    message: 'Generated posting queue for today.',
+    date: target,
+  };
+}
+
 async function getInventoryByVin(vin) {
   await openMarketplaceDb();
   return findVehicleByVin(String(vin || '').trim().toUpperCase());
@@ -706,6 +887,7 @@ module.exports = {
   scheduleVehicle,
   setQueueStatus,
   getDailyPostingQueue,
+  generateDailyPostingQueue,
   getAutoPublish,
   setAutoPublish,
   openMarketplaceDb,

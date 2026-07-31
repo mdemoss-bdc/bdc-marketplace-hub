@@ -182,6 +182,18 @@ const saveDescriptionHandler = loadCjsHandler([
   path.resolve(process.cwd(), "../api/_routes/marketplace/save-description.js"),
 ]);
 
+const queueGenerateHandler = loadCjsHandler([
+  path.resolve(__dirname, "../../../../api/_routes/v1/marketplace/queue/generate.js"),
+  path.resolve(process.cwd(), "api/_routes/v1/marketplace/queue/generate.js"),
+  path.resolve(process.cwd(), "../api/_routes/v1/marketplace/queue/generate.js"),
+]);
+
+/** POST /api/v1/marketplace/queue/generate (+ /api/marketplace alias) */
+router.post(
+  ["/v1/marketplace/queue/generate", "/marketplace/queue/generate"],
+  asExpress(queueGenerateHandler),
+);
+
 /** POST /api/v1/marketplace/posting + /api/inventory/feed-status */
 router.post(
   ["/v1/marketplace/posting", "/inventory/feed-status", "/marketplace/feed-status"],

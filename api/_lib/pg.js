@@ -174,6 +174,15 @@ async function ensureCoreSchema() {
     `);
 
     await query(`
+      CREATE TABLE IF NOT EXISTS posting_cycle (
+        user_id INTEGER NOT NULL DEFAULT 0,
+        vin TEXT NOT NULL,
+        posted_date TEXT NOT NULL,
+        PRIMARY KEY (user_id, vin)
+      );
+    `);
+
+    await query(`
       CREATE TABLE IF NOT EXISTS marketplace_settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL DEFAULT ''

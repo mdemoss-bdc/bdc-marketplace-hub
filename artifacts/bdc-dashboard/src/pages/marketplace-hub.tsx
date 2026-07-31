@@ -1563,7 +1563,13 @@ function QueueView({ token }: { token: string }) {
         warnMessage: 'Could not generate today\'s posting queue.',
       });
       if (!ok) {
-        setGenMsg(typeof data.error === 'string' ? data.error : 'Failed to generate queue.');
+        setGenMsg(
+          typeof data.message === 'string'
+            ? data.message
+            : typeof data.error === 'string'
+              ? data.error
+              : 'Failed to generate queue.',
+        );
         return;
       }
       if (data.skipped) {

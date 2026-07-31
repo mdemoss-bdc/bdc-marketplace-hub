@@ -163,6 +163,7 @@ for (const p of tiktokVerifyPaths) {
 
 // ── Marketplace publisher / inventory ───────────────────────────────────────
 mount('/api/marketplace/queue/status', require('../_routes/marketplace/queue/status'));
+mount('/api/marketplace/queue/generate', require('../_routes/marketplace/queue/generate'));
 mount('/api/marketplace/queue', require('../_routes/marketplace/queue'));
 mount('/api/marketplace/inventory', require('../_routes/marketplace/inventory'));
 mount('/api/marketplace/schedule', require('../_routes/marketplace/schedule'));
@@ -171,6 +172,7 @@ mount('/api/marketplace/generate-copy', require('../_routes/marketplace/generate
 mount('/api/marketplace/settings', require('../_routes/marketplace/settings'));
 mount('/api/marketplace/generate-description', require('../_routes/generate-description'));
 mount('/api/marketplace/save-description', require('../_routes/marketplace/save-description'));
+mount('/api/v1/marketplace/queue/generate', require('../_routes/v1/marketplace/queue/generate'));
 mount('/api/v1/marketplace/queue', require('../_routes/v1/marketplace/queue'));
 mount('/api/v1/marketplace/posting', require('../_routes/v1/marketplace/posting'));
 mount('/api/inventory/feed-status', require('../_routes/inventory/feed-status'));
@@ -210,6 +212,8 @@ app.all(['/api', '/api/index', '/'], (_req, res) => {
       '/api/users/me',
       '/api/leads',
       '/api/marketplace/queue',
+      '/api/marketplace/queue/generate',
+      '/api/v1/marketplace/queue/generate',
       '/api/marketplace/inventory',
       '/api/marketplace/schedule',
       '/api/marketplace/toggle-auto',

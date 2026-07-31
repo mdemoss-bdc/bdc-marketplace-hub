@@ -10885,13 +10885,60 @@ class PostingQueueManager:
         return stats
 
     @staticmethod
+    def _enrich_queue_item(row: dict, vin_map: dict | None = None) -> dict:
+        inv = (vin_map or {}).get(row.get('vin', ''), {}) or {}
+        year = row.get('year') or inv.get('year') or 0
+        make = row.get('make') or inv.get('make') or ''
+        model = row.get('model') or inv.get('model') or ''
+        trim = row.get('trim') or inv.get('trim') or ''
+        title = ' '.join(
+            str(p).strip() for p in (year, make, model, trim) if str(p).strip() and str(p) != '0'
+        ).strip()
+        stock = row.get('stock_number') or inv.get('stock_number') or ''
+        sched = row.get('scheduled_time') or ''
+        link = inv.get('vdp_url') or ''
+        image = inv.get('image_url') or ''
+        out = dict(row)
+        out.update({
+            'stockNumber': stock,
+            'stock_number': stock,
+            'title': title,
+            'price': inv.get('price') or 0,
+            'link': link,
+            'imageUrl': image,
+            'image_url': image,
+            'vdp_url': link,
+            'scheduled_for': sched,
+            'scheduled_time': sched,
+            'status': row.get('status') or 'Pending',
+            'vin': row.get('vin') or '',
+        })
+        return out
+
+    @staticmethod
     def generate_queue(user_id: int, date: str = '', force: bool = False) -> dict:
         """Build the posting schedule for *user_id* on *date* (default: today)."""
         target = date or datetime.now().strftime('%Y-%m-%d')
+        no_inv_msg = (
+            'No active inventory available to queue. Run Sync All Inventory first.'
+        )
 
         existing = PostingQueueManager.get_queue(user_id, target)
         if existing and not force:
-            return {'generated': 0, 'total_existing': len(existing), 'skipped': True}
+            queue = [PostingQueueManager._enrich_queue_item(r) for r in existing]
+            return {
+                'success': True,
+                'generated': 0,
+                'count': 0,
+                'total_existing': len(existing),
+                'skipped': True,
+                'queue': queue,
+                'message': (
+                    f'Queue already exists ({len(existing)} items). '
+                    'Use Regenerate to replace it.'
+                ),
+                'date': target,
+            }
 
         if force:
             conn = sqlite3.connect(DB_FILE)
@@ -10912,8 +10959,18 @@ class PostingQueueManager:
 
         active = MarketplaceDB.get_inventory(user_id, status='ACTIVE')
         if not active:
-            return {'generated': 0, 'total_existing': 0, 'skipped': False,
-                    'reason': 'No active inventory to schedule'}
+            return {
+                'success': False,
+                'generated': 0,
+                'count': 0,
+                'total_existing': 0,
+                'skipped': False,
+                'queue': [],
+                'message': no_inv_msg,
+                'error': no_inv_msg,
+                'reason': no_inv_msg,
+                'date': target,
+            }
 
         active_vins = [v['vin'] for v in active]
         vin_map     = {v['vin']: v for v in active}
@@ -10953,7 +11010,7 @@ class PostingQueueManager:
         selected = available[:PostingQueueManager.DAILY_LIMIT]
 
         window_min  = (PostingQueueManager.WINDOW_END_HR - PostingQueueManager.WINDOW_START_HR) * 60
-        time_slots  = sorted(random.sample(range(window_min), len(selected)))
+        time_slots  = sorted(random.sample(range(window_min), len(selected))) if selected else []
 
         conn = sqlite3.connect(DB_FILE)
         try:
@@ -10983,8 +11040,20 @@ class PostingQueueManager:
         finally:
             conn.close()
 
-        return {'generated': len(selected), 'total_existing': len(existing),
-                'skipped': False, 'date': target}
+        queue = [
+            PostingQueueManager._enrich_queue_item(r, vin_map)
+            for r in PostingQueueManager.get_queue(user_id, target)
+        ]
+        return {
+            'success': True,
+            'generated': len(queue),
+            'count': len(queue),
+            'total_existing': len(existing),
+            'skipped': False,
+            'queue': queue,
+            'message': 'Generated posting queue for today.',
+            'date': target,
+        }
 
     @staticmethod
     def update_status(item_id: int, status: str, user_id: int = 0) -> bool:
@@ -17056,13 +17125,17 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             _consume_trial_quota(user, 'ai_post')
             self._json({'status': 'ok', 'post': post, 'vehicle': v})
 
-        elif path == "/api/v1/marketplace/queue/generate":
+        elif path in (
+            "/api/v1/marketplace/queue/generate",
+            "/api/marketplace/queue/generate",
+        ):
             if not self._require_subscription(user):
                 return
             force  = bool(payload.get('force', False))
             date   = payload.get('date', datetime.now().strftime('%Y-%m-%d'))
             result = PostingQueueManager.generate_queue(user['id'], date, force=force)
-            self._json({'status': 'ok', **result})
+            # Always HTTP 200 — including empty-inventory soft failure
+            self._json({**result, 'status': 'ok' if result.get('success', True) else 'empty'})
 
         elif path == "/api/v1/marketplace/queue/update":
             if not self._require_subscription(user):
