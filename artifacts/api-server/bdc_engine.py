@@ -11905,6 +11905,17 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]  # strip query string
 
+        # ── TikTok Developers site verification (plain text, no auth) ──
+        if path in ("/tiktok-developers-site-verification",
+                    "/tiktok-developers-site-verification/"):
+            _body = b"tiktok-developers-site-verification=kuNRyNnbQ1VmMSCYfvKT7kqGHbLlaTX7"
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', str(len(_body)))
+            self.end_headers()
+            self.wfile.write(_body)
+            return
+
         # ── TikTok explicit verification file (named route, no auth) ────
         if path in ("/tiktokoZoF3ekEa8cY5mr8gAPNIXDHRv0dvnLB.txt",
                     "/tiktokoZoF3ekEa8cY5mr8gAPNIXDHRv0dvnLB.txt/"):

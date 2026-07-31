@@ -25,6 +25,7 @@ import facebookRouter from "../src/routes/facebook";
 import marketplaceRouter from "../src/routes/marketplace";
 import syncRouter from "../src/routes/sync";
 import catalogRouter from "../src/routes/catalog";
+import tiktokVerificationRouter from "../src/routes/tiktok-verification";
 import { logger } from "../src/lib/logger";
 
 const require = createRequire(import.meta.url);
@@ -131,6 +132,9 @@ app.use(["/api/marketplace", "/marketplace"], (_req, res, next) => {
   res.type("application/json");
   next();
 });
+
+// TikTok domain verification must be at site root (not under /api).
+app.use(tiktokVerificationRouter);
 
 app.use("/api", healthRouter);
 app.use("/api", catalogRouter);

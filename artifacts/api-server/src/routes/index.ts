@@ -6,9 +6,11 @@ import facebookRouter from "./facebook";
 import marketplaceRouter from "./marketplace";
 import syncRouter from "./sync";
 import catalogRouter from "./catalog";
+import tiktokVerificationRouter from "./tiktok-verification";
 
 const router: IRouter = Router();
 
+router.use(tiktokVerificationRouter);
 router.use(healthRouter);
 router.use(catalogRouter);
 router.use(syncRouter);
