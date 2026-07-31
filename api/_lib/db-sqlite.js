@@ -8,13 +8,13 @@
 const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
-const { hashPassword, verifyPassword, looksLikePasswordHash, needsRehash } = require('./crypto-passwords');
+const { hashPassword, verifyPassword } = require('./crypto-passwords');
 const { randomHex, randomRecoveryId } = require('./random-token');
 
 /** Bootstrap password for mdemoss when no env secret is configured. */
 const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
-const DEFAULT_TESTER_PASSWORD = 'TestReviewer123!';
-const DEFAULT_JDEMOSS_PASSWORD = 'Jdemoss123!';
+const DEFAULT_TESTER_PASSWORD = 'TestReviewer2026!';
+const DEFAULT_JDEMOSS_PASSWORD = 'DeMoss123!$';
 
 /** Alternate spellings that resolve to the canonical username. */
 const USERNAME_ALIASES = {
@@ -171,7 +171,6 @@ function baselineAccounts() {
       org_role: 'admin',
       organization_id: 1,
       recovery_id: 'TR-DEMO-0020-BBBB',
-      syncBaselinePassword: true,
     },
     {
       username: 'jdemoss',
@@ -186,67 +185,38 @@ function baselineAccounts() {
       org_role: 'manager',
       organization_id: null,
       recovery_id: 'JD-DEMO-0022-CCCC',
-      // Keep demo password aligned with Jdemoss123! (or JDEMOSS_PASSWORD).
-      syncBaselinePassword: true,
     },
   ];
 }
 
 /**
- * Insert baseline account only when it does not already exist.
- * Never overwrites an existing password_hash.
+ * Non-destructive seed: INSERT … ON CONFLICT DO NOTHING.
+ * Never UPDATEs existing users rows or password_hash values.
+ * Password hashes may only change via Admin Console / Profile APIs.
  */
 function seedAccountIfMissing(db, spec) {
   const username = String(spec.username || '').trim().toLowerCase();
   if (!username) return;
 
-  const existing = db
-    .prepare('SELECT id, password_hash, email FROM users WHERE LOWER(username) = ?')
-    .get(username);
+  if (!spec.password) {
+    console.warn(`[auth-db] skip seed '${username}' — no password available`);
+    return;
+  }
 
-  if (existing) {
-    const storedEmail = String(existing.email || '').trim();
-    const storedHash = String(existing.password_hash || '').trim();
-    const hashMissing = !looksLikePasswordHash(storedHash);
-
-    // Backfill empty email / missing hash only — never clobber a real password
-    // unless this baseline account opts into syncBaselinePassword (jdemoss).
-    if (!storedEmail && spec.email) {
-      db.prepare('UPDATE users SET email = ? WHERE id = ?').run(spec.email, existing.id);
-      console.log(`[auth-db] backfilled email for existing user ${username}`);
-    }
-    if (hashMissing && spec.password) {
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
-        hashPassword(spec.password),
-        existing.id,
-      );
-      console.log(`[auth-db] restored missing password hash for ${username}`);
-    } else if (
-      spec.syncBaselinePassword &&
-      spec.password &&
-      !verifyPassword(spec.password, storedHash)
-    ) {
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
-        hashPassword(spec.password),
-        existing.id,
-      );
-      console.log(
-        `[auth-db] synced baseline password for ${username} (hash did not match Jdemoss123!/env)`,
-      );
-    } else {
-      console.log(`[auth-db] baseline skip ${username} — already exists (password preserved)`);
-    }
-
-    // Keep admin flags in sync without touching password/email when set.
-    db.prepare(
-      `UPDATE users SET role = ?, full_name = COALESCE(NULLIF(full_name, ''), ?),
-        is_admin = ?, is_master_admin = ?, subscription_status = ?,
-        subscription_tier = ?, org_role = ?,
-        organization_id = COALESCE(organization_id, ?),
-        email_verified = 1, is_suspended = 0
-       WHERE id = ?`,
-    ).run(
+  const info = db
+    .prepare(
+      `INSERT INTO users
+        (username, password_hash, role, email, full_name, is_admin, is_master_admin,
+         subscription_status, subscription_tier, org_role, organization_id,
+         email_verified, recovery_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+       ON CONFLICT(username) DO NOTHING`,
+    )
+    .run(
+      username,
+      hashPassword(spec.password),
       spec.role,
+      spec.email,
       spec.full_name,
       spec.is_admin ? 1 : 0,
       spec.is_master_admin ? 1 : 0,
@@ -254,36 +224,12 @@ function seedAccountIfMissing(db, spec) {
       spec.subscription_tier,
       spec.org_role || '',
       spec.organization_id,
-      existing.id,
+      spec.recovery_id,
     );
+  if (info.changes === 0) {
+    console.log(`[auth-db] baseline skip ${username} — already exists (left untouched)`);
     return;
   }
-
-  if (!spec.password) {
-    console.warn(`[auth-db] skip seed '${username}' — no password available`);
-    return;
-  }
-
-  db.prepare(
-    `INSERT INTO users
-      (username, password_hash, role, email, full_name, is_admin, is_master_admin,
-       subscription_status, subscription_tier, org_role, organization_id,
-       email_verified, recovery_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
-  ).run(
-    username,
-    hashPassword(spec.password),
-    spec.role,
-    spec.email,
-    spec.full_name,
-    spec.is_admin ? 1 : 0,
-    spec.is_master_admin ? 1 : 0,
-    spec.subscription_status,
-    spec.subscription_tier,
-    spec.org_role || '',
-    spec.organization_id,
-    spec.recovery_id,
-  );
   console.log(`[auth-db] seeded user ${username} (${spec.role}, email=${spec.email})`);
 }
 
@@ -298,6 +244,78 @@ function ensureSeeded(db) {
   for (const account of baselineAccounts()) {
     seedAccountIfMissing(db, account);
   }
+  ensureOneTimeCredentials(db);
+}
+
+/**
+ * One-time bootstrap for TestReviewer / Jdemoss credentials.
+ * Inserts with ON CONFLICT DO NOTHING; sets hashes only on the first run.
+ */
+function ensureOneTimeCredentials(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS auth_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    )
+  `);
+  const flag = db
+    .prepare('SELECT value FROM auth_meta WHERE key = ?')
+    .get('creds_bootstrap_tr_jd_v1');
+  if (flag) {
+    console.log('[auth-db] credential bootstrap already applied — hashes left untouched');
+    return;
+  }
+
+  const specs = [
+    {
+      username: 'testreviewer',
+      password: baselinePassword('testreviewer'),
+      role: 'Reviewer',
+      email: 'reviewer@bdcmanager.com',
+      is_admin: 0,
+      tier: 'rooftop_monthly',
+    },
+    {
+      username: 'jdemoss',
+      password: baselinePassword('jdemoss'),
+      role: 'Admin',
+      email: 'jdemoss@bdcmanager.com',
+      is_admin: 1,
+      tier: 'pro_annual',
+    },
+  ];
+
+  for (const spec of specs) {
+    if (!spec.password) continue;
+    const hash = hashPassword(spec.password);
+    db.prepare(
+      `INSERT INTO users
+        (username, password_hash, role, email, full_name, is_admin, is_master_admin,
+         subscription_status, subscription_tier, email_verified, recovery_id)
+       VALUES (?, ?, ?, ?, ?, ?, 0, 'active', ?, 1, ?)
+       ON CONFLICT(username) DO NOTHING`,
+    ).run(
+      spec.username,
+      hash,
+      spec.role,
+      spec.email,
+      spec.username,
+      spec.is_admin,
+      spec.tier,
+      `BOOT-${spec.username.toUpperCase()}`,
+    );
+    // One-time only (gated by auth_meta flag above).
+    db.prepare('UPDATE users SET password_hash = ? WHERE LOWER(username) = ?').run(
+      hash,
+      spec.username,
+    );
+    console.log(`[auth-db] one-time credential ensure for ${spec.username}`);
+  }
+
+  db.prepare(
+    'INSERT OR REPLACE INTO auth_meta (key, value) VALUES (?, ?)',
+  ).run('creds_bootstrap_tr_jd_v1', '1');
+  persistVault(db);
 }
 
 function persistVault(db) {
@@ -475,12 +493,24 @@ function findUserRow(identifier) {
   const db = openDb();
   const key = normalizeLoginIdentifier(identifier);
   if (!key) return null;
+  // Primary users table (includes rooftop org members via organization_id).
+  const primary = db
+    .prepare(
+      `SELECT * FROM users
+       WHERE LOWER(username) = ?
+          OR (email != '' AND LOWER(email) = ?)
+       LIMIT 1`,
+    )
+    .get(key, key);
+  if (primary) return primary;
+  // Explicit rooftop-org member pass (nested multi-tenant accounts).
   return (
     db
       .prepare(
         `SELECT * FROM users
-         WHERE LOWER(username) = ?
-            OR (email != '' AND LOWER(email) = ?)
+         WHERE organization_id IS NOT NULL
+           AND organization_id != 0
+           AND (LOWER(username) = ? OR (email != '' AND LOWER(email) = ?))
          LIMIT 1`,
       )
       .get(key, key) || null
@@ -498,8 +528,8 @@ function getUserById(id) {
 }
 
 /**
- * Dynamic login: case-insensitive username/email lookup + bcrypt/legacy verify.
- * Seed accounts also accept their baseline plaintext and heal a stale hash.
+ * Dynamic login: case-insensitive username/email lookup + hash verify only.
+ * Never rewrites password_hash (Admin Console / Profile APIs only).
  */
 function authenticate(identifier, password) {
   const key = normalizeLoginIdentifier(identifier);
@@ -519,46 +549,10 @@ function authenticate(identifier, password) {
     return null;
   }
 
-  let passwordOk = verifyPassword(password, row.password_hash);
-  if (!passwordOk) {
-    // Self-heal stale seed hashes when the typed password matches the
-    // known baseline for that account (jdemoss / testreviewer / admin).
-    const baseline = baselinePassword(key);
-    if (baseline && password === baseline) {
-      try {
-        const db = openDb();
-        const nextHash = hashPassword(password);
-        db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
-          nextHash,
-          row.id,
-        );
-        persistVault(db);
-        row.password_hash = nextHash;
-        passwordOk = true;
-        console.log(`[auth-db] healed baseline password hash for ${row.username}`);
-      } catch (err) {
-        console.warn('[auth-db] baseline hash heal failed:', err.message || err);
-      }
-    }
-  }
-  if (!passwordOk) {
+  if (!verifyPassword(password, row.password_hash)) {
     console.log('[LOGIN FAIL] Password mismatch for:', key);
     console.log('[AUTH FAIL]', key, 'password mismatch');
     return null;
-  }
-
-  if (needsRehash(row.password_hash)) {
-    try {
-      const db = openDb();
-      db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
-        hashPassword(password),
-        row.id,
-      );
-      persistVault(db);
-      console.log(`[auth-db] upgraded ${row.username} hash to bcrypt`);
-    } catch (err) {
-      console.warn('[auth-db] bcrypt upgrade skipped:', err.message || err);
-    }
   }
 
   console.log('[AUTH OK]', row.username, 'hash verified');
@@ -753,12 +747,7 @@ function changePassword(userId, currentPassword, newPassword) {
   const db = openDb();
   const row = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
   if (!row) throw new Error('User not found.');
-  const key = String(row.username || '').trim().toLowerCase();
-  const masterUser =
-    String(process.env.ADMIN_USER || 'mdemoss').trim().toLowerCase() || 'mdemoss';
-  const isMaster = key === 'mdemoss' || key === masterUser;
-  const envOk = isMaster && adminEnvPassword() && currentPassword === adminEnvPassword();
-  if (!envOk && !verifyPassword(currentPassword, row.password_hash)) {
+  if (!verifyPassword(currentPassword, row.password_hash)) {
     throw new Error('Current password is incorrect.');
   }
   if (!newPassword || String(newPassword).length < 6) {
@@ -770,6 +759,47 @@ function changePassword(userId, currentPassword, newPassword) {
   );
   persistVault(db);
   return getUserById(userId);
+}
+
+/**
+ * Admin / rooftop-org-admin password set (Admin Console update-password only).
+ */
+function adminSetPassword(actor, targetUserId, newPassword) {
+  const db = openDb();
+  const targetId = Number(targetUserId);
+  if (!targetId) throw new Error('user_id is required.');
+  if (!newPassword || String(newPassword).length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+  if (Number(actor?.id) === targetId) {
+    throw new Error('Use the profile change-password endpoint for your own password.');
+  }
+  const actorRow = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(actor.id));
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(targetId);
+  if (!target) throw new Error('User not found.');
+  const isMaster = Boolean(actor?.is_master_admin || actor?.is_admin || actorRow?.is_admin);
+  const isOrgAdmin =
+    String(actorRow?.org_role || '') === 'admin' && Boolean(actorRow?.organization_id);
+  if (!isMaster && !isOrgAdmin) {
+    const err = new Error('Admin role required.');
+    err.statusCode = 403;
+    throw err;
+  }
+  if (
+    !isMaster &&
+    Number(target.organization_id) !== Number(actorRow.organization_id)
+  ) {
+    const err = new Error('User is not a member of your organization.');
+    err.statusCode = 403;
+    throw err;
+  }
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(
+    hashPassword(newPassword),
+    targetId,
+  );
+  persistVault(db);
+  console.log(`[auth-db] admin ${actor.id} set password for user ${targetId}`);
+  return getUserById(targetId);
 }
 
 module.exports = {
@@ -786,6 +816,7 @@ module.exports = {
   updateProfile,
   regenerateRecoveryId,
   changePassword,
+  adminSetPassword,
   saveFacebookConnection,
   clearFacebookConnection,
   dbPath,

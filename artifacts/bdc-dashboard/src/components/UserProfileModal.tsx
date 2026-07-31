@@ -222,7 +222,7 @@ export function UserProfileModal({ open, onOpenChange }: UserProfileModalProps) 
     setPwStatus('idle');
     setPwLoading(true);
     try {
-      const res = await authFetch('/api/auth/change-password', {
+      const res = await authFetch('/api/user/profile/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

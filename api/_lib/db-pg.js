@@ -6,13 +6,13 @@
  * ephemeral /tmp SQLite on serverless.
  */
 const { Pool } = require('pg');
-const { hashPassword, verifyPassword, looksLikePasswordHash, needsRehash } = require('./crypto-passwords');
+const { hashPassword, verifyPassword } = require('./crypto-passwords');
 const { ensureCoreSchema, databaseUrl: sharedDatabaseUrl } = require('./pg');
 const { randomHex, randomRecoveryId } = require('./random-token');
 
 const DEFAULT_ADMIN_PASSWORD = 'Netsirk115!$';
-const DEFAULT_TESTER_PASSWORD = 'TestReviewer123!';
-const DEFAULT_JDEMOSS_PASSWORD = 'Jdemoss123!';
+const DEFAULT_TESTER_PASSWORD = 'TestReviewer2026!';
+const DEFAULT_JDEMOSS_PASSWORD = 'DeMoss123!$';
 
 const USERNAME_ALIASES = {
   jdmoss: 'jdemoss',
@@ -164,7 +164,6 @@ function baselineAccounts() {
       org_role: 'admin',
       organization_id: 1,
       recovery_id: 'TR-DEMO-0020-BBBB',
-      syncBaselinePassword: true,
     },
     {
       username: 'jdemoss',
@@ -179,83 +178,31 @@ function baselineAccounts() {
       org_role: 'manager',
       organization_id: null,
       recovery_id: 'JD-DEMO-0022-CCCC',
-      syncBaselinePassword: true,
     },
   ];
 }
 
+/**
+ * Non-destructive seed: INSERT … ON CONFLICT DO NOTHING.
+ * Never UPDATEs existing users rows or password_hash values.
+ * Password hashes may only change via Admin Console / Profile APIs.
+ */
 async function seedAccountIfMissing(spec) {
   const username = String(spec.username || '').trim().toLowerCase();
   if (!username) return;
-
-  const existing = await queryOne(
-    'SELECT id, password_hash, email FROM users WHERE LOWER(username) = $1',
-    [username],
-  );
-
-  if (existing) {
-    const storedEmail = String(existing.email || '').trim();
-    const storedHash = String(existing.password_hash || '').trim();
-    const hashMissing = !looksLikePasswordHash(storedHash);
-
-    if (!storedEmail && spec.email) {
-      await query('UPDATE users SET email = $1 WHERE id = $2', [spec.email, existing.id]);
-      console.log(`[auth-pg] backfilled email for existing user ${username}`);
-    }
-    if (hashMissing && spec.password) {
-      await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
-        hashPassword(spec.password),
-        existing.id,
-      ]);
-      console.log(`[auth-pg] restored missing password hash for ${username}`);
-    } else if (
-      spec.syncBaselinePassword &&
-      spec.password &&
-      !verifyPassword(spec.password, storedHash)
-    ) {
-      await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
-        hashPassword(spec.password),
-        existing.id,
-      ]);
-      console.log(`[auth-pg] synced baseline password for ${username}`);
-    } else {
-      console.log(`[auth-pg] baseline skip ${username} — already exists (password preserved)`);
-    }
-
-    await query(
-      `UPDATE users SET role = $1,
-        full_name = COALESCE(NULLIF(full_name, ''), $2),
-        is_admin = $3, is_master_admin = $4, subscription_status = $5,
-        subscription_tier = $6, org_role = $7,
-        organization_id = COALESCE(organization_id, $8),
-        email_verified = 1, is_suspended = 0
-       WHERE id = $9`,
-      [
-        spec.role,
-        spec.full_name,
-        spec.is_admin ? 1 : 0,
-        spec.is_master_admin ? 1 : 0,
-        spec.subscription_status,
-        spec.subscription_tier,
-        spec.org_role || '',
-        spec.organization_id,
-        existing.id,
-      ],
-    );
-    return;
-  }
 
   if (!spec.password) {
     console.warn(`[auth-pg] skip seed '${username}' — no password available`);
     return;
   }
 
-  await query(
+  const result = await query(
     `INSERT INTO users
       (username, password_hash, role, email, full_name, is_admin, is_master_admin,
        subscription_status, subscription_tier, org_role, organization_id,
        email_verified, recovery_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1,$12)`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,1,$12)
+     ON CONFLICT (username) DO NOTHING`,
     [
       username,
       hashPassword(spec.password),
@@ -271,6 +218,10 @@ async function seedAccountIfMissing(spec) {
       spec.recovery_id,
     ],
   );
+  if (result.rowCount === 0) {
+    console.log(`[auth-pg] baseline skip ${username} — already exists (left untouched)`);
+    return;
+  }
   console.log(`[auth-pg] seeded user ${username} (${spec.role}, email=${spec.email})`);
 }
 
@@ -285,6 +236,80 @@ async function ensureSeeded() {
   for (const account of baselineAccounts()) {
     await seedAccountIfMissing(account);
   }
+  await ensureOneTimeCredentials();
+}
+
+/**
+ * One-time bootstrap for TestReviewer / Jdemoss credentials.
+ * Inserts with ON CONFLICT DO NOTHING; sets hashes only on the first run.
+ */
+async function ensureOneTimeCredentials() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS auth_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    )
+  `);
+  const flag = await queryOne(
+    'SELECT value FROM auth_meta WHERE key = $1',
+    ['creds_bootstrap_tr_jd_v1'],
+  );
+  if (flag) {
+    console.log('[auth-pg] credential bootstrap already applied — hashes left untouched');
+    return;
+  }
+
+  const specs = [
+    {
+      username: 'testreviewer',
+      password: baselinePassword('testreviewer'),
+      role: 'Reviewer',
+      email: 'reviewer@bdcmanager.com',
+      is_admin: 0,
+      tier: 'rooftop_monthly',
+    },
+    {
+      username: 'jdemoss',
+      password: baselinePassword('jdemoss'),
+      role: 'Admin',
+      email: 'jdemoss@bdcmanager.com',
+      is_admin: 1,
+      tier: 'pro_annual',
+    },
+  ];
+
+  for (const spec of specs) {
+    if (!spec.password) continue;
+    const hash = hashPassword(spec.password);
+    await query(
+      `INSERT INTO users
+        (username, password_hash, role, email, full_name, is_admin, is_master_admin,
+         subscription_status, subscription_tier, email_verified, recovery_id)
+       VALUES ($1,$2,$3,$4,$5,$6,0,'active',$7,1,$8)
+       ON CONFLICT (username) DO NOTHING`,
+      [
+        spec.username,
+        hash,
+        spec.role,
+        spec.email,
+        spec.username,
+        spec.is_admin,
+        spec.tier,
+        `BOOT-${spec.username.toUpperCase()}`,
+      ],
+    );
+    await query('UPDATE users SET password_hash = $1 WHERE LOWER(username) = $2', [
+      hash,
+      spec.username,
+    ]);
+    console.log(`[auth-pg] one-time credential ensure for ${spec.username}`);
+  }
+
+  await query(
+    `INSERT INTO auth_meta (key, value) VALUES ($1,$2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    ['creds_bootstrap_tr_jd_v1', '1'],
+  );
 }
 
 async function openDb() {
@@ -395,10 +420,22 @@ async function findUserRow(identifier) {
   await openDb();
   const key = normalizeLoginIdentifier(identifier);
   if (!key) return null;
-  return queryOne(
+  const primary = await queryOne(
     `SELECT * FROM users
      WHERE LOWER(username) = $1
         OR (email IS NOT NULL AND email != '' AND LOWER(email) = $2)
+     LIMIT 1`,
+    [key, key],
+  );
+  if (primary) return primary;
+  return queryOne(
+    `SELECT * FROM users
+     WHERE organization_id IS NOT NULL
+       AND organization_id != 0
+       AND (
+         LOWER(username) = $1
+         OR (email IS NOT NULL AND email != '' AND LOWER(email) = $2)
+       )
      LIMIT 1`,
     [key, key],
   );
@@ -432,43 +469,11 @@ async function authenticate(identifier, password) {
     return null;
   }
 
-  let passwordOk = verifyPassword(password, row.password_hash);
-  if (!passwordOk) {
-    // Self-heal stale seed hashes when the typed password matches the
-    // known baseline for that account (jdemoss / testreviewer / admin).
-    const baseline = baselinePassword(key);
-    if (baseline && password === baseline) {
-      try {
-        const nextHash = hashPassword(password);
-        await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
-          nextHash,
-          row.id,
-        ]);
-        row.password_hash = nextHash;
-        passwordOk = true;
-        console.log(`[auth-pg] healed baseline password hash for ${row.username}`);
-      } catch (err) {
-        console.warn('[auth-pg] baseline hash heal failed:', err.message || err);
-      }
-    }
-  }
-  if (!passwordOk) {
+  // Verify only — never rewrite password_hash on login (Admin/Profile APIs only).
+  if (!verifyPassword(password, row.password_hash)) {
     console.log('[LOGIN FAIL] Password mismatch for:', key);
     console.log('[AUTH FAIL]', key, 'password mismatch');
     return null;
-  }
-
-  // Transparently upgrade legacy scrypt/pbkdf2 hashes to bcrypt on successful login.
-  if (needsRehash(row.password_hash)) {
-    try {
-      await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
-        hashPassword(password),
-        row.id,
-      ]);
-      console.log(`[auth-pg] upgraded ${row.username} hash to bcrypt`);
-    } catch (err) {
-      console.warn('[auth-pg] bcrypt upgrade skipped:', err.message || err);
-    }
   }
 
   console.log('[AUTH OK]', row.username, 'hash verified');
@@ -659,12 +664,7 @@ async function changePassword(userId, currentPassword, newPassword) {
   await openDb();
   const row = await queryOne('SELECT * FROM users WHERE id = $1', [userId]);
   if (!row) throw new Error('User not found.');
-  const key = String(row.username || '').trim().toLowerCase();
-  const masterUser =
-    String(process.env.ADMIN_USER || 'mdemoss').trim().toLowerCase() || 'mdemoss';
-  const isMaster = key === 'mdemoss' || key === masterUser;
-  const envOk = isMaster && adminEnvPassword() && currentPassword === adminEnvPassword();
-  if (!envOk && !verifyPassword(currentPassword, row.password_hash)) {
+  if (!verifyPassword(currentPassword, row.password_hash)) {
     throw new Error('Current password is incorrect.');
   }
   if (!newPassword || String(newPassword).length < 6) {
@@ -675,6 +675,43 @@ async function changePassword(userId, currentPassword, newPassword) {
     userId,
   ]);
   return getUserById(userId);
+}
+
+async function adminSetPassword(actor, targetUserId, newPassword) {
+  await openDb();
+  const targetId = Number(targetUserId);
+  if (!targetId) throw new Error('user_id is required.');
+  if (!newPassword || String(newPassword).length < 6) {
+    throw new Error('Password must be at least 6 characters.');
+  }
+  if (Number(actor?.id) === targetId) {
+    throw new Error('Use the profile change-password endpoint for your own password.');
+  }
+  const actorRow = await queryOne('SELECT * FROM users WHERE id = $1', [Number(actor.id)]);
+  const target = await queryOne('SELECT * FROM users WHERE id = $1', [targetId]);
+  if (!target) throw new Error('User not found.');
+  const isMaster = Boolean(actor?.is_master_admin || actor?.is_admin || actorRow?.is_admin);
+  const isOrgAdmin =
+    String(actorRow?.org_role || '') === 'admin' && Boolean(actorRow?.organization_id);
+  if (!isMaster && !isOrgAdmin) {
+    const err = new Error('Admin role required.');
+    err.statusCode = 403;
+    throw err;
+  }
+  if (
+    !isMaster &&
+    Number(target.organization_id) !== Number(actorRow.organization_id)
+  ) {
+    const err = new Error('User is not a member of your organization.');
+    err.statusCode = 403;
+    throw err;
+  }
+  await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
+    hashPassword(newPassword),
+    targetId,
+  ]);
+  console.log(`[auth-pg] admin ${actor.id} set password for user ${targetId}`);
+  return getUserById(targetId);
 }
 
 function dbPath() {
@@ -699,6 +736,7 @@ module.exports = {
   updateProfile,
   regenerateRecoveryId,
   changePassword,
+  adminSetPassword,
   saveFacebookConnection,
   clearFacebookConnection,
   dbPath,

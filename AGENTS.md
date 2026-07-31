@@ -80,4 +80,4 @@ Cox Automotive / VinSolutions CRM sync requires `COX_CLIENT_ID`, `COX_CLIENT_SEC
 
 ## User Preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- **CRITICAL DATABASE SECURITY**: Never alter, overwrite, reset, or drop `users` / `rooftop_accounts` table data, schemas, or password hashes in recurring seed/migration scripts. Password hashes may only be created or modified via explicit API requests from (1) `/api/admin/users/update-password` (Admin Console / org admin) or (2) `/api/user/profile/change-password` (Profile). Init/seed must use non-destructive `INSERT … ON CONFLICT DO NOTHING`. A one-time flagged credential bootstrap for known demo accounts is allowed once, then must never re-run.

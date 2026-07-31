@@ -1872,41 +1872,9 @@ def init_db():
         except Exception as _mig_commit_err:
             print(f"[INIT] migration commit warning: {_mig_commit_err}")
 
-        # Backfill RBAC roles for known accounts (idempotent).
-        try:
-            cursor.execute(
-                "UPDATE users SET role = 'Admin' "
-                "WHERE LOWER(username) = ? OR is_admin = 1",
-                (os.environ.get('ADMIN_USER', 'mdemoss').strip().lower(),),
-            )
-            cursor.execute(
-                "UPDATE users SET role = 'Admin' "
-                "WHERE LOWER(username) = 'jdemoss'"
-            )
-            cursor.execute(
-                "UPDATE users SET role = 'Reviewer' "
-                "WHERE LOWER(username) = 'testreviewer'"
-            )
-            cursor.execute(
-                "UPDATE users SET role = 'Reviewer' "
-                "WHERE COALESCE(role, '') = ''"
-            )
-            conn.commit()
-        except Exception as _role_err:
-            print(f"[INIT] role backfill warning: {_role_err}")
-
-        # Bypass email verification globally: every existing account (including
-        # mdemoss and any unverified demo / trial users) is marked verified on
-        # every startup. Safe to re-run — only flips rows that are still 0.
-        try:
-            cursor.execute(
-                "UPDATE users SET email_verified = 1, verification_token = NULL "
-                "WHERE COALESCE(email_verified, 0) = 0 OR verification_token IS NOT NULL"
-            )
-            if cursor.rowcount:
-                print(f"[INIT] Auto-verified {cursor.rowcount} existing user account(s).")
-        except Exception as _ev_err:
-            print(f"[INIT] email_verified backfill warning: {_ev_err}")
+        # Do NOT backfill / rewrite users.role, email_verified, or other row data
+        # here. Existing accounts (especially password_hash) are left untouched.
+        # Password hashes change only via Admin Console / Profile password APIs.
 
         # Global runtime key/value store — admin-configurable without a restart.
         # Used for TikTok API credentials and any future per-server settings.
@@ -2134,11 +2102,9 @@ def init_db():
             print(f"[INIT] Backfilled location on {inv_backfilled} existing "
                   f"demo inventory row(s).")
 
-        # ── Master admin: seed / sync on every startup ────────────────────────
-        # Password + admin flags may re-sync from env so the account stays
-        # reachable after DB resets. Email is set from ADMIN_EMAIL only when
-        # creating the account (or when the stored email is blank) — never
-        # overwrite a profile email the user already saved.
+        # ── User seeds: INSERT … ON CONFLICT DO NOTHING only ────────────────
+        # CRITICAL: never UPDATE password_hash or existing users rows from init.
+        # Password hashes change only via Admin Console / Profile password APIs.
         _MASTER_USER  = os.environ.get('ADMIN_USER',  'mdemoss').strip().lower()
         _MASTER_EMAIL = (os.environ.get('ADMIN_EMAIL') or '').strip().lower()
         if not _MASTER_EMAIL:
@@ -2153,7 +2119,6 @@ def init_db():
             or os.environ.get('LOGIN_PASSWORD')
             or 'Netsirk115!$'
         ).strip()
-        _ma_hash = _hash_password(_MASTER_PASS) if _MASTER_PASS else None
         if not (
             os.environ.get('ADMIN_PASSWORD')
             or os.environ.get('DASHBOARD_PASSWORD')
@@ -2163,409 +2128,249 @@ def init_db():
                 "[INIT] ADMIN_PASSWORD / DASHBOARD_PASSWORD / LOGIN_PASSWORD unset — "
                 "using built-in default for master-admin bootstrap only."
             )
-
         _ma_existing = conn.execute(
-            "SELECT id, email FROM users WHERE LOWER(username) = ?", (_MASTER_USER,)
+            "SELECT id FROM users WHERE LOWER(username) = ?", (_MASTER_USER,)
         ).fetchone()
-        if not _ma_existing:
-            if _ma_hash:
-                conn.execute(
-                    """INSERT INTO users
-                           (username, password_hash, email,
-                            is_admin, subscription_status,
-                            inventory_url_used, inventory_url_new,
-                            recovery_id, referral_code, email_verified, role)
-                       VALUES (?, ?, ?, 1, 'active', ?, ?, ?, 'MDEMOSS', 1, 'Admin')""",
-                    (
-                        _MASTER_USER,
-                        _ma_hash,
-                        _MASTER_EMAIL,
-                        MOSES_USED_URL,
-                        MOSES_NEW_URL,
-                        secrets.token_urlsafe(16),
-                    ),
-                )
-                print(
-                    f"[INIT] Master admin {_MASTER_USER!r} created "
-                    f"(email={_MASTER_EMAIL!r})."
-                )
-            else:
-                print(f"[INIT] Master admin {_MASTER_USER!r} NOT created — set DASHBOARD_PASSWORD.")
+        if _ma_existing:
+            print(
+                f"[INIT] Master admin {_MASTER_USER!r} already exists — left untouched."
+            )
+        elif _MASTER_PASS:
+            conn.execute(
+                """INSERT INTO users
+                       (username, password_hash, email,
+                        is_admin, subscription_status,
+                        inventory_url_used, inventory_url_new,
+                        recovery_id, referral_code, email_verified, role)
+                   VALUES (?, ?, ?, 1, 'active', ?, ?, ?, 'MDEMOSS', 1, 'Admin')
+                   ON CONFLICT(username) DO NOTHING""",
+                (
+                    _MASTER_USER,
+                    _hash_password(_MASTER_PASS),
+                    _MASTER_EMAIL,
+                    MOSES_USED_URL,
+                    MOSES_NEW_URL,
+                    secrets.token_urlsafe(16),
+                ),
+            )
+            print(f"[INIT] Master admin {_MASTER_USER!r} created (email={_MASTER_EMAIL!r}).")
         else:
-            _ma_stored_email = str(_ma_existing['email'] or '').strip().lower()
+            print(f"[INIT] Master admin {_MASTER_USER!r} NOT created — set DASHBOARD_PASSWORD.")
 
-            # Preserve profile email updates across cold starts. Only backfill
-            # when the column is empty so a fresh migrate still gets ADMIN_EMAIL.
-            _ma_email_sql = ''
-            _ma_email_args: list = []
-            if not _ma_stored_email and _MASTER_EMAIL:
-                _ma_email_sql = 'email = ?, '
-                _ma_email_args = [_MASTER_EMAIL]
-                print(
-                    f"[INIT] Master admin {_MASTER_USER!r} email backfilled "
-                    f"from ADMIN_EMAIL={_MASTER_EMAIL!r}."
-                )
-            else:
-                print(
-                    f"[INIT] Master admin {_MASTER_USER!r} email preserved "
-                    f"({_ma_stored_email or '(empty)'})."
-                )
-
-            if _ma_hash:
-                # Preserve Settings password changes: only write the env hash when
-                # the stored hash is missing/invalid. Flags + email backfill still run.
-                _ma_hash_row = conn.execute(
-                    "SELECT password_hash FROM users WHERE LOWER(username) = ?",
-                    (_MASTER_USER,),
-                ).fetchone()
-                _stored_hash = str((_ma_hash_row["password_hash"] if _ma_hash_row else "") or "").strip()
-                _hash_missing = (not _stored_hash) or (
-                    not _stored_hash.startswith(("pbkdf2:", "scrypt:", "$"))
-                )
-                if _hash_missing:
-                    conn.execute(
-                        f"UPDATE users SET password_hash = ?, {_ma_email_sql}"
-                        "is_admin = 1, subscription_status = 'active', "
-                        "subscription_tier = 'pro_lifetime', email_verified = 1, "
-                        "role = 'Admin' "
-                        "WHERE LOWER(username) = ?",
-                        [_ma_hash, *_ma_email_args, _MASTER_USER],
-                    )
-                    print(
-                        f"[INIT] Master admin {_MASTER_USER!r} missing hash restored "
-                        "from ADMIN_PASSWORD env (email not overwritten)."
-                    )
-                else:
-                    conn.execute(
-                        f"UPDATE users SET {_ma_email_sql}"
-                        "is_admin = 1, subscription_status = 'active', "
-                        "subscription_tier = 'pro_lifetime', email_verified = 1, "
-                        "role = 'Admin' "
-                        "WHERE LOWER(username) = ?",
-                        [*_ma_email_args, _MASTER_USER],
-                    )
-                    print(
-                        f"[INIT] Master admin {_MASTER_USER!r} flags synced "
-                        "(password preserved — Settings changes kept)."
-                    )
-            else:
-                conn.execute(
-                    f"UPDATE users SET {_ma_email_sql}"
-                    "is_admin = 1, subscription_status = 'active', "
-                    "subscription_tier = 'pro_lifetime', email_verified = 1, "
-                    "role = 'Admin' "
-                    "WHERE LOWER(username) = ?",
-                    [*_ma_email_args, _MASTER_USER],
-                )
-                print(
-                    f"[INIT] Master admin {_MASTER_USER!r} flags synced "
-                    "(password unchanged — no env secret)."
-                )
-        # ── Seed: testreviewer — Rooftop Dealership Admin demo account ───────────
-        # Sync baseline password when the stored hash no longer matches
-        # TESTER_PASSWORD / TestReviewer123! so demo logins keep working.
         _TR_USER  = 'testreviewer'
-        _TR_EMAIL = (
-            os.environ.get('TESTER_EMAIL')
-            or 'reviewer@bdcmanager.com'
-        ).strip().lower()
-        _TR_PASS  = (
-            os.environ.get('TESTER_PASSWORD')
-            or 'TestReviewer123!'
-        ).strip()
+        _TR_EMAIL = (os.environ.get('TESTER_EMAIL') or 'reviewer@bdcmanager.com').strip().lower()
+        _TR_PASS  = (os.environ.get('TESTER_PASSWORD') or 'TestReviewer2026!').strip()
         _tr_existing = conn.execute(
-            "SELECT id, password_hash, email, organization_id FROM users "
-            "WHERE LOWER(username) = ?",
-            (_TR_USER,),
+            "SELECT id FROM users WHERE LOWER(username) = ?", (_TR_USER,)
         ).fetchone()
-        if not _tr_existing:
-            _tr_hash = _hash_password(_TR_PASS)
+        if _tr_existing:
+            print("[INIT] 'testreviewer' already exists — left untouched.")
+        else:
             conn.execute(
                 """INSERT INTO users
                        (username, password_hash, email,
                         subscription_status, subscription_tier,
                         inventory_url_used, inventory_url_new,
                         recovery_id, referral_code, email_verified, role)
-                   VALUES (?, ?, ?, 'active', 'rooftop_monthly', ?, ?, ?, ?, 1, 'Reviewer')""",
+                   VALUES (?, ?, ?, 'active', 'rooftop_monthly', ?, ?, ?, ?, 1, 'Reviewer')
+                   ON CONFLICT(username) DO NOTHING""",
                 (
-                    _TR_USER,
-                    _tr_hash,
-                    _TR_EMAIL,
-                    MOSES_USED_URL,
-                    MOSES_NEW_URL,
-                    secrets.token_urlsafe(16),
-                    'TESTREVIEWER',
+                    _TR_USER, _hash_password(_TR_PASS), _TR_EMAIL,
+                    MOSES_USED_URL, MOSES_NEW_URL,
+                    secrets.token_urlsafe(16), 'TESTREVIEWER',
                 ),
             )
             conn.commit()
-            _tr_uid = conn.execute(
+            _tr_uid_row = conn.execute(
                 "SELECT id FROM users WHERE LOWER(username) = ?", (_TR_USER,)
-            ).fetchone()[0]
-            for _loc_name, _loc_en in MOSES_DEFAULT_LOCATIONS:
-                conn.execute(
-                    "INSERT OR IGNORE INTO user_locations "
-                    "(user_id, location, enabled) VALUES (?, ?, ?)",
-                    (_tr_uid, _loc_name, 1 if _loc_en else 0),
-                )
-            _tr_invite = secrets.token_urlsafe(12)
-            conn.execute(
-                """INSERT INTO organizations
-                       (name, owner_user_id, seat_limit,
-                        subscription_status, subscription_tier, invite_code)
-                   VALUES (?, ?, 10, 'active', 'rooftop_monthly', ?)""",
-                ("Testreviewer's Dealership", _tr_uid, _tr_invite),
-            )
-            conn.commit()
-            _tr_org_id = conn.execute(
-                "SELECT id FROM organizations WHERE owner_user_id = ?", (_tr_uid,)
-            ).fetchone()[0]
-            conn.execute(
-                "UPDATE users SET organization_id = ?, org_role = 'admin' WHERE id = ?",
-                (_tr_org_id, _tr_uid),
-            )
-            conn.commit()
-            print(
-                f"[INIT] Seeded 'testreviewer' (id={_tr_uid}, org={_tr_org_id}, "
-                f"email={_TR_EMAIL!r}) — password set to TestReviewer123!/TESTER_PASSWORD."
-            )
-        else:
-            _tr_uid = int(_tr_existing['id'])
-            _tr_stored_email = str(_tr_existing['email'] or '').strip()
-            _tr_stored_hash = str(_tr_existing['password_hash'] or '').strip()
-            if not _tr_stored_email and _TR_EMAIL:
-                conn.execute(
-                    "UPDATE users SET email = ? WHERE id = ?",
-                    (_TR_EMAIL, _tr_uid),
-                )
-            if (not _tr_stored_hash) or (not _verify_password(_TR_PASS, _tr_stored_hash)):
-                conn.execute(
-                    "UPDATE users SET password_hash = ? WHERE id = ?",
-                    (_hash_password(_TR_PASS), _tr_uid),
-                )
-                print(
-                    "[INIT] 'testreviewer' password hash synced to "
-                    "TestReviewer123!/TESTER_PASSWORD."
-                )
-            conn.execute(
-                "UPDATE users SET subscription_status = 'active', "
-                "subscription_tier = 'rooftop_monthly', org_role = 'admin', "
-                "role = 'Reviewer' WHERE id = ?",
-                (_tr_uid,),
-            )
-            if not _tr_existing['organization_id']:
-                _tr_invite2 = secrets.token_urlsafe(12)
+            ).fetchone()
+            if _tr_uid_row:
+                _tr_uid = _tr_uid_row[0]
+                for _loc_name, _loc_en in MOSES_DEFAULT_LOCATIONS:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO user_locations "
+                        "(user_id, location, enabled) VALUES (?, ?, ?)",
+                        (_tr_uid, _loc_name, 1 if _loc_en else 0),
+                    )
+                _tr_invite = secrets.token_urlsafe(12)
                 conn.execute(
                     """INSERT INTO organizations
                            (name, owner_user_id, seat_limit,
                             subscription_status, subscription_tier, invite_code)
                        VALUES (?, ?, 10, 'active', 'rooftop_monthly', ?)""",
-                    ("Testreviewer's Dealership", _tr_uid, _tr_invite2),
+                    ("Testreviewer's Dealership", _tr_uid, _tr_invite),
                 )
                 conn.commit()
-                _tr_org_id2 = conn.execute(
+                _tr_org_id = conn.execute(
                     "SELECT id FROM organizations WHERE owner_user_id = ?", (_tr_uid,)
                 ).fetchone()[0]
                 conn.execute(
                     "UPDATE users SET organization_id = ?, org_role = 'admin' WHERE id = ?",
-                    (_tr_org_id2, _tr_uid),
+                    (_tr_org_id, _tr_uid),
                 )
-            conn.commit()
-            print(
-                "[INIT] 'testreviewer' ready (case-insensitive login; baseline hash verified)."
-            )
+                conn.commit()
+                print(f"[INIT] Seeded 'testreviewer' (id={_tr_uid}, org={_tr_org_id}).")
 
-        # ── Seed: mdemoss1 — dedicated Rooftop Admin test account ───────────────
-        # Force-synced on every startup so the account survives DB resets and
-        # schema migrations. Intended for end-to-end testing of the Rooftop
-        # Manager UI: team creation, seat management, and org-level controls.
-        # email_verified=1 so login works immediately without an email click.
         _MD1_USER  = 'mdemoss1'
         _MD1_EMAIL = 'matthewdemoss+mdemoss1@gmail.com'
         _MD1_PASS  = 'Netsirk115!$'
         _MD1_NAME  = 'Matthew DeMoss'
-        _md1_salt  = secrets.token_hex(16)
-        _md1_key   = hashlib.pbkdf2_hmac(
-            "sha256", _MD1_PASS.encode(), _md1_salt.encode(), 260_000
-        )
-        _md1_hash  = f"{_md1_salt}:{_md1_key.hex()}"
         _md1_existing = conn.execute(
-            "SELECT id FROM users WHERE username = ?", (_MD1_USER,)
+            "SELECT id FROM users WHERE LOWER(username) = ?", (_MD1_USER,)
         ).fetchone()
-        if not _md1_existing:
+        if _md1_existing:
+            print("[INIT] 'mdemoss1' already exists — left untouched.")
+        else:
             conn.execute(
                 """INSERT INTO users
                        (username, password_hash, email, dealer_name,
                         subscription_status, subscription_tier,
-                        recovery_id, referral_code, email_verified)
-                   VALUES (?, ?, ?, ?, 'active', 'rooftop_monthly', ?, ?, 1)""",
+                        recovery_id, referral_code, email_verified, role)
+                   VALUES (?, ?, ?, ?, 'active', 'rooftop_monthly', ?, ?, 1, 'Reviewer')
+                   ON CONFLICT(username) DO NOTHING""",
                 (
-                    _MD1_USER,
-                    _md1_hash,
-                    _MD1_EMAIL,
-                    _MD1_NAME,
-                    secrets.token_urlsafe(16),
-                    'MDEMOSS1',
+                    _MD1_USER, _hash_password(_MD1_PASS), _MD1_EMAIL, _MD1_NAME,
+                    secrets.token_urlsafe(16), 'MDEMOSS1',
                 ),
             )
             conn.commit()
-            _md1_uid = conn.execute(
-                "SELECT id FROM users WHERE username = ?", (_MD1_USER,)
-            ).fetchone()[0]
-            # Provision a standalone rooftop org for mdemoss1.
-            _md1_invite = secrets.token_urlsafe(12)
-            conn.execute(
-                """INSERT INTO organizations
-                       (name, owner_user_id, seat_limit,
-                        subscription_status, subscription_tier, invite_code)
-                   VALUES (?, ?, 10, 'active', 'rooftop_monthly', ?)""",
-                ("DeMoss Auto Group", _md1_uid, _md1_invite),
-            )
-            conn.commit()
-            _md1_org_id = conn.execute(
-                "SELECT id FROM organizations WHERE owner_user_id = ?", (_md1_uid,)
-            ).fetchone()[0]
-            conn.execute(
-                "UPDATE users SET organization_id = ?, org_role = 'admin' WHERE id = ?",
-                (_md1_org_id, _md1_uid),
-            )
-            conn.commit()
-            print(
-                f"[INIT] Seeded 'mdemoss1' (id={_md1_uid}, org={_md1_org_id}) — "
-                "Rooftop Admin account for dealership management testing."
-            )
-        else:
-            # Account exists — force-sync credentials and org status on every
-            # restart so the account stays fully active across future deploys.
-            _md1_uid = _md1_existing[0]
-            conn.execute(
-                "UPDATE users SET "
-                "password_hash = ?, "
-                "email = ?, dealer_name = ?, "
-                "subscription_status = 'active', "
-                "subscription_tier = 'rooftop_monthly', "
-                "org_role = 'admin', email_verified = 1 "
-                "WHERE username = ?",
-                (_md1_hash, _MD1_EMAIL, _MD1_NAME, _MD1_USER),
-            )
-            conn.commit()
-            # Ensure the account has a rooftop org (idempotent).
-            _md1_org_row = conn.execute(
-                "SELECT organization_id FROM users WHERE id = ?", (_md1_uid,)
+            _md1_uid_row = conn.execute(
+                "SELECT id FROM users WHERE LOWER(username) = ?", (_MD1_USER,)
             ).fetchone()
-            if not (_md1_org_row and _md1_org_row[0]):
-                _md1_invite2 = secrets.token_urlsafe(12)
+            if _md1_uid_row:
+                _md1_uid = _md1_uid_row[0]
+                _md1_invite = secrets.token_urlsafe(12)
                 conn.execute(
                     """INSERT INTO organizations
                            (name, owner_user_id, seat_limit,
                             subscription_status, subscription_tier, invite_code)
                        VALUES (?, ?, 10, 'active', 'rooftop_monthly', ?)""",
-                    ("DeMoss Auto Group", _md1_uid, _md1_invite2),
+                    ("DeMoss Auto Group", _md1_uid, _md1_invite),
                 )
                 conn.commit()
-                _md1_org_id2 = conn.execute(
+                _md1_org_id = conn.execute(
                     "SELECT id FROM organizations WHERE owner_user_id = ?", (_md1_uid,)
                 ).fetchone()[0]
                 conn.execute(
-                    "UPDATE users SET organization_id = ?, org_role = 'admin' "
-                    "WHERE id = ?",
-                    (_md1_org_id2, _md1_uid),
+                    "UPDATE users SET organization_id = ?, org_role = 'admin' WHERE id = ?",
+                    (_md1_org_id, _md1_uid),
                 )
                 conn.commit()
-                print(
-                    f"[INIT] Provisioned 'DeMoss Auto Group' org (id={_md1_org_id2}) "
-                    "for 'mdemoss1' — Rooftop Admin credentials force-synced."
-                )
-            else:
-                print(
-                    "[INIT] 'mdemoss1' Rooftop Admin credentials "
-                    "force-synced (org already provisioned)."
-                )
+                print(f"[INIT] Seeded 'mdemoss1' (id={_md1_uid}, org={_md1_org_id}).")
 
-        # ── Seed: Jdemoss — permanent Pro account (non-destructive + alias) ───
         _JD_USER  = 'jdemoss'
-        _JD_EMAIL = (
-            os.environ.get('JDEMOSS_EMAIL')
-            or 'jdemoss@bdcmanager.com'
-        ).strip().lower()
-        _JD_PASS  = (
-            os.environ.get('JDEMOSS_PASSWORD')
-            or 'Jdemoss123!'
-        ).strip()
+        _JD_EMAIL = (os.environ.get('JDEMOSS_EMAIL') or 'jdemoss@bdcmanager.com').strip().lower()
+        _JD_PASS  = (os.environ.get('JDEMOSS_PASSWORD') or 'DeMoss123!$').strip()
         _jd_existing = conn.execute(
-            "SELECT id, password_hash, email FROM users WHERE LOWER(username) = ?",
-            (_JD_USER,),
+            "SELECT id FROM users WHERE LOWER(username) = ?", (_JD_USER,)
         ).fetchone()
-        if not _jd_existing:
+        if _jd_existing:
+            print("[INIT] 'jdemoss' already exists — left untouched.")
+        else:
             conn.execute(
                 """INSERT INTO users
                        (username, password_hash, email,
                         subscription_status, subscription_tier,
                         inventory_url_used, inventory_url_new,
-                        recovery_id, referral_code, email_verified, role)
-                   VALUES (?, ?, ?, 'active', 'pro_annual', ?, ?, ?, 'JDEMOSS', 1, 'Reviewer')""",
+                        recovery_id, referral_code, email_verified, role, is_admin)
+                   VALUES (?, ?, ?, 'active', 'pro_annual', ?, ?, ?, 'JDEMOSS', 1, 'Admin', 1)
+                   ON CONFLICT(username) DO NOTHING""",
                 (
-                    _JD_USER,
-                    _hash_password(_JD_PASS),
-                    _JD_EMAIL,
-                    MOSES_USED_URL,
-                    MOSES_NEW_URL,
-                    secrets.token_urlsafe(16),
+                    _JD_USER, _hash_password(_JD_PASS), _JD_EMAIL,
+                    MOSES_USED_URL, MOSES_NEW_URL, secrets.token_urlsafe(16),
                 ),
             )
             conn.commit()
-            _jd_uid = conn.execute(
+            _jd_uid_row = conn.execute(
                 "SELECT id FROM users WHERE LOWER(username) = ?", (_JD_USER,)
-            ).fetchone()[0]
-            for _loc_name, _loc_en in MOSES_DEFAULT_LOCATIONS:
-                conn.execute(
-                    "INSERT OR IGNORE INTO user_locations "
-                    "(user_id, location, enabled) VALUES (?, ?, ?)",
-                    (_jd_uid, _loc_name, 1 if _loc_en else 0),
-                )
-            print(
-                f"[INIT] Seeded 'jdemoss' (id={_jd_uid}, email={_JD_EMAIL!r}) — "
-                "password set to Jdemoss123! (alias login: jdmoss)."
-            )
-        else:
-            _jd_stored_email = str(_jd_existing['email'] or '').strip()
-            _jd_stored_hash = str(_jd_existing['password_hash'] or '').strip()
-            if not _jd_stored_email and _JD_EMAIL:
-                conn.execute(
-                    "UPDATE users SET email = ? WHERE id = ?",
-                    (_JD_EMAIL, _jd_existing['id']),
-                )
-            # Keep demo password aligned with Jdemoss123! when hash is missing or stale.
-            if (not _jd_stored_hash) or (not _verify_password(_JD_PASS, _jd_stored_hash)):
-                conn.execute(
-                    "UPDATE users SET password_hash = ? WHERE id = ?",
-                    (_hash_password(_JD_PASS), _jd_existing['id']),
-                )
-                print(
-                    "[INIT] 'jdemoss' password hash synced to Jdemoss123!/JDEMOSS_PASSWORD."
-                )
-            else:
-                print(
-                    "[INIT] 'jdemoss' already exists — password hash already matches baseline."
-                )
-            conn.execute(
-                "UPDATE users SET subscription_status = 'active', "
-                "subscription_tier = 'pro_annual', email = COALESCE(NULLIF(email, ''), ?) "
-                "WHERE id = ?",
-                (_JD_EMAIL, _jd_existing['id']),
-            )
-            print(
-                "[INIT] 'jdemoss' ready (case-insensitive login; alias 'jdmoss' accepted)."
-            )
-        # Ensure jdemoss RBAC role is Admin after seed/sync.
+            ).fetchone()
+            if _jd_uid_row:
+                _jd_uid = _jd_uid_row[0]
+                for _loc_name, _loc_en in MOSES_DEFAULT_LOCATIONS:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO user_locations "
+                        "(user_id, location, enabled) VALUES (?, ?, ?)",
+                        (_jd_uid, _loc_name, 1 if _loc_en else 0),
+                    )
+                print(f"[INIT] Seeded 'jdemoss' (id={_jd_uid}, email={_JD_EMAIL!r}).")
+
+        # ── One-time credential bootstrap (TestReviewer / Jdemoss) ─────────────
+        # Runs once (flagged in system_settings). Inserts missing users with
+        # ON CONFLICT DO NOTHING; sets bcrypt hashes for these two accounts only
+        # on that first run so login works without perpetual password overwrites.
+        _CRED_BOOT_KEY = "creds_bootstrap_tr_jd_v1"
         try:
+            _boot_done = conn.execute(
+                "SELECT value FROM system_settings WHERE key = ?",
+                (_CRED_BOOT_KEY,),
+            ).fetchone()
+        except Exception:
+            _boot_done = ("1",)  # table missing — skip rather than fail startup
+        if not _boot_done:
+            _boot_specs = [
+                (
+                    "testreviewer",
+                    (os.environ.get("TESTER_PASSWORD") or "TestReviewer2026!").strip(),
+                    (os.environ.get("TESTER_EMAIL") or "reviewer@bdcmanager.com").strip().lower(),
+                    "Reviewer",
+                    0,
+                    "rooftop_monthly",
+                ),
+                (
+                    "jdemoss",
+                    (os.environ.get("JDEMOSS_PASSWORD") or "DeMoss123!$").strip(),
+                    (os.environ.get("JDEMOSS_EMAIL") or "jdemoss@bdcmanager.com").strip().lower(),
+                    "Admin",
+                    1,
+                    "pro_annual",
+                ),
+            ]
+            for _bu, _bp, _be, _br, _ba, _bt in _boot_specs:
+                if not _bp:
+                    continue
+                _bh = _hash_password(_bp)
+                conn.execute(
+                    """INSERT INTO users
+                           (username, password_hash, email, role, is_admin,
+                            subscription_status, subscription_tier, email_verified)
+                       VALUES (?, ?, ?, ?, ?, 'active', ?, 1)
+                       ON CONFLICT(username) DO NOTHING""",
+                    (_bu, _bh, _be, _br, _ba, _bt),
+                )
+                # One-time only: align hash for existing row (not re-run after flag set).
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE LOWER(username) = ?",
+                    (_bh, _bu),
+                )
+                print(f"[INIT] One-time credential ensure for {_bu!r} complete.")
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)",
+                    (_CRED_BOOT_KEY, "1"),
+                )
+            except Exception as _boot_flag_err:
+                print(f"[INIT] credential bootstrap flag warning: {_boot_flag_err}")
+            conn.commit()
+        else:
+            print("[INIT] Credential bootstrap already applied — password hashes left untouched.")
+
+        # Logical rooftop member set (org-scoped users) for login lookups.
+        try:
+            conn.execute("DROP VIEW IF EXISTS rooftop_accounts")
             conn.execute(
-                "UPDATE users SET role = 'Admin', is_admin = 1 "
-                "WHERE LOWER(username) = 'jdemoss'"
+                """
+                CREATE VIEW rooftop_accounts AS
+                SELECT * FROM users
+                WHERE organization_id IS NOT NULL
+                  AND organization_id != 0
+                """
             )
             conn.commit()
-        except Exception as _jd_role_err:
-            print(f"[INIT] jdemoss role sync warning: {_jd_role_err}")
+        except Exception as _rav_err:
+            print(f"[INIT] rooftop_accounts view warning: {_rav_err}")
+
         # ── Startup seat-counter sync ─────────────────────────────────────────
+
         # Recalculate used_seats for every org from the actual user count so any
         # missed increment/decrement (e.g. before this column existed) self-heals.
         _sync_orgs = conn.execute("SELECT id FROM organizations").fetchall()
@@ -2655,28 +2460,8 @@ def _normalize_login_identifier(identifier: str) -> str:
     return _USERNAME_ALIASES.get(key, key)
 
 
-def _baseline_password_for(username: str) -> str:
-    """Plaintext seed password for known demo accounts (env-overridable)."""
-    key = _normalize_login_identifier(username)
-    master = os.environ.get("ADMIN_USER", "mdemoss").strip().lower()
-    if key == "mdemoss" or key == master:
-        return (
-            os.environ.get("ADMIN_PASSWORD")
-            or os.environ.get("DASHBOARD_PASSWORD")
-            or os.environ.get("LOGIN_PASSWORD")
-            or "Netsirk115!$"
-        ).strip()
-    if key == "testreviewer":
-        return (os.environ.get("TESTER_PASSWORD") or "TestReviewer123!").strip()
-    if key == "jdemoss":
-        return (os.environ.get("JDEMOSS_PASSWORD") or "Jdemoss123!").strip()
-    if key == "mdemoss1":
-        return "Netsirk115!$"
-    return ""
-
-
 def _ensure_users_role_column() -> None:
-    """Idempotent: guarantee users.role exists before login SELECTs it."""
+    """Idempotent schema-only: guarantee users.role exists (no row UPDATEs)."""
     try:
         conn = sqlite3.connect(DB_FILE)
         try:
@@ -2689,16 +2474,6 @@ def _ensure_users_role_column() -> None:
                 )
                 conn.commit()
                 print("[AUTH] Added missing users.role column")
-            conn.execute(
-                "UPDATE users SET role = 'Admin' "
-                "WHERE (is_admin = 1 OR LOWER(username) IN ('mdemoss', 'jdemoss')) "
-                "AND COALESCE(role, '') IN ('', 'Reviewer') "
-                "AND LOWER(username) != 'testreviewer'"
-            )
-            conn.execute(
-                "UPDATE users SET role = 'Reviewer' WHERE COALESCE(role, '') = ''"
-            )
-            conn.commit()
         finally:
             conn.close()
     except Exception as exc:
@@ -3598,15 +3373,30 @@ class UserManager:
         conn = sqlite3.connect(DB_FILE)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        # Case-insensitive username OR email lookup — no hardcoded user bypass.
-        cursor.execute(
-            "SELECT id, username, email, password_hash, salesperson_id, is_admin, "
+        # Case-insensitive lookup across primary users AND rooftop org members.
+        # Rooftop members live in `users` (organization_id set) and are mirrored
+        # by the `rooftop_accounts` view for explicit multi-tenant coverage.
+        _login_cols = (
+            "id, username, email, password_hash, salesperson_id, is_admin, "
             "subscription_status, subscription_tier, org_role, organization_id, "
-            "is_suspended, recovery_id, role FROM users "
+            "is_suspended, recovery_id, role"
+        )
+        cursor.execute(
+            f"SELECT {_login_cols} FROM users "
             "WHERE LOWER(username) = ? OR (email != '' AND LOWER(email) = ?)",
             (normalized, normalized),
         )
         row = cursor.fetchone()
+        if not row:
+            try:
+                cursor.execute(
+                    f"SELECT {_login_cols} FROM rooftop_accounts "
+                    "WHERE LOWER(username) = ? OR (email != '' AND LOWER(email) = ?)",
+                    (normalized, normalized),
+                )
+                row = cursor.fetchone()
+            except Exception as _ra_err:
+                print(f"[AUTH] rooftop_accounts lookup skipped: {_ra_err}")
         print(f"[LOGIN CHECK] {{'inputUsername': {normalized!r}, 'userFound': {bool(row)}}}")
         conn.close()
         if not row:
@@ -3614,52 +3404,13 @@ class UserManager:
             raise ValueError("Invalid username or password.")
 
         stored_hash = str(row["password_hash"] or "")
-        password_ok = _verify_password(password, stored_hash)
-        # Demo/seed accounts: if the typed password matches the known baseline
-        # plaintext but the DB hash is stale, accept and re-hash (self-heal).
-        if not password_ok:
-            baseline = _baseline_password_for(row["username"] or normalized)
-            if baseline and password == baseline:
-                try:
-                    new_hash = _hash_password(password)
-                    _heal = sqlite3.connect(DB_FILE)
-                    try:
-                        _heal.execute(
-                            "UPDATE users SET password_hash = ? WHERE id = ?",
-                            (new_hash, row["id"]),
-                        )
-                        _heal.commit()
-                    finally:
-                        _heal.close()
-                    stored_hash = new_hash
-                    password_ok = True
-                    print(
-                        f"[AUTH] Healed stale baseline password hash for "
-                        f"{row['username']!r}"
-                    )
-                except Exception as _heal_exc:
-                    print(f"[AUTH] baseline hash heal failed: {_heal_exc}")
-        if not password_ok:
+        # Verify only — never rewrite password_hash on login
+        # (Admin Console / Profile password APIs are the sole writers).
+        if not _verify_password(password, stored_hash):
             print(f"[LOGIN FAIL] Password mismatch for: {normalized}")
             print(f"[AUTH] Login failed — password mismatch "
                   f"(user id={row['id']}, username={row['username']!r})")
             raise ValueError("Invalid username or password.")
-
-        # Transparently upgrade legacy hashes to bcrypt after successful verify.
-        if stored_hash and not stored_hash.startswith(("$2a$", "$2b$", "$2y$")):
-            try:
-                _up = sqlite3.connect(DB_FILE)
-                try:
-                    _up.execute(
-                        "UPDATE users SET password_hash = ? WHERE id = ?",
-                        (_hash_password(password), row["id"]),
-                    )
-                    _up.commit()
-                    print(f"[AUTH] Upgraded user id={row['id']} hash to bcrypt")
-                finally:
-                    _up.close()
-            except Exception as _up_exc:
-                print(f"[AUTH] bcrypt upgrade skipped: {_up_exc}")
         if row["is_suspended"]:
             print(f"[AUTH] Login blocked — account suspended (user id={row['id']})")
             raise ValueError("This account has been suspended. Please contact support.")
@@ -3799,6 +3550,7 @@ class UserManager:
         """Verify ``current_password`` then replace with ``new_password``.
 
         Raises ValueError on bad current password or weak new password.
+        Allowed only via Profile change-password API routes.
         """
         if len(new_password) < 6:
             raise ValueError("New password must be at least 6 characters.")
@@ -3818,6 +3570,61 @@ class UserManager:
                 (_hash_password(new_password), user_id),
             )
             conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
+
+    @staticmethod
+    def admin_set_password(actor: dict, target_user_id: int, new_password: str) -> None:
+        """Set another user's password (Admin Console / rooftop org admin).
+
+        Master admins may update any account. Org admins may update members in
+        their own organization only. Self-service must use change_password.
+        """
+        if len(new_password) < 6:
+            raise ValueError("Password must be at least 6 characters.")
+        target_user_id = int(target_user_id or 0)
+        if not target_user_id:
+            raise ValueError("user_id is required.")
+        if int(actor.get("id") or 0) == target_user_id:
+            raise ValueError("Use the profile change-password endpoint for your own password.")
+
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row
+        try:
+            actor_row = conn.execute(
+                "SELECT id, is_admin, org_role, organization_id FROM users WHERE id = ?",
+                (int(actor["id"]),),
+            ).fetchone()
+            target = conn.execute(
+                "SELECT id, username, organization_id FROM users WHERE id = ?",
+                (target_user_id,),
+            ).fetchone()
+            if not target:
+                raise ValueError("User not found.")
+            is_master = bool(actor.get("is_master_admin") or actor.get("is_admin") or
+                             (actor_row and actor_row["is_admin"]))
+            is_org_admin = bool(actor_row and actor_row["org_role"] == "admin"
+                                and actor_row["organization_id"])
+            if not (is_master or is_org_admin):
+                raise PermissionError("Admin role required.")
+            if not is_master:
+                if target["organization_id"] != actor_row["organization_id"]:
+                    raise PermissionError("User is not a member of your organization.")
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (_hash_password(new_password), target_user_id),
+            )
+            conn.commit()
+            print(
+                f"[AUTH] Admin {actor.get('id')} set password for user "
+                f"{target_user_id} ({target['username']!r})"
+            )
         except Exception:
             try:
                 conn.rollback()
@@ -14727,73 +14534,22 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/team/reset-member-password":
-            # ── Dealership Admin: reset a team member's password ──────────────
-            # Restricted to org admins (org_role='admin').
-            # No email is sent — org-provisioned accounts may have no email.
+            # Rooftop org-admin password reset — delegates to the locked-down
+            # admin password writer (same as /api/admin/users/update-password).
             _rmp_caller = self._require_auth()
             if not _rmp_caller:
                 return
-            _rmp_db = sqlite3.connect(DB_FILE)
-            _rmp_db.row_factory = sqlite3.Row
-            _rmp_row = _rmp_db.execute(
-                "SELECT org_role, organization_id FROM users WHERE id = ?",
-                (_rmp_caller["id"],),
-            ).fetchone()
-            if not _rmp_row or _rmp_row["org_role"] != "admin":
-                _rmp_db.close()
-                self._json({"error": "Access restricted to Dealership Admins."}, 403)
-                return
             _rmp_target_id  = int(payload.get("user_id",      0)  or 0)
             _rmp_new_pw     = str(payload.get("new_password", "") or "").strip()
-            if not _rmp_target_id:
-                _rmp_db.close()
-                self._json({"error": "user_id is required."}, 400)
-                return
-            if not _rmp_new_pw:
-                _rmp_db.close()
-                self._json({"error": "new_password is required."}, 400)
-                return
-            if len(_rmp_new_pw) < 6:
-                _rmp_db.close()
-                self._json({"error": "Password must be at least 6 characters."}, 400)
-                return
-            if _rmp_target_id == _rmp_caller["id"]:
-                _rmp_db.close()
-                self._json({"error": "Use the account settings page to change your own password."}, 400)
-                return
-            _rmp_target = _rmp_db.execute(
-                "SELECT id, username, organization_id FROM users WHERE id = ?",
-                (_rmp_target_id,),
-            ).fetchone()
-            _rmp_db.close()
-            if not _rmp_target or _rmp_target["organization_id"] != _rmp_row["organization_id"]:
-                self._json({"error": "User is not a member of your organization."}, 404)
-                return
-            _rmp_conn = sqlite3.connect(DB_FILE)
             try:
-                _rmp_conn.execute(
-                    "UPDATE users SET password_hash = ? WHERE id = ?",
-                    (_hash_password(_rmp_new_pw), _rmp_target_id),
-                )
-                _rmp_conn.commit()
-            except Exception as _rmp_err:
-                try:
-                    _rmp_conn.rollback()
-                except Exception:
-                    pass
-                _rmp_conn.close()
-                self._json({"error": f"Failed to reset password: {_rmp_err}"}, 500)
-                return
-            finally:
-                try:
-                    _rmp_conn.close()
-                except Exception:
-                    pass
-            print(
-                f"[TEAM] Admin {_rmp_caller['id']} reset password for user "
-                f"{_rmp_target_id} in org {_rmp_row['organization_id']}"
-            )
-            self._json({"success": True, "user_id": _rmp_target_id})
+                UserManager.admin_set_password(_rmp_caller, _rmp_target_id, _rmp_new_pw)
+                self._json({"success": True, "user_id": _rmp_target_id})
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, 403)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._json({"error": f"Failed to reset password: {exc}"}, 500)
             return
 
         # ── Free AI Post Generator (public — no auth required) ───────
@@ -15943,7 +15699,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
 
         token = self._get_bearer_token()
 
-        if path == "/api/auth/change-password":
+        if path in ("/api/auth/change-password", "/api/user/profile/change-password"):
             current_password = payload.get("current_password", "")
             new_password     = payload.get("new_password",     "")
             confirm_password = payload.get("confirm_password", "")
@@ -15952,9 +15708,23 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 UserManager.change_password(user["id"], current_password, new_password)
-                self._json({"status": "ok"})
+                self._json({"success": True, "status": "ok"})
             except ValueError as exc:
                 self._json({"error": str(exc)}, 400)
+            return
+
+        if path == "/api/admin/users/update-password":
+            _uid = int(payload.get("user_id") or payload.get("id") or 0)
+            _npw = str(payload.get("new_password") or payload.get("password") or "").strip()
+            try:
+                UserManager.admin_set_password(user, _uid, _npw)
+                self._json({"success": True, "user_id": _uid})
+            except PermissionError as exc:
+                self._json({"error": str(exc)}, 403)
+            except ValueError as exc:
+                self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self._json({"error": f"Failed to update password: {exc}"}, 500)
             return
 
         # ── Forms draft — persist shared master fields for paper templates ──
@@ -17225,8 +16995,9 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 "associated with a provisioned Organization (Testreviewer's Dealership).\n"
                 "- This account can access Team & Seats (/team), invite reps, manage rooftop-level "
                 "settings, and exercise all Rooftop Admin features.\n"
-                "- Credentials and rooftop status are force-synced on every server restart so they "
-                "survive database resets and schema migrations.\n\n"
+                "- Seed accounts are inserted once with ON CONFLICT DO NOTHING; existing "
+                "password hashes are never overwritten on restart "
+                "(change passwords only via Admin Console or Profile).\n\n"
                 "## Response Rules\n"
                 "- Be concise. Use numbered steps for procedures, bullet points for lists.\n"
                 "- Format with blank lines between steps for readability.\n"
