@@ -55,6 +55,12 @@ def _str(value: Any) -> str:
     return str(value).strip()
 
 
+def _synthetic_vin(link: str, *, in_transit: bool) -> str:
+    """Stable non-17-char Meta-safe id derived from the VDP link."""
+    digest = hashlib.sha1(link.encode("utf-8")).hexdigest()[:12].upper()
+    return f"IT{digest}" if in_transit else f"UV{digest}"
+
+
 def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") -> dict[str, Any] | None:
     """Normalize any tier output into the canonical DB / Zod-compatible shape.
 
@@ -62,6 +68,9 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
       stockNumber, year, make, model, trim, price, mileage,
       exteriorColor, link, imageUrl, vin
     Also emits snake_case aliases used by marketplace_inventory.
+
+    Never drops vehicles for missing dealer stock — In Transit / Unavailable
+    rows keep full VDP link + YMMT / price / miles / color / image / vin.
     """
     if not isinstance(raw, dict):
         return None
@@ -81,8 +90,12 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
     year = _digits(g("year", "modelYear", "model_year"))
     if year and (year < 1980 or year > 2100):
         year = 0
+    make = _str(g("make", "manufacturer"))
+    model = _str(g("model", "modelName"))
+    trim = _str(g("trim", "trimLevel", "series"))
 
-    # Stock first so In Transit cards are never dropped for missing dealer stock.
+    # Stock first so In Transit / Unavailable cards are never dropped for
+    # missing dealer stock.
     stock = resolve_stock_number(raw, html_blob, vin="", year=year)
     if not stock:
         stock = sanitize_stock_number(
@@ -96,34 +109,41 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
         m = VIN_RE.search(blob) or VIN_RE.search(link) or VIN_RE.search(html_blob)
         if m:
             vin = m.group(1).upper()
-    # In Transit vehicles must not be truncated: keep them with a stable id
-    # derived from the VDP link when the dealer page omits a VIN.
-    if (not vin or len(vin) < 10) and (
-        stock == IN_TRANSIT_STOCK or detect_in_transit(html_blob)
-    ):
-        if link:
-            # Stable non-VIN id (14 chars) so Meta feeds do not treat it as a real VIN.
-            digest = hashlib.sha1(link.encode("utf-8")).hexdigest()[:12].upper()
-            vin = f"IT{digest}"
-            stock = IN_TRANSIT_STOCK
+
+    in_tr = stock == IN_TRANSIT_STOCK or detect_in_transit(html_blob)
+    # Retain every vehicle with a stable identity. Prefer VDP-link synthetic
+    # ids when VIN is omitted (IT* for In Transit, UV* for Unavailable).
+    if not vin or len(vin) < 10:
+        if link and (in_tr or (year and make) or stock == MISSING_STOCK or year or make):
+            vin = _synthetic_vin(link, in_transit=in_tr)
+            if in_tr:
+                stock = IN_TRANSIT_STOCK
+            elif not stock or stock in ("N/A", "NA", ""):
+                stock = MISSING_STOCK
+        elif year and make:
+            # No VDP link — still capture the row with a YMM-stable synthetic id.
+            seed = f"{year}|{make}|{model}|{trim}|{stock}".encode("utf-8")
+            digest = hashlib.sha1(seed).hexdigest()[:12].upper()
+            vin = f"IT{digest}" if in_tr else f"UV{digest}"
+            if in_tr:
+                stock = IN_TRANSIT_STOCK
+            elif not stock or stock in ("N/A", "NA", ""):
+                stock = MISSING_STOCK
         else:
             return None
-    elif not vin or len(vin) < 10:
-        return None
 
     # Re-resolve with known VIN so year/VIN are not mistaken for stock.
     stock = resolve_stock_number(raw, html_blob, vin=vin, year=year) or stock or MISSING_STOCK
+    if in_tr and stock == MISSING_STOCK:
+        stock = IN_TRANSIT_STOCK
 
     price = _digits(g("price", "internetPrice", "finalPrice", "sellingPrice", "msrp", "listPrice"))
     if 1900 <= price <= 2100:
         price = 0
 
     mileage = _digits(g("mileage", "miles", "odometer", "distance"))
-    make = _str(g("make", "manufacturer"))
-    model = _str(g("model", "modelName"))
-    trim = _str(g("trim", "trimLevel", "series"))
     color = _str(g("exteriorColor", "exterior_color", "extColor", "color"))
-    image = _str(g("imageUrl", "image_url", "image", "photo", "thumbnail"))
+    image = _str(g("imageUrl", "image_url", "image", "photo", "thumbnail", "image_link"))
     title = _str(g("title", "name")) or " ".join(
         p for p in (str(year) if year else "", make, model, trim) if p
     ).strip()
@@ -132,6 +152,7 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
     if cond not in ("New", "Used"):
         cond = "Used"
 
+    # Always retain full payload — never truncate In Transit / Unavailable rows.
     return {
         # Zod / LLM schema keys
         "stockNumber": stock or MISSING_STOCK,
@@ -150,7 +171,9 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
         "stock_number": stock or MISSING_STOCK,
         "exterior_color": color,
         "image_url": image,
+        "image_link": image,
         "vdp_url": link,
+        "vdpUrl": link,
         "condition": cond,
         "status": "ACTIVE",
     }

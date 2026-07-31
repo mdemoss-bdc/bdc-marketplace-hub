@@ -194,12 +194,13 @@ export function extractInteriorColor(text: string): string | null {
 }
 
 export const IN_TRANSIT_STOCK = "In Transit";
+export const MISSING_STOCK = "Unavailable";
 const IN_TRANSIT_RE =
-  /\b(?:in[\s-]?transit|in[\s-]?production|building|arriving[\s-]?soon|on[\s-]?order|coming[\s-]?soon|pipeline)\b/i;
+  /\b(?:in[\s-]?transit|in[\s-]?production|arriving[\s-]?soon|on[\s-]?order|coming[\s-]?soon|building|pipeline|transit)\b/i;
 
 export function isInTransitStock(value: unknown): boolean {
   const s = String(value || "").trim();
-  return /^in[\s-]?transit$/i.test(s) || s === IN_TRANSIT_STOCK;
+  return /^in[\s-]?transit$/i.test(s) || /^transit$/i.test(s) || s === IN_TRANSIT_STOCK;
 }
 
 export function detectInTransit(text: unknown): boolean {
@@ -216,7 +217,15 @@ export function isValidStockNumber(
   const raw = String(value || "").trim();
   if (isInTransitStock(raw)) return true;
   const stock = raw.toUpperCase();
-  if (!stock || stock === "N/A" || stock === "NA" || stock === "NONE" || stock === "-" || stock === "—") {
+  if (
+    !stock ||
+    stock === "N/A" ||
+    stock === "NA" ||
+    stock === "NONE" ||
+    stock === "-" ||
+    stock === "—" ||
+    stock === "UNAVAILABLE"
+  ) {
     return false;
   }
   if (stock.length === 17 && VIN_RE.test(stock)) return false;
@@ -253,7 +262,7 @@ export function extractStockNumber(
   return null;
 }
 
-/** Resolve dealer stock: explicit value → In Transit → N/A (never VIN/year). */
+/** Resolve dealer stock: explicit value → In Transit → Unavailable (never VIN/year). */
 export function resolveStockNumber(
   vehicle: Record<string, unknown>,
   year: number,
@@ -296,7 +305,7 @@ export function resolveStockNumber(
     .map((v) => asNonEmptyString(v))
     .join(" ");
   if (detectInTransit(statusBlob)) return IN_TRANSIT_STOCK;
-  return "N/A";
+  return MISSING_STOCK;
 }
 
 /** Standard keyword extraction for Year / Make / Model. */
@@ -560,7 +569,7 @@ export function sanitizeVehicleRecord(
   let stock = resolveStockNumber(vehicle, year, make, model, vin);
   if (!isValidStockNumber(stock, year, make, model)) {
     const labeled = extractStockNumber(blob, year, make, model);
-    stock = labeled || (detectInTransit(blob) ? IN_TRANSIT_STOCK : "");
+    stock = labeled || (detectInTransit(blob) ? IN_TRANSIT_STOCK : MISSING_STOCK);
   }
 
   const exterior = titleCaseColor(
@@ -592,6 +601,17 @@ export function sanitizeVehicleRecord(
     ),
   );
 
+  const link =
+    asNonEmptyString(vehicle.link) ||
+    asNonEmptyString(vehicle.vdp_url) ||
+    asNonEmptyString(vehicle.vdpUrl) ||
+    "";
+  const image =
+    asNonEmptyString(vehicle.image_url) ||
+    asNonEmptyString(vehicle.imageUrl) ||
+    asNonEmptyString(vehicle.image_link) ||
+    "";
+
   return {
     ...vehicle,
     vin,
@@ -602,13 +622,17 @@ export function sanitizeVehicleRecord(
     price,
     mileage,
     miles: mileage,
-    stock_number: stock,
-    stockNumber: stock,
+    stock_number: stock || MISSING_STOCK,
+    stockNumber: stock || MISSING_STOCK,
     exterior_color: exterior,
     exteriorColor: exterior,
     color: exterior,
     interior_color: interior,
     interiorColor: interior,
+    link,
+    vdp_url: link,
+    image_url: image,
+    imageUrl: image,
   };
 }
 

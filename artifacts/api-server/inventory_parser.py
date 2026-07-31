@@ -35,12 +35,12 @@ _STOCK_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _IN_TRANSIT_RE = re.compile(
-    r"\b(?:in[\s\-]?transit|in[\s\-]?production|building|arriving[\s\-]?soon|"
-    r"on[\s\-]?order|coming[\s\-]?soon|pipeline)\b",
+    r"\b(?:in[\s\-]?transit|in[\s\-]?production|arriving[\s\-]?soon|"
+    r"on[\s\-]?order|coming[\s\-]?soon|building|pipeline|transit)\b",
     re.IGNORECASE,
 )
 IN_TRANSIT_STOCK = "In Transit"
-MISSING_STOCK = "N/A"
+MISSING_STOCK = "Unavailable"
 # Year Make Model — standard keyword extraction from SRP headings.
 YMM_RE = re.compile(
     r"\b((?:19|20)\d{2})\s+([A-Za-z][A-Za-z0-9\-]+)\s+([A-Za-z0-9][A-Za-z0-9 \-/]{1,40})"
@@ -142,7 +142,7 @@ def _clean_stock_candidate(raw: str) -> str | None:
     """Strip labels; reject model years and full VINs."""
     candidate = _STOCK_PREFIX_RE.sub("", scrub_raw_text(raw)).strip().upper()
     candidate = re.split(r"[\s|,;]+", candidate, maxsplit=1)[0].strip()
-    if not candidate or candidate in {"N/A", "NA", "NONE", "-"}:
+    if not candidate or candidate in {"N/A", "NA", "NONE", "-", "UNAVAILABLE"}:
         return None
     if _YEAR_ONLY_RE.fullmatch(candidate):
         return None
@@ -291,7 +291,7 @@ def sanitize_vehicle_record(
         stock = ""
     if stock and len(stock) == 17 and VIN_RE.fullmatch(stock):
         stock = ""
-    # No synthetic VIN/year codes. Fallback: In Transit → N/A.
+    # No synthetic VIN/year codes. Fallback: In Transit → Unavailable.
     if not stock:
         status_blob = " ".join(
             _as_str(vehicle.get(k))
@@ -305,6 +305,24 @@ def sanitize_vehicle_record(
         else:
             stock = MISSING_STOCK
 
+    color = (
+        _as_str(vehicle.get("exterior_color"))
+        or _as_str(vehicle.get("exteriorColor"))
+        or _as_str(vehicle.get("extColor"))
+        or _as_str(vehicle.get("color"))
+    )
+    image = (
+        _as_str(vehicle.get("image_url"))
+        or _as_str(vehicle.get("imageUrl"))
+        or _as_str(vehicle.get("image_link"))
+        or _as_str(vehicle.get("image"))
+    )
+    link = (
+        _as_str(vehicle.get("link"))
+        or _as_str(vehicle.get("vdp_url"))
+        or _as_str(vehicle.get("vdpUrl"))
+    )
+
     out = dict(vehicle)
     out["vin"] = vin
     out["year"] = int(year or 0)
@@ -313,10 +331,19 @@ def sanitize_vehicle_record(
     out["price"] = int(price or 0)
     out["mileage"] = int(mileage or 0)
     out["stock_number"] = stock or MISSING_STOCK
-    if "link" not in out and vehicle.get("vdp_url"):
-        out["link"] = _as_str(vehicle.get("vdp_url"))
-    if "vdp_url" not in out and vehicle.get("link"):
-        out["vdp_url"] = _as_str(vehicle.get("link"))
+    out["stockNumber"] = out["stock_number"]
+    if color:
+        out["exterior_color"] = color
+        out["exteriorColor"] = color
+        out["color"] = color
+    if image:
+        out["image_url"] = image
+        out["imageUrl"] = image
+        out["image_link"] = image
+    if link:
+        out["link"] = link
+        out["vdp_url"] = link
+        out["vdpUrl"] = link
     return out
 
 

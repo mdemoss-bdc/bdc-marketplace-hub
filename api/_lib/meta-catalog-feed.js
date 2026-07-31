@@ -58,14 +58,18 @@ function normalizeRow(vehicle) {
   const vinRaw = String(vehicle.vin || '').trim().toUpperCase();
   let stock = String(vehicle.stock_number || '').trim();
   const inTransit = /^in[\s-]?transit$/i.test(stock);
-  if (['n/a', 'na', 'none', '-', '—'].includes(stock.toLowerCase())) stock = '';
+  // Treat Unavailable like N/A — keep the row, never use sentinel as item id.
+  if (['n/a', 'na', 'none', '-', '—', 'unavailable'].includes(stock.toLowerCase())) stock = '';
   const dbId = String(vehicle.id || '').trim();
-  // Synthetic IT* ids and non-17-char placeholders are not Meta VINs.
+  // Synthetic IT*/UV* ids and non-17-char placeholders are not Meta VINs.
   const realVin =
-    vinRaw.length === 17 && !vinRaw.startsWith('IT') && /^[A-HJ-NPR-Z0-9]{17}$/.test(vinRaw)
+    vinRaw.length === 17 &&
+    !vinRaw.startsWith('IT') &&
+    !vinRaw.startsWith('UV') &&
+    /^[A-HJ-NPR-Z0-9]{17}$/.test(vinRaw)
       ? vinRaw
       : '';
-  // Keep In Transit rows in the catalog; never use "In Transit" as the item id.
+  // Keep In Transit / Unavailable rows in the catalog; never use sentinels as id.
   const id = realVin || (!inTransit && stock ? stock : '') || (dbId ? `STOCK-${dbId}` : '');
   if (!id) return null;
 

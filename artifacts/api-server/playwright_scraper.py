@@ -70,18 +70,18 @@ def _lock_condition(raw: Any, target: str) -> str:
 
 
 def _stock_safe(val: Any) -> str:
-    """Return explicit dealer stock, 'In Transit', or 'N/A' — never invent codes."""
+    """Return explicit dealer stock, 'In Transit', or 'Unavailable' — never invent codes."""
     if not val:
-        return 'N/A'
+        return 'Unavailable'
     s = str(val).strip()
-    if not s or s.lower() in ('null', 'none', 'n/a', 'na', '0', '-', '—'):
-        return 'N/A'
-    if re.fullmatch(r'in[\s\-]?transit', s, re.I):
+    if not s or s.lower() in ('null', 'none', 'n/a', 'na', '0', '-', '—', 'unavailable'):
+        return 'Unavailable'
+    if re.fullmatch(r'(?:in[\s\-]?transit|transit)', s, re.I):
         return 'In Transit'
     if re.fullmatch(r'(?:19|20)\d{2}', s):
-        return 'N/A'
+        return 'Unavailable'
     if re.fullmatch(r'[A-HJ-NPR-Z0-9]{17}', s, re.I):
-        return 'N/A'
+        return 'Unavailable'
     return s
 
 
@@ -426,7 +426,7 @@ def _richness(v: dict) -> int:
     score = 0
     for key in _RICHNESS_FIELDS:
         val = v.get(key)
-        if val in (None, '', 0, 'N/A'):
+        if val in (None, '', 0, 'N/A', 'Unavailable'):
             continue
         score += 1
     return score
@@ -435,9 +435,9 @@ def _richness(v: dict) -> int:
 def _merge_vehicle(base: dict, other: dict) -> dict:
     """Fill blank fields in ``base`` from ``other`` (same VIN, two sources)."""
     for key, val in other.items():
-        if val in (None, '', 0, 'N/A'):
+        if val in (None, '', 0, 'N/A', 'Unavailable'):
             continue
-        if base.get(key) in (None, '', 0, 'N/A'):
+        if base.get(key) in (None, '', 0, 'N/A', 'Unavailable'):
             base[key] = val
     return base
 
@@ -1041,7 +1041,7 @@ def fetch_with_playwright(url: str, condition: str) -> list[dict]:
                     if sm:
                         stock = sm.group(1)
                     elif re.search(
-                        r'\b(?:in[\s\-]?transit|building|arriving[\s\-]?soon)\b',
+                        r'\b(?:in[\s\-]?transit|arriving[\s\-]?soon|building|transit)\b',
                         window,
                         re.I,
                     ):

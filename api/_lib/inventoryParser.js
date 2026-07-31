@@ -160,12 +160,13 @@ function extractInteriorColor(text) {
 
 /** Reject years, VINs, makes, and empty placeholders as stock numbers. */
 const IN_TRANSIT_STOCK = 'In Transit';
+const MISSING_STOCK = 'Unavailable';
 const IN_TRANSIT_RE =
-  /\b(?:in[\s-]?transit|in[\s-]?production|building|arriving[\s-]?soon|on[\s-]?order|coming[\s-]?soon|pipeline)\b/i;
+  /\b(?:in[\s-]?transit|in[\s-]?production|arriving[\s-]?soon|on[\s-]?order|coming[\s-]?soon|building|pipeline|transit)\b/i;
 
 function isInTransitStock(value) {
   const s = String(value || '').trim();
-  return /^in[\s-]?transit$/i.test(s) || s === IN_TRANSIT_STOCK;
+  return /^in[\s-]?transit$/i.test(s) || /^transit$/i.test(s) || s === IN_TRANSIT_STOCK;
 }
 
 function detectInTransit(text) {
@@ -176,7 +177,15 @@ function isValidStockNumber(value, year = 0, make = '', model = '') {
   const stock = String(value || '').trim();
   if (isInTransitStock(stock)) return true;
   const upper = stock.toUpperCase();
-  if (!upper || upper === 'N/A' || upper === 'NA' || upper === 'NONE' || upper === '-' || upper === '—') {
+  if (
+    !upper ||
+    upper === 'N/A' ||
+    upper === 'NA' ||
+    upper === 'NONE' ||
+    upper === '-' ||
+    upper === '—' ||
+    upper === 'UNAVAILABLE'
+  ) {
     return false;
   }
   if (upper.length === 17 && VIN_RE.test(upper)) return false;
@@ -212,7 +221,7 @@ function extractStockNumber(text, year = 0, make = '', model = '') {
 
 /**
  * Resolve dealer stock from payload aliases.
- * Missing → "In Transit" if status indicates it, else "N/A" (never VIN/year).
+ * Missing → "In Transit" if status indicates it, else "Unavailable" (never VIN/year).
  */
 function resolveStockNumber(vehicle, year, make, model, _vin) {
   const candidates = [
@@ -250,7 +259,7 @@ function resolveStockNumber(vehicle, year, make, model, _vin) {
     .map((v) => asNonEmptyString(v))
     .join(' ');
   if (detectInTransit(statusBlob)) return IN_TRANSIT_STOCK;
-  return 'N/A';
+  return MISSING_STOCK;
 }
 
 function extractYearMakeModel(text) {
@@ -483,11 +492,11 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     asNonEmptyString(vehicle.description) || asNonEmptyString(vehicle.ai_description) || '',
   );
 
-  // Prefer structured dealer stock; "In Transit" status; else empty (no VIN/year).
+  // Prefer structured dealer stock; "In Transit" status; else Unavailable.
   let stock = resolveStockNumber(vehicle, year, make, model, vin);
   if (!isValidStockNumber(stock, year, make, model)) {
     const labeled = extractStockNumber(blob, year, make, model);
-    stock = labeled || (detectInTransit(blob) ? IN_TRANSIT_STOCK : '');
+    stock = labeled || (detectInTransit(blob) ? IN_TRANSIT_STOCK : MISSING_STOCK);
   }
 
   const exterior = titleCaseColor(
@@ -531,13 +540,17 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     price,
     mileage,
     miles: mileage,
-    stock_number: stock,
-    stockNumber: stock,
+    stock_number: stock || MISSING_STOCK,
+    stockNumber: stock || MISSING_STOCK,
     exterior_color: exterior,
     exteriorColor: exterior,
     color: exterior,
     interior_color: interior,
     interiorColor: interior,
+    link: asNonEmptyString(vehicle.link) || asNonEmptyString(vehicle.vdp_url) || asNonEmptyString(vehicle.vdpUrl) || '',
+    vdp_url: asNonEmptyString(vehicle.vdp_url) || asNonEmptyString(vehicle.vdpUrl) || asNonEmptyString(vehicle.link) || '',
+    image_url: asNonEmptyString(vehicle.image_url) || asNonEmptyString(vehicle.imageUrl) || asNonEmptyString(vehicle.image_link) || '',
+    imageUrl: asNonEmptyString(vehicle.imageUrl) || asNonEmptyString(vehicle.image_url) || asNonEmptyString(vehicle.image_link) || '',
   };
 }
 
@@ -590,4 +603,5 @@ module.exports = {
   detectInTransit,
   isInTransitStock,
   IN_TRANSIT_STOCK,
+  MISSING_STOCK,
 };

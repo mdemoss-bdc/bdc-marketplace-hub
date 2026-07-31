@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Fragment, useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { useSearch } from 'wouter';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
@@ -427,13 +427,19 @@ function cleanVehicleText(input: unknown): string {
 }
 
 const IN_TRANSIT_STOCK = 'In Transit';
+const UNAVAILABLE_STOCK = 'Unavailable';
 
 function isInTransitStock(value: unknown): boolean {
   const s = String(value || '').trim();
-  return /^in[\s-]?transit$/i.test(s) || s === IN_TRANSIT_STOCK;
+  return /^in[\s-]?transit$/i.test(s) || /^transit$/i.test(s) || s === IN_TRANSIT_STOCK;
 }
 
-/** Explicit dealer stock → In Transit → N/A — never invent VIN slices or years. */
+function isUnavailableStock(value: unknown): boolean {
+  const s = String(value || '').trim();
+  return !s || /^n\/?a$/i.test(s) || /^unavailable$/i.test(s) || s === '—' || s === '–';
+}
+
+/** Explicit dealer stock → In Transit → Unavailable — never invent VIN slices or years. */
 function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: string): string {
   const candidates = [
     raw.stock_number,
@@ -448,7 +454,7 @@ function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: s
     const cleaned = cleanVehicleText(c);
     if (isInTransitStock(cleaned)) return IN_TRANSIT_STOCK;
     const stock = cleaned.toUpperCase();
-    if (!stock || stock === 'N/A' || stock === 'NA' || stock === 'NONE') continue;
+    if (!stock || stock === 'N/A' || stock === 'NA' || stock === 'NONE' || stock === 'UNAVAILABLE') continue;
     if (/^(?:19|20)\d{2}$/.test(stock)) continue; // never show year as stock
     if (year > 0 && stock === String(year)) continue;
     if (stock.length === 17) continue;
@@ -466,10 +472,10 @@ function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: s
   ]
     .map((v) => cleanVehicleText(v))
     .join(' ');
-  if (/\b(?:in[\s-]?transit|arriving[\s-]?soon|in[\s-]?production|building)\b/i.test(statusBlob)) {
+  if (/\b(?:in[\s-]?transit|arriving[\s-]?soon|in[\s-]?production|building|transit)\b/i.test(statusBlob)) {
     return IN_TRANSIT_STOCK;
   }
-  return 'N/A';
+  return UNAVAILABLE_STOCK;
 }
 
 /** Pull vehicle rows from either a direct array or nested API payloads. */
@@ -570,7 +576,7 @@ function normalizeInventoryVehicle(raw: Record<string, unknown>, index = 0): Veh
     retail_price: asMoney(raw.retail_price ?? raw.retailPrice) || 0,
     doc_fee: asMoney(raw.doc_fee) || 0,
     savings: asMoney(raw.savings) || 0,
-    stock_number: stock_number || 'N/A',
+    stock_number: stock_number || UNAVAILABLE_STOCK,
     exterior_color: exterior_color || '',
     interior_color: interior_color || '',
     image_url: String(raw.image_url ?? raw.imageUrl ?? '').trim(),
@@ -628,12 +634,38 @@ function resolveVehicleHref(
 
 function fmtStock(stock: string | undefined | null) {
   const s = String(stock || '').trim();
-  if (!s || s === 'N/A' || s === 'NA' || /^(?:19|20)\d{2}$/.test(s)) return 'N/A';
   if (isInTransitStock(s)) return IN_TRANSIT_STOCK;
+  if (isUnavailableStock(s) || /^(?:19|20)\d{2}$/.test(s)) return UNAVAILABLE_STOCK;
   return `#${s}`;
 }
 
-/** Stock cell: In Transit badge / #CODE / N/A — clickable when VDP link exists. */
+/** Wrap stock label in VDP link when href is available. */
+function StockLink({
+  href,
+  children,
+  className,
+}: {
+  href?: string | null;
+  children: ReactNode;
+  className?: string;
+}) {
+  if (href && href !== '#') {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={className || 'inline-flex hover:opacity-90'}
+        title="Open vehicle detail page"
+      >
+        {children}
+      </a>
+    );
+  }
+  return <>{children}</>;
+}
+
+/** Stock cell: In Transit / #CODE / Unavailable — clickable when VDP link exists. */
 function StockNumberCell({
   stock,
   href,
@@ -648,39 +680,33 @@ function StockNumberCell({
         In Transit
       </span>
     );
-    if (href && href !== '#') {
-      return (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex hover:opacity-90"
-          title="Open vehicle detail page"
-        >
-          {badge}
-        </a>
-      );
-    }
-    return badge;
-  }
-  const label = fmtStock(s);
-  if (label === 'N/A') {
-    return <span className="text-muted-foreground/70">N/A</span>;
-  }
-  if (href && href !== '#') {
     return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary hover:underline underline-offset-2"
-        title="Open vehicle detail page"
-      >
-        {label}
-      </a>
+      <StockLink href={href} className="inline-flex hover:opacity-90">
+        {badge}
+      </StockLink>
     );
   }
-  return <span>{label}</span>;
+  const label = fmtStock(s);
+  if (label === UNAVAILABLE_STOCK) {
+    const badge = (
+      <span className="inline-flex items-center rounded-md border border-border/60 bg-muted/40 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        Unavailable
+      </span>
+    );
+    return (
+      <StockLink href={href} className="inline-flex hover:opacity-90">
+        {badge}
+      </StockLink>
+    );
+  }
+  return (
+    <StockLink
+      href={href}
+      className="text-primary hover:underline underline-offset-2"
+    >
+      {label}
+    </StockLink>
+  );
 }
 
 function fmt(n: number) {
@@ -1617,7 +1643,13 @@ function QueueView({ token }: { token: string }) {
                       <span className="font-medium">{vehicleTitle(item)}</span>
                       {item.trim && <span className="ml-1.5 text-muted-foreground text-xs">{item.trim}</span>}
                     </td>
-                    <td className="px-4 py-3.5 font-mono text-xs text-muted-foreground">{(item.stock_number && item.stock_number !== 'N/A') ? item.stock_number : '—'}</td>
+                    <td className="px-4 py-3.5 font-mono text-xs text-muted-foreground">
+                      {isInTransitStock(item.stock_number)
+                        ? IN_TRANSIT_STOCK
+                        : isUnavailableStock(item.stock_number)
+                          ? UNAVAILABLE_STOCK
+                          : item.stock_number}
+                    </td>
                     <td className="px-4 py-3.5 font-mono text-xs text-muted-foreground">{item.vin.slice(-8)}</td>
                     <td className="px-4 py-3.5"><QueueStatusBadge status={item.status} /></td>
                     <td className="px-4 py-3.5">
@@ -2911,7 +2943,7 @@ function InventoryView({
                         )}
                       </td>
 
-                      {/* Stock # → In Transit badge / VDP link / — */}
+                      {/* Stock # → In Transit / Unavailable / #CODE — VDP link */}
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
                         <StockNumberCell
                           stock={stockNumber}
@@ -2921,7 +2953,10 @@ function InventoryView({
 
                       {/* VIN */}
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground whitespace-nowrap tracking-wide">
-                        {v.vin && v.vin.length === 17 && !String(v.vin).startsWith('IT')
+                        {v.vin &&
+                        v.vin.length === 17 &&
+                        !String(v.vin).startsWith('IT') &&
+                        !String(v.vin).startsWith('UV')
                           ? v.vin
                           : '—'}
                       </td>

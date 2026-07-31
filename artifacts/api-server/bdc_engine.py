@@ -5932,7 +5932,7 @@ class _VehicleHTMLParser(html.parser.HTMLParser):
             val = ' '.join(self._ddc_buf).strip()
             if val and self._cur is not None:
                 cur_val = str(self._cur.get(self._ddc_field) or '').strip()
-                if not cur_val or cur_val in ('0', 'N/A'):
+                if not cur_val or cur_val in ('0', 'N/A', 'Unavailable'):
                     self._cur[self._ddc_field] = val
             self._ddc_field = None
             self._ddc_field_depth = -1
@@ -6257,7 +6257,7 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
 #        HTML data-vin attributes        -> structural text-block VIN+stock scan
 #
 # Safety contract enforced after every path:
-#   • stock_number  = real extracted value  or  'N/A'
+#   • stock_number  = real extracted value  or  'Unavailable'
 #                     (never empty, never VIN-derived, never auto-increment)
 #   • condition     = locked to the URL-derived argument — never overridden by
 #                     scraped data (new_inventory_url -> 'New', used -> 'Used')
@@ -6647,24 +6647,26 @@ def _int_safe(raw, default: int = 0) -> int:
 
 
 def _stock_safe(raw) -> str:
-    """Return a sanitised stock number, 'In Transit', or 'N/A'.
+    """Return a sanitised stock number, 'In Transit', or 'Unavailable'.
 
     Never invents VIN slices / years. Blocks bare 17-char VINs and pure
     auto-increment integers ≥ 5 digits with no letter prefix.
     """
     if not raw:
-        return 'N/A'
+        return 'Unavailable'
     s = str(raw).strip()
-    if not s or s.lower() in ('n/a', 'na', 'none', '0', '-', '—', 'null', 'undefined'):
-        return 'N/A'
-    if re.fullmatch(r'in[\s\-]?transit', s, re.I):
+    if not s or s.lower() in (
+        'n/a', 'na', 'none', '0', '-', '—', 'null', 'undefined', 'unavailable',
+    ):
+        return 'Unavailable'
+    if re.fullmatch(r'(?:in[\s\-]?transit|transit)', s, re.I):
         return 'In Transit'
     if re.fullmatch(r'[A-HJ-NPR-Z0-9]{17}', s, re.I):
-        return 'N/A'   # bare VIN — do not use as stock
+        return 'Unavailable'   # bare VIN — do not use as stock
     if re.fullmatch(r'(?:19|20)\d{2}', s):
-        return 'N/A'   # model year — never a stock number
+        return 'Unavailable'   # model year — never a stock number
     if re.fullmatch(r'\d{5,}', s):
-        return 'N/A'   # pure auto-increment integer
+        return 'Unavailable'   # pure auto-increment integer
     return s
 
 
@@ -12540,7 +12542,11 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
 
                     # ── vehicle_id: real 17-char VIN -> stock# -> DB id ─────
                     _real_vin  = _vin  if len(_vin) == 17 else ''
-                    _stk_clean = _stk if (_stk and _stk not in ('N/A', 'NA', 'n/a')) else ''
+                    _stk_clean = _stk if (
+                        _stk and _stk not in (
+                            'N/A', 'NA', 'n/a', 'Unavailable', 'unavailable', 'In Transit',
+                        )
+                    ) else ''
                     _vid = _real_vin or _stk_clean or _dbid
                     if _vid in _seen_ids:
                         _vid = f"{_vid}-{_dbid}"

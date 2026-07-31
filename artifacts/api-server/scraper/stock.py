@@ -1,11 +1,9 @@
 """Dealer stock-number extraction with strict selector priority + sanitization.
 
-Priority (before generic regex / VIN / year fallbacks):
-  1. Data attributes: data-stocknumber, data-stock-number, data-stock, data-vin-stock
-  2. DOM class selectors: .stockNumber .value, .stock-number .value, …
-  3. Labeled text: "Stock #:" / "Stk #:" + alphanumeric code
-  4. "In Transit" / "Building" / "Arriving Soon" status badges (literal stockNumber)
-  5. "N/A" — never invent VIN slices, years, or random codes
+Priority (3-step fallback before inventing anything):
+  1. Explicit dealer stock: data-stocknumber, .stockNumber, "Stock #:" labels
+  2. Card text/badges: "In Transit", "Transit", or "Arriving Soon" → "In Transit"
+  3. "Unavailable" — never invent VIN slices, years, or random codes
 """
 
 from __future__ import annotations
@@ -21,18 +19,20 @@ YEAR_RE = re.compile(r"^(?:19|20)\d{2}$")
 STOCK_CODE_RE = re.compile(r"^[A-Z0-9][A-Z0-9\-_/]{2,14}$", re.I)
 
 IN_TRANSIT_STOCK = "In Transit"
-MISSING_STOCK = "N/A"
+MISSING_STOCK = "Unavailable"
 
 # Status / availability badges when no explicit stock exists.
+# Prefer longer phrases first; plain \btransit\b covers standalone "Transit".
 _IN_TRANSIT_RE = re.compile(
     r"\b(?:"
     r"in[\s\-]?transit|"
     r"in[\s\-]?production|"
-    r"building|"
     r"arriving[\s\-]?soon|"
     r"on[\s\-]?order|"
     r"coming[\s\-]?soon|"
-    r"pipeline"
+    r"building|"
+    r"pipeline|"
+    r"transit"
     r")\b",
     re.I,
 )
@@ -111,13 +111,15 @@ def sanitize_stock_number(
     if not raw:
         return ""
     if _IN_TRANSIT_RE.fullmatch(raw.replace("_", " ").replace("-", " ")) or (
-        raw.strip().lower() in {"in transit", "in-transit", "intransit"}
+        raw.strip().lower() in {"in transit", "in-transit", "intransit", "transit"}
     ):
         return IN_TRANSIT_STOCK
     raw = _PREFIX_STRIP_RE.sub("", raw).strip()
     raw = re.split(r"[\s|,;]+", raw, maxsplit=1)[0].strip()
     stock = raw.upper()
-    if not stock or stock in {"N/A", "NA", "NONE", "-", "—", "NULL", "UNDEFINED"}:
+    if not stock or stock in {
+        "N/A", "NA", "NONE", "-", "—", "NULL", "UNDEFINED", "UNAVAILABLE",
+    }:
         return ""
     if YEAR_RE.fullmatch(stock):
         return ""
@@ -177,7 +179,7 @@ def resolve_stock_number(
     vin: str = "",
     year: int | str = 0,
 ) -> str:
-    """Resolve stock: explicit dealer value → In Transit → N/A.
+    """Resolve stock: explicit dealer value → In Transit → Unavailable.
 
     Never invents VIN slices, model years, or random codes.
     """

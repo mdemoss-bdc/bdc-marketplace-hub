@@ -131,7 +131,7 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
                 attrs["vin"] = vm.group(1).upper()
         has_ym = bool(attrs.get("year") and attrs.get("make"))
         in_transit = detect_in_transit(card)
-        # Keep In Transit cards even when VIN is omitted on the SRP card.
+        # Keep In Transit / year+make cards even when VIN is omitted on the SRP.
         if not attrs.get("vin") and not has_ym and not in_transit:
             continue
         link = ""
@@ -146,12 +146,12 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
                 if href and href != base_url:
                     link = href
                     break
-        # In Transit without a VDP link cannot be retained usefully.
-        if in_transit and not link and not attrs.get("vin"):
+        # Without VIN, require a VDP link (or year+make) so normalize can retain.
+        if not attrs.get("vin") and not link and not has_ym:
             continue
         vin = attrs.get("vin") or ""
         year = attrs.get("year") or 0
-        # Selector priority: data-* → DOM class → labeled text → In Transit → N/A.
+        # Selector priority: data-* → DOM class → labeled text → In Transit → Unavailable.
         stock = extract_stock_from_html(card, vin=vin, year=year) or resolve_stock_number(
             {
                 "stockNumber": (
@@ -178,7 +178,11 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
             "link": link,
             "_html": card,
         }
-        img_m = re.search(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', card, re.I)
+        img_m = re.search(
+            r'<img[^>]+(?:src|data-src|data-lazy|data-original)=["\']([^"\']+)["\']',
+            card,
+            re.I,
+        )
         if img_m:
             raw["imageUrl"] = absolutize(img_m.group(1), base_url)
         norm = normalize_vehicle(raw, condition=condition)
@@ -213,7 +217,7 @@ def bind_vdp_anchors(vehicles: list[dict], html: str, base_url: str) -> list[dic
                 break
             if (
                 stock
-                and stock not in ("N/A", "IN TRANSIT")
+                and stock not in ("N/A", "UNAVAILABLE", "IN TRANSIT")
                 and stock in win_u
                 and _VDP_PATH_HINT.search(href)
             ):

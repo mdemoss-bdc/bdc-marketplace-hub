@@ -57,8 +57,8 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
             make = ym.group(2)
             model = ym.group(3).split()[0] if ym.group(3) else ""
 
-        # Keep In Transit cards even when VIN is omitted on the SRP.
-        if not vin and not (in_transit and year and make):
+        # Keep In Transit / year+make cards even when VIN is omitted on the SRP.
+        if not vin and not (year and make):
             continue
         if vin and vin in seen:
             continue
@@ -73,7 +73,7 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         if mm:
             mileage = int(mm.group(1).replace(",", ""))
 
-        # Stock: data-* / DOM class / "Stock #:" labels → In Transit → N/A.
+        # Stock: data-* / DOM class / "Stock #:" labels → In Transit → Unavailable.
         stock = extract_stock_from_html(body, vin=vin, year=year) or resolve_stock_number(
             {}, body, vin=vin, year=year,
         )
@@ -99,7 +99,8 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
                 if href and href.rstrip("/") != page_url.rstrip("/"):
                     link = href
                     break
-        if in_transit and not vin and not link:
+        # Without VIN, prefer a VDP link so normalize can mint a stable synthetic id.
+        if not vin and not link and not (year and make):
             continue
 
         image = ""

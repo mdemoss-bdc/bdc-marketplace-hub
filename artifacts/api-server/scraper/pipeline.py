@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from .html_utils import fetch_html
 from .schema import normalize_vehicle, validate_batch
+from .stock import MISSING_STOCK
 from .tier1_dom import extract_tier1
 from .tier2_heuristics import extract_tier2
 from .tier3_llm import extract_tier3
@@ -52,9 +53,9 @@ def extract_inventory(
                 continue
             merged = dict(prev)
             for k, val in v.items():
-                if val in ("", 0, None, "N/A"):
+                if val in ("", 0, None, "N/A", "Unavailable"):
                     continue
-                if merged.get(k) in ("", 0, None, "N/A"):
+                if merged.get(k) in ("", 0, None, "N/A", "Unavailable"):
                     merged[k] = val
             by_vin[v["vin"]] = merged
         vehicles = list(by_vin.values())
@@ -125,9 +126,11 @@ def to_engine_rows(result: dict[str, Any]) -> list[dict]:
         stock = (
             v.get("stock_number")
             or v.get("stockNumber")
-            or "N/A"
+            or MISSING_STOCK
         )
-        link = v.get("link") or v.get("vdp_url") or ""
+        link = v.get("link") or v.get("vdp_url") or v.get("vdpUrl") or ""
+        image = v.get("image_url") or v.get("imageUrl") or v.get("image_link") or ""
+        color = v.get("exterior_color") or v.get("exteriorColor") or v.get("color") or ""
         rows.append({
             "vin": v.get("vin", ""),
             "stock_number": stock,
@@ -139,9 +142,10 @@ def to_engine_rows(result: dict[str, Any]) -> list[dict]:
             "title": v.get("title") or "",
             "mileage": int(v.get("mileage") or 0),
             "price": int(v.get("price") or 0),
-            "exterior_color": v.get("exterior_color") or v.get("exteriorColor") or "",
+            "exterior_color": color,
             "interior_color": "",
-            "image_url": v.get("image_url") or v.get("imageUrl") or "",
+            "image_url": image,
+            "image_link": image,
             "vdp_url": link,
             "link": link,
             "location": v.get("location") or "",
