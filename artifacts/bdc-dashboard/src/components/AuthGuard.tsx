@@ -12,14 +12,15 @@ type AuthGuardProps = {
 
 /**
  * Protects dashboard routes: waits for /api/auth/me, then redirects
- * unauthenticated visitors to /login. Optional Admin-only gate.
+ * unauthenticated visitors to /login. Optional Admin-only gate
+ * (master admin / is_master_admin — not rooftop org admins or sales reps).
  */
 export function AuthGuard({
   children,
   requireRole,
   loginPath = '/login',
 }: AuthGuardProps) {
-  const { user, isAuthenticated, isLoading, isMasterAdmin } = useAuth();
+  const { user, isAuthenticated, isLoading, effectiveIsMasterAdmin } = useAuth();
 
   if (isLoading) {
     return (
@@ -34,8 +35,9 @@ export function AuthGuard({
     return <Redirect to={loginPath} />;
   }
 
-  if (requireRole === 'Admin' && !isMasterAdmin && user.rbac_role !== 'Admin') {
-    return <Redirect to="/dashboard" />;
+  // Admin Console /admin — master admin only. Direct URL hits redirect away.
+  if (requireRole === 'Admin' && !effectiveIsMasterAdmin) {
+    return <Redirect to="/marketplace-hub" />;
   }
 
   return <>{children}</>;

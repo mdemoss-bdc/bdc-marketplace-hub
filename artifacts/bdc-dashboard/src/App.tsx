@@ -83,8 +83,11 @@ function SubscribedRoute({ component: Component }: { component: React.ComponentT
 
 /** Wraps a route that is accessible only to the master admin. */
 function AdminRoute({ component: Component }: { component: React.ComponentType }) {
-  const { isMasterAdmin } = useAuth();
-  if (!isMasterAdmin) return <Redirect to="/marketplace-hub" />;
+  const { isMasterAdmin, effectiveIsMasterAdmin } = useAuth();
+  // Respect "View as Rooftop Admin" preview — hide console access while previewing.
+  if (!isMasterAdmin || !effectiveIsMasterAdmin) {
+    return <Redirect to="/marketplace-hub" />;
+  }
   return <Component />;
 }
 

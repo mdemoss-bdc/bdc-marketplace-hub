@@ -3467,10 +3467,12 @@ class UserManager:
             _role_raw = ""
         if _role_raw in ("Admin", "Reviewer"):
             _role = _role_raw
-        elif _is_master or bool(row["is_admin"]) or _uname == "jdemoss":
+        elif _is_master or bool(row["is_admin"]):
             _role = "Admin"
         else:
             _role = "Reviewer"
+        # Master admin console access is driven by is_master_admin only (username
+        # match + is_admin). Do not elevate non-master accounts via username aliases.
         try:
             _must_change = bool(row["must_change_password"])
         except (KeyError, IndexError):
@@ -3481,7 +3483,7 @@ class UserManager:
             "username":            row["username"],
             "email":               row["email"] or "",
             "salesperson_id":      row["salesperson_id"] or "",
-            "is_admin":            bool(row["is_admin"]) or _role == "Admin",
+            "is_admin":            bool(row["is_admin"]),
             "is_master_admin":     _is_master,
             "role":                _role,
             "rbac_role":           _role,
