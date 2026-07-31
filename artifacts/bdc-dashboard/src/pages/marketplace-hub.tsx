@@ -341,12 +341,96 @@ function writeCachedSettings(values: SettingsCache) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Expand 2-digit model years (27 → 2027) and clamp to a valid range. */
+function normalizeYear(value: unknown): number {
+  if (value == null || value === '') return 0;
+  const raw = String(value).trim();
+  const yyyy = raw.match(/\b((?:19|20)\d{2})\b/);
+  let n = yyyy
+    ? Number.parseInt(yyyy[1], 10)
+    : Number.parseInt(raw.replace(/[^\d]/g, ''), 10);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (n <= 99) {
+    const pivot = (new Date().getFullYear() + 2) % 100;
+    n = n <= pivot ? 2000 + n : 1900 + n;
+  }
+  if (n > 2100) {
+    const head = Number.parseInt(String(n).slice(0, 4), 10);
+    n = head >= 1980 && head <= new Date().getFullYear() + 2 ? head : 0;
+  }
+  const max = new Date().getFullYear() + 2;
+  if (n < 1980 || n > max) return 0;
+  return n;
+}
+
+function asMoney(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.round(value));
+  if (value == null || value === '') return 0;
+  const n = Number.parseFloat(String(value).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+}
+
+function asMiles(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.trunc(value));
+  if (value == null || value === '') return 0;
+  const n = Number.parseInt(String(value).replace(/[^\d]/g, ''), 10);
+  return Number.isFinite(n) && n >= 0 && n <= 1_000_000 ? n : 0;
+}
+
+function titleCaseColor(value: unknown): string {
+  const s = String(value ?? '').trim();
+  if (!s || /^n\/?a$/i.test(s) || s === '-' || s === '—') return '';
+  return s
+    .toLowerCase()
+    .split(/([\s\-/]+)/)
+    .map((part) =>
+      /^[\s\-/]+$/.test(part) ? part : part.charAt(0).toUpperCase() + part.slice(1),
+    )
+    .join('');
+}
+
+/** Normalize a raw inventory API row into Hub Vehicle field names. */
+function normalizeInventoryVehicle(raw: Record<string, unknown>): Vehicle {
+  const year = normalizeYear(raw.year ?? raw.Year ?? raw.model_year);
+  const price = asMoney(
+    raw.price ?? raw.internetPrice ?? raw.internet_price ?? raw.listPrice ?? raw.list_price ?? raw.msrp,
+  );
+  const mileage = asMiles(
+    raw.mileage ?? raw.miles ?? raw.odometer ?? raw.odometerReading ?? raw.Odometer,
+  );
+  const exterior_color = titleCaseColor(
+    raw.exterior_color ?? raw.exteriorColor ?? raw.color ?? raw.Color ?? raw.ext_color,
+  );
+  const interior_color = titleCaseColor(
+    raw.interior_color ?? raw.interiorColor ?? raw.int_color,
+  );
+  return {
+    ...(raw as unknown as Vehicle),
+    year,
+    price,
+    mileage,
+    exterior_color,
+    interior_color,
+  };
+}
+
+function vehicleTitle(v: Pick<Vehicle, 'year' | 'make' | 'model' | 'trim'>, includeTrim = false) {
+  const year = normalizeYear(v.year);
+  const parts = [year || null, v.make, v.model, includeTrim ? v.trim : null].filter(Boolean);
+  return parts.join(' ');
+}
+
 function fmt(n: number) {
-  return n ? `$${n.toLocaleString()}` : '—';
+  const amount = asMoney(n);
+  return amount > 0 ? `$${amount.toLocaleString('en-US')}` : '—';
 }
 function fmtMiles(n: number) {
-  if (!n || n < 10) return n <= 0 ? '—' : `${n} mi`;
-  return `${n.toLocaleString()} mi`;
+  const miles = asMiles(n);
+  if (miles <= 0) return '—';
+  return `${miles.toLocaleString('en-US')} mi`;
+}
+function fmtColor(value: unknown) {
+  return titleCaseColor(value) || '—';
 }
 function relTime(iso: string) {
   if (!iso) return 'Never';
@@ -1267,7 +1351,7 @@ function QueueView({ token }: { token: string }) {
                       </span>
                     </td>
                     <td className="px-4 py-3.5">
-                      <span className="font-medium">{item.year} {item.make} {item.model}</span>
+                      <span className="font-medium">{vehicleTitle(item)}</span>
                       {item.trim && <span className="ml-1.5 text-muted-foreground text-xs">{item.trim}</span>}
                     </td>
                     <td className="px-4 py-3.5 font-mono text-xs text-muted-foreground">{(item.stock_number && item.stock_number !== 'N/A') ? item.stock_number : '—'}</td>
@@ -1453,7 +1537,11 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
         setCounts({ ACTIVE: 0, SOLD: 0, total: 0, posted: 0 });
         return;
       }
-      setInventory(Array.isArray(data.inventory) ? (data.inventory as Vehicle[]) : []);
+      setInventory(
+        Array.isArray(data.inventory)
+          ? (data.inventory as Record<string, unknown>[]).map(normalizeInventoryVehicle)
+          : [],
+      );
       setMakes(Array.isArray(data.makes) ? (data.makes as string[]) : []);
       setModels(Array.isArray(data.models) ? (data.models as string[]) : []);
       setYears(Array.isArray(data.years) ? (data.years as number[]) : []);
@@ -1773,7 +1861,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
 
   /** Local fallback listing text so the drawer is always usable for copy/paste. */
   const buildLocalListingCopy = useCallback((v: Vehicle) => {
-    const title = [v.year, v.make, v.model, v.trim].filter(Boolean).join(' ');
+    const title = vehicleTitle(v, true);
     const brand = dealerBrandingFromUrl(inventoryUrl, dealerName);
     const atDealer = brand.location
       ? `${brand.name} in ${brand.location}`
@@ -1784,7 +1872,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
       `- Condition: ${v.condition || 'Used'}`,
       `- Mileage: ${fmtMiles(v.mileage)}`,
       `- Price: ${fmt(v.price)}`,
-      v.exterior_color ? `- Exterior: ${v.exterior_color}` : null,
+      v.exterior_color ? `- Exterior: ${fmtColor(v.exterior_color)}` : null,
       v.interior_color ? `- Interior: ${v.interior_color}` : null,
       v.stock_number ? `- Stock #: ${v.stock_number}` : null,
       `- VIN: ${v.vin}`,
@@ -1807,7 +1895,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     setDrawerError('');
     setDrawerClipDone(false);
     setDrawerSource('');
-    setDrawerTitle([vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' '));
+    setDrawerTitle(vehicleTitle(vehicle, true));
     setDrawerCopy(buildLocalListingCopy(vehicle));
     setDrawerLoading(true);
     setGeneratingVin(vehicle.vin);
@@ -1877,7 +1965,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     setAiDescCopied(false);
     setAiDescSaved(false);
     setAiDescSource('');
-    setAiDescTitle([vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' '));
+    setAiDescTitle(vehicleTitle(vehicle, true));
     setAiDescText(vehicle.ai_description?.trim() || '');
     setAiDescLoading(true);
 
@@ -1921,10 +2009,10 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
       if (!contentType.includes('application/json')) {
         setAiDescError('Description service returned an unexpected response. Using local template.');
         const local = [
-          [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(' '),
-          vehicle.price ? `Asking $${Number(vehicle.price).toLocaleString()}` : null,
-          vehicle.mileage ? `${Number(vehicle.mileage).toLocaleString()} miles` : null,
-          vehicle.exterior_color ? `${vehicle.exterior_color} exterior` : null,
+          vehicleTitle(vehicle, true),
+          vehicle.price ? `Asking ${fmt(vehicle.price)}` : null,
+          vehicle.mileage ? fmtMiles(vehicle.mileage) : null,
+          vehicle.exterior_color ? `${fmtColor(vehicle.exterior_color)} exterior` : null,
           'Message us to schedule a test drive today!',
         ].filter(Boolean).join('\n');
         setAiDescText(local);
@@ -2004,7 +2092,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
     const post = posts[v.vin]; if (!post) return;
     const vf = videoFiles[v.vin] ?? null;
     const text = [post.title, '', post.features.join('\n'), '', post.description, '',
-      `💰 Price: ${fmt(v.price)}`, `🚘 ${v.year} ${v.make} ${v.model} ${v.trim}`,
+      `💰 Price: ${fmt(v.price)}`, `🚘 ${vehicleTitle(v, true)}`,
       `📍 ${dealerName || 'Our Dealership'}`, '📞 Call or DM to schedule your test drive!',
       '', post.hashtags,
       ...(vf ? ['', `📹 Video: ${vf.name} (attach when uploading to Facebook Marketplace)`] : []),
@@ -2501,7 +2589,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
                       {/* Vehicle */}
                       <td className="px-3 py-3">
                         <div className="font-semibold text-sm leading-tight">
-                          {v.year} {v.make} {v.model}
+                          {vehicleTitle(v)}
                         </div>
                         {v.trim && (
                           <div className="text-xs text-muted-foreground mt-0.5">{v.trim}</div>
@@ -2527,7 +2615,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
 
                       {/* Color */}
                       <td className="px-3 py-3 text-xs text-muted-foreground">
-                        {v.exterior_color || '—'}
+                        {fmtColor(v.exterior_color)}
                       </td>
 
                       {/* Price */}
@@ -2696,15 +2784,14 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
               <div className="rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-3 text-[11px] text-slate-400">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="font-semibold text-slate-100">
-                    {selectedVehicle.year} {selectedVehicle.make} {selectedVehicle.model}
-                    {selectedVehicle.trim ? ` ${selectedVehicle.trim}` : ''}
+                    {vehicleTitle(selectedVehicle, true)}
                   </span>
                   <span className="font-mono text-slate-300">{selectedVehicle.vin}</span>
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 sm:grid-cols-3">
                   <span>Price: <span className="font-semibold text-amber-200/90">{fmt(selectedVehicle.price)}</span></span>
                   <span>Miles: <span className="text-slate-200">{fmtMiles(selectedVehicle.mileage)}</span></span>
-                  <span>Color: <span className="text-slate-200">{selectedVehicle.exterior_color || '—'}</span></span>
+                  <span>Color: <span className="text-slate-200">{fmtColor(selectedVehicle.exterior_color)}</span></span>
                   <span>Cond: <span className="text-slate-200">{selectedVehicle.condition || '—'}</span></span>
                   {selectedVehicle.stock_number && (
                     <span>Stock #: <span className="text-slate-200">{selectedVehicle.stock_number}</span></span>
@@ -2800,8 +2887,7 @@ function InventoryView({ token, dealerName = '', inventoryUrl = '', feedUserId =
           {aiDescVehicle && (
             <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
               <span className="font-medium text-foreground">
-                {aiDescVehicle.year} {aiDescVehicle.make} {aiDescVehicle.model}
-                {aiDescVehicle.trim ? ` ${aiDescVehicle.trim}` : ''}
+                {vehicleTitle(aiDescVehicle, true)}
               </span>
               <span className="mx-2 font-mono">{aiDescVehicle.vin}</span>
               <span>{fmt(aiDescVehicle.price)} · {fmtMiles(aiDescVehicle.mileage)}</span>

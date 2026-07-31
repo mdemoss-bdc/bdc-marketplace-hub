@@ -5,7 +5,12 @@
  * Flow: detectPlatform(html, url) → adapter.parse(html, url, condition)
  *     → normalizeVehicle() → Neon-ready rows.
  */
-const { sanitizeInventoryList, parseInventoryText, scrubRawText } = require('./inventoryParser');
+const {
+  sanitizeInventoryList,
+  parseInventoryText,
+  scrubRawText,
+  titleCaseColor,
+} = require('./inventoryParser');
 
 const VIN_RE = /\b([A-HJ-NPR-Z0-9]{17})\b/i;
 
@@ -169,9 +174,20 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
     .toUpperCase();
   if (!VIN_RE.test(vin)) return null;
 
-  const year = digits(
+  // Expand 2-digit years (27 → 2027) and date strings ("2027-01-01").
+  let year = digits(
     firstDefined(raw.year, raw.Year, raw.vehicleModelDate, raw.modelDate, raw.model_year),
   );
+  if (year >= 0 && year <= 99) {
+    const pivot = (new Date().getFullYear() + 2) % 100;
+    year = year <= pivot ? 2000 + year : 1900 + year;
+  } else if (year > 2100) {
+    const head = Number.parseInt(String(year).slice(0, 4), 10);
+    year = head >= 1980 && head <= new Date().getFullYear() + 2 ? head : 0;
+  }
+  const maxYear = new Date().getFullYear() + 2;
+  if (year < 1980 || year > maxYear) year = 0;
+
   const make = asStr(firstDefined(raw.make, raw.Make, raw.brand, raw.manufacturer));
   const model = asStr(firstDefined(raw.model, raw.Model, raw.modelName));
   const trim = asStr(
@@ -182,6 +198,9 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
       raw.internetPrice,
       raw.InternetPrice,
       raw.internet_price,
+      raw.listPrice,
+      raw.list_price,
+      raw.ListPrice,
       raw.askingPrice,
       raw.AskingPrice,
       raw.salePrice,
@@ -244,8 +263,10 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
       raw.Exterior,
       raw.bodyColor,
       raw.paintColor,
+      raw.paint_color,
       raw.attributes?.exteriorColor,
       raw.specifications?.exteriorColor,
+      raw.specifications?.color,
     ),
   );
   const interiorColor = parseColor(
@@ -298,8 +319,11 @@ function normalizeVehicle(raw, conditionFallback = 'Used', pageUrl = '') {
     vdpUrl,
     status: status.toUpperCase() === 'SOLD' ? 'SOLD' : 'ACTIVE',
     condition,
-    exterior_color: exteriorColor,
-    interior_color: interiorColor,
+    exterior_color: titleCaseColor(exteriorColor),
+    exteriorColor: titleCaseColor(exteriorColor),
+    color: titleCaseColor(exteriorColor),
+    interior_color: titleCaseColor(interiorColor),
+    interiorColor: titleCaseColor(interiorColor),
     location: asStr(firstDefined(raw.location, raw.Location, raw.city)),
   };
 }

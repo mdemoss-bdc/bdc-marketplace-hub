@@ -213,6 +213,50 @@ function asPositiveInt(value) {
   return 0;
 }
 
+/** Coerce model year to a full 4-digit integer (e.g. 27 → 2027). */
+function normalizeYear(value) {
+  if (value == null || value === '') return 0;
+  const raw = String(value).trim();
+  // Prefer an explicit 19xx/20xx token inside date-like strings ("2027-01-01").
+  const yyyy = raw.match(/\b((?:19|20)\d{2})\b/);
+  let n = yyyy ? Number.parseInt(yyyy[1], 10) : asPositiveInt(value);
+  if (!n) return 0;
+  // Two-digit years from dealer SRP data-* attrs
+  if (n >= 0 && n <= 99) {
+    const pivot = (new Date().getFullYear() + 2) % 100;
+    n = n <= pivot ? 2000 + n : 1900 + n;
+  }
+  // Accidental YYYYMMDD / epoch-ish leftovers → first 4 digits if valid
+  if (n > 2100) {
+    const head = Number.parseInt(String(n).slice(0, 4), 10);
+    if (head >= 1980 && head <= new Date().getFullYear() + 2) n = head;
+    else return 0;
+  }
+  const max = new Date().getFullYear() + 2;
+  if (n < 1980 || n > max) return 0;
+  return n;
+}
+
+function firstNonEmpty(...vals) {
+  for (const v of vals) {
+    if (v == null || v === '') continue;
+    return v;
+  }
+  return '';
+}
+
+function titleCaseColor(value) {
+  const s = asNonEmptyString(value);
+  if (!s) return '';
+  return s
+    .toLowerCase()
+    .split(/([\s\-/]+)/)
+    .map((part) =>
+      /^[\s\-/]+$/.test(part) ? part : part.charAt(0).toUpperCase() + part.slice(1),
+    )
+    .join('');
+}
+
 function sanitizeVehicleRecord(vehicle, rawText) {
   const blob =
     rawText ||
@@ -228,7 +272,14 @@ function sanitizeVehicleRecord(vehicle, rawText) {
       vehicle.make,
       vehicle.model,
       vehicle.price,
+      vehicle.internetPrice,
+      vehicle.listPrice,
       vehicle.mileage,
+      vehicle.miles,
+      vehicle.odometer,
+      vehicle.exterior_color,
+      vehicle.exteriorColor,
+      vehicle.color,
     ]
       .filter((v) => v != null && String(v).trim() !== '')
       .map(String)
@@ -241,31 +292,94 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     parsed.vin ||
     asNonEmptyString(vehicle.vin).toUpperCase();
 
-  const year = asPositiveInt(vehicle.year) || parsed.year || 0;
-  const price = asPositiveInt(vehicle.price) || parsed.price || 0;
-  const mileage = asPositiveInt(vehicle.mileage) || parsed.mileage || 0;
+  const year =
+    normalizeYear(
+      firstNonEmpty(vehicle.year, vehicle.Year, vehicle.model_year, vehicle.vehicleModelDate, vehicle.modelDate),
+    ) ||
+    parsed.year ||
+    0;
+
+  const price =
+    asPositiveInt(
+      firstNonEmpty(
+        vehicle.price,
+        vehicle.internetPrice,
+        vehicle.internet_price,
+        vehicle.listPrice,
+        vehicle.list_price,
+        vehicle.askingPrice,
+        vehicle.asking_price,
+        vehicle.salePrice,
+        vehicle.sale_price,
+        vehicle.sellingPrice,
+        vehicle.msrp,
+        vehicle.MSRP,
+        vehicle.retailPrice,
+      ),
+    ) ||
+    parsed.price ||
+    0;
+
+  const mileage =
+    asPositiveInt(
+      firstNonEmpty(
+        vehicle.mileage,
+        vehicle.miles,
+        vehicle.Miles,
+        vehicle.odometer,
+        vehicle.Odometer,
+        vehicle.odometerReading,
+        vehicle.odometer_reading,
+        vehicle.mileageFromOdometer,
+      ),
+    ) ||
+    parsed.mileage ||
+    0;
+
   const make = asNonEmptyString(vehicle.make) || parsed.make || '';
   const model = asNonEmptyString(vehicle.model) || parsed.model || '';
 
-  let stock = asNonEmptyString(vehicle.stock_number).toUpperCase();
+  let stock = asNonEmptyString(vehicle.stock_number || vehicle.stockNumber).toUpperCase();
   if (!stock || (stock.length === 17 && VIN_RE.test(stock))) {
-    stock = parsed.stock_number || stock;
+    const candidate = (parsed.stock_number || '').toUpperCase();
+    // Avoid treating make/model tokens (e.g. CHEVROLET) as stock numbers.
+    const makeU = make.toUpperCase().replace(/\s+/g, '');
+    const modelU = model.toUpperCase().replace(/\s+/g, '');
+    if (
+      candidate &&
+      candidate !== makeU &&
+      candidate !== modelU &&
+      !KNOWN_MAKES.has(candidate.toLowerCase())
+    ) {
+      stock = candidate;
+    }
   } else {
     const fromField = extractStockNumber(stock);
     if (fromField) stock = fromField;
   }
 
-  const exterior =
-    asNonEmptyString(vehicle.exterior_color) ||
-    asNonEmptyString(vehicle.exteriorColor) ||
-    asNonEmptyString(vehicle.color) ||
-    parsed.exterior_color ||
-    '';
-  const interior =
-    asNonEmptyString(vehicle.interior_color) ||
-    asNonEmptyString(vehicle.interiorColor) ||
-    parsed.interior_color ||
-    '';
+  const exterior = titleCaseColor(
+    firstNonEmpty(
+      vehicle.exterior_color,
+      vehicle.exteriorColor,
+      vehicle.ExteriorColor,
+      vehicle.ext_color,
+      vehicle.extColor,
+      vehicle.color,
+      vehicle.Color,
+      parsed.exterior_color,
+    ),
+  );
+  const interior = titleCaseColor(
+    firstNonEmpty(
+      vehicle.interior_color,
+      vehicle.interiorColor,
+      vehicle.InteriorColor,
+      vehicle.int_color,
+      vehicle.intColor,
+      parsed.interior_color,
+    ),
+  );
 
   return {
     ...vehicle,
@@ -275,9 +389,13 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     model,
     price,
     mileage,
+    miles: mileage,
     stock_number: stock,
     exterior_color: exterior,
+    exteriorColor: exterior,
+    color: exterior,
     interior_color: interior,
+    interiorColor: interior,
   };
 }
 
@@ -320,4 +438,6 @@ module.exports = {
   parseVehiclesFromHtml,
   sanitizeVehicleRecord,
   sanitizeInventoryList,
+  normalizeYear,
+  titleCaseColor,
 };

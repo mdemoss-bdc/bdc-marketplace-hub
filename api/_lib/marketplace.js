@@ -288,15 +288,47 @@ async function listInventory(queryParams = {}) {
       const inFeed =
         Number(src.in_meta_feed) === 1 ||
         String(src.posted_status || '').toLowerCase() === 'posted';
+      const year = Number(row.year) || Number(src.year) || 0;
+      const price =
+        Number(row.price) ||
+        Number(src.price) ||
+        Number(src.internet_price) ||
+        Number(src.list_price) ||
+        0;
+      const mileage =
+        Number(row.mileage) ||
+        Number(src.mileage) ||
+        Number(src.miles) ||
+        Number(src.odometer) ||
+        0;
+      const exterior =
+        row.exterior_color ||
+        src.exterior_color ||
+        src.exteriorColor ||
+        src.color ||
+        '';
+      const interior =
+        row.interior_color ||
+        src.interior_color ||
+        src.interiorColor ||
+        '';
       return {
         ...row,
+        year,
+        price,
+        mileage,
+        miles: mileage,
         posted_status: inFeed ? 'posted' : String(src.posted_status || 'not_posted'),
         in_meta_feed: inFeed,
-        exterior_color: row.exterior_color || src.exterior_color || '',
-        interior_color: row.interior_color || src.interior_color || '',
+        exterior_color: exterior,
+        exteriorColor: exterior,
+        color: exterior,
+        interior_color: interior,
+        interiorColor: interior,
         image_url: row.image_url || src.image_url || '',
         vdp_url: row.vdp_url || src.vdp_url || '',
         ai_description: row.ai_description || src.ai_description || '',
+        title: [year, row.make || src.make, row.model || src.model].filter(Boolean).join(' '),
       };
     });
 
