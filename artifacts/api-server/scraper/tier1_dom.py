@@ -7,6 +7,7 @@ import re
 from typing import Any
 from urllib.parse import urljoin
 
+from .fields import enrich_from_html
 from .html_utils import absolutize, clean_text, decode_entities
 from .schema import VIN_RE, normalize_vehicle
 from .stock import detect_in_transit, extract_stock_from_html, resolve_stock_number
@@ -181,6 +182,7 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
             "stockNumber": stock,
             "link": link,
             "_html": card,
+            "condition": condition,
         }
         img_m = re.search(
             r'<img[^>]+(?:src|data-src|data-lazy|data-original)=["\']([^"\']+)["\']',
@@ -189,6 +191,7 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
         )
         if img_m:
             raw["imageUrl"] = absolutize(img_m.group(1), base_url)
+        raw = enrich_from_html(raw, card, condition=condition)
         norm = normalize_vehicle(raw, condition=condition)
         if norm:
             out.append(norm)

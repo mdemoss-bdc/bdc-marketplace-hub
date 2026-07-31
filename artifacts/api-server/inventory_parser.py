@@ -18,11 +18,26 @@ YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 # Optional leading $; sanitize to pure integers (e.g. 29995).
 PRICE_RE = re.compile(r"\$?\b\d{1,3}(?:,\d{3})*\b")
 PRICE_DOLLAR_RE = re.compile(r"\$\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})?\b")
-MILEAGE_RE = re.compile(r"\b(\d{1,3}(?:,\d{3})*)\s*(?:mi|miles)\b", re.IGNORECASE)
+# Moses / DealerOn: "$32,995" card amounts and labeled prices
+PRICE_LABEL_RE = re.compile(
+    r"(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*"
+    r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})",
+    re.IGNORECASE,
+)
+PRICE_CARD_RE = re.compile(r"\$([0-9]{2,3},[0-9]{3})")
+MILEAGE_RE = re.compile(r"([0-9,]+)\s*mi\.?\b", re.IGNORECASE)
+# Moses / DealerOn exact "Stock:" / "STOCK:" — always wins over Unavailable
+MOSES_STOCK_RE = re.compile(r"Stock:\s*([A-Za-z0-9]+)", re.IGNORECASE)
+MOSES_STOCK_UPPER_RE = re.compile(r"STOCK:\s*([A-Za-z0-9]+)", re.IGNORECASE)
 STOCK_LABELED_RE = re.compile(
     r"\b(?:Stock\s*#?\s*:|Stk\s*#?\s*:|Stock\s*Number\s*:|Stock\s*No\.?\s*:|"
     r"STK\s*#?\s*:|STOCK\s*#|STK\s*#|STOCK|STK|ID)\s*#?\s*:?\s*"
     r"([A-Z0-9][A-Z0-9\-_/]{2,14})\b",
+    re.IGNORECASE,
+)
+EXT_COLOR_RE = re.compile(
+    r"(?:Ext(?:erior)?(?:\s*Color)?|Ext\.)\s*[:.]?\s*"
+    r"([A-Za-z][A-Za-z0-9 \-/]{1,40})",
     re.IGNORECASE,
 )
 STOCK_RE = re.compile(
@@ -108,6 +123,17 @@ def extract_year(text: str) -> int | None:
 
 def extract_price(text: str) -> int | None:
     scrubbed = scrub_raw_text(text)
+    # Prefer Moses / DealerOn labeled prices, then $NN,NNN card amounts.
+    lm = PRICE_LABEL_RE.search(scrubbed)
+    if lm:
+        n = _digits_only(lm.group(1))
+        if 500 <= n <= 5_000_000 and not (1900 <= n <= 2100):
+            return n
+    cm = PRICE_CARD_RE.search(scrubbed)
+    if cm:
+        n = _digits_only(cm.group(1))
+        if 500 <= n <= 5_000_000 and not (1900 <= n <= 2100):
+            return n
     for m in re.finditer(r"\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\b", scrubbed):
         n = _digits_only(m.group(1) or m.group(0))
         if 500 <= n <= 5_000_000:
@@ -136,6 +162,19 @@ def extract_mileage(text: str) -> int | None:
     if n < 0 or n > 1_000_000:
         return None
     return n
+
+
+def extract_exterior_color(text: str) -> str | None:
+    """Ext. / Ext: / Exterior: / Ext Color: labels (Moses / DealerOn)."""
+    scrubbed = scrub_raw_text(text)
+    m = EXT_COLOR_RE.search(scrubbed)
+    if not m:
+        return None
+    c = m.group(1).strip()
+    c = re.split(r"\s+(?:Stock|VIN|Mi\.?|Miles|\$)\b", c, maxsplit=1, flags=re.I)[0].strip()
+    if not c or re.fullmatch(r"(?:n/?a|none|unknown|select|color|ext\.?)", c, re.I):
+        return None
+    return c
 
 
 def _clean_stock_candidate(raw: str) -> str | None:
@@ -205,6 +244,13 @@ def extract_stock_from_url(url: str, *, year: int = 0, vin: str = "") -> str | N
 
 def extract_stock_number(text: str) -> str | None:
     scrubbed = scrub_raw_text(text)
+    # Moses / DealerOn "Stock:" / "STOCK:" — never fall through to Unavailable.
+    for stock_re in (MOSES_STOCK_RE, MOSES_STOCK_UPPER_RE):
+        moses = stock_re.search(scrubbed)
+        if moses:
+            cleaned = _clean_stock_candidate(moses.group(1))
+            if cleaned:
+                return cleaned
     labeled = STOCK_LABELED_RE.search(scrubbed)
     if labeled:
         cleaned = _clean_stock_candidate(labeled.group(1))
@@ -270,6 +316,7 @@ def parse_inventory_text(raw: str) -> dict[str, Any]:
         "price": extract_price(text),
         "mileage": extract_mileage(text),
         "stock_number": extract_stock_number(text),
+        "exterior_color": extract_exterior_color(text),
     }
 
 
@@ -328,9 +375,13 @@ def sanitize_vehicle_record(
     make = _as_str(vehicle.get("make")) or _as_str(parsed.get("make"))
     model = _as_str(vehicle.get("model")) or _as_str(parsed.get("model"))
 
+    # Moses Stock: from blob wins immediately — never fall through to Unavailable.
+    moses_stock = extract_stock_number(blob) if blob else None
     stock = _clean_stock_candidate(
         _as_str(vehicle.get("stock_number") or vehicle.get("stockNumber"))
     ) or ""
+    if not stock and moses_stock:
+        stock = moses_stock
     if not stock:
         stock = parsed["stock_number"] or ""
     if stock and _YEAR_ONLY_RE.fullmatch(stock):
@@ -339,6 +390,9 @@ def sanitize_vehicle_record(
         stock = ""
     if stock and len(stock) == 17 and VIN_RE.fullmatch(stock):
         stock = ""
+    # Re-apply Moses Stock: after year/VIN rejection so HT60208 is never lost.
+    if not stock and moses_stock:
+        stock = moses_stock
 
     link = (
         _as_str(vehicle.get("link"))
@@ -348,7 +402,7 @@ def sanitize_vehicle_record(
         or _as_str(vehicle.get("href"))
     )
 
-    # Order: explicit/labeled → VDP URL → In Transit → Unavailable.
+    # Order: explicit/labeled (incl. Stock:) → VDP URL → In Transit → Unavailable.
     if not stock and link:
         stock = extract_stock_from_url(link, year=year, vin=vin) or ""
     if not stock:
@@ -369,7 +423,16 @@ def sanitize_vehicle_record(
         or _as_str(vehicle.get("exteriorColor"))
         or _as_str(vehicle.get("extColor"))
         or _as_str(vehicle.get("color"))
+        or _as_str(parsed.get("exterior_color"))
+        or (extract_exterior_color(blob) or "")
     )
+
+    cond = _as_str(vehicle.get("condition")).title()
+    # New + missing mileage → 0
+    if mileage <= 0 and cond == "New":
+        mileage = 0
+    elif mileage <= 0 and parsed.get("mileage") is not None:
+        mileage = int(parsed["mileage"] or 0)
     image = (
         _as_str(vehicle.get("image_url"))
         or _as_str(vehicle.get("imageUrl"))

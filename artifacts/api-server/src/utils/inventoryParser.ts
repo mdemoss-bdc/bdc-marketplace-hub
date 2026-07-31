@@ -42,8 +42,21 @@ export const YEAR_RE = /\b(19|20)\d{2}\b/;
 /** Currency-like numbers, optional leading $ → sanitize to pure integers. */
 export const PRICE_RE = /\$?\b\d{1,3}(?:,\d{3})*\b/;
 
-/** Mileage with mi/miles suffix → sanitize to pure integers. */
-export const MILEAGE_RE = /\b(\d{1,3}(?:,\d{3})*)\s*(?:mi|miles)\b/i;
+/** Moses / DealerOn labeled prices. */
+const PRICE_LABEL_RE =
+  /(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})/i;
+const PRICE_CARD_RE = /\$([0-9]{2,3},[0-9]{3})/;
+
+/** Mileage with mi/mi./miles suffix → sanitize to pure integers. */
+export const MILEAGE_RE = /([0-9,]+)\s*mi\.?\b/i;
+
+/** Moses / DealerOn exact Stock: markers. */
+const MOSES_STOCK_RE = /Stock:\s*([A-Za-z0-9]+)/i;
+const MOSES_STOCK_UPPER_RE = /STOCK:\s*([A-Za-z0-9]+)/i;
+const STOCK_LABELED_RE =
+  /\b(?:Stock\s*#?\s*:|Stk\s*#?\s*:|Stock\s*Number\s*:|Stock\s*No\.?\s*:|STK\s*#?\s*:|STOCK\s*#|STK\s*#|STOCK|STK|ID)\s*#?\s*:?\s*([A-Z0-9][A-Z0-9\-_/]{2,14})\b/i;
+const EXT_COLOR_RE =
+  /(?:Ext(?:erior)?(?:\s*Color)?|Ext\.)\s*[:.]?\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i;
 
 /** Stock / STK / STOCK / ID markers. */
 export const STOCK_RE = /\b(?:STK|STOCK|ID)?\s*#?\s*([A-Z0-9]{4,10})\b/i;
@@ -139,6 +152,16 @@ export function extractYear(text: string): number | null {
 
 export function extractPrice(text: string): number | null {
   const scrubbed = scrubRawText(text);
+  const labeled = scrubbed.match(PRICE_LABEL_RE);
+  if (labeled?.[1]) {
+    const n = digitsOnly(labeled[1]);
+    if (n >= 500 && n <= 5_000_000 && !(n >= 1900 && n <= 2100)) return n;
+  }
+  const card = scrubbed.match(PRICE_CARD_RE);
+  if (card?.[1]) {
+    const n = digitsOnly(card[1]);
+    if (n >= 500 && n <= 5_000_000 && !(n >= 1900 && n <= 2100)) return n;
+  }
   // Prefer an explicit $-prefixed match when present.
   const dollarMatches = [...scrubbed.matchAll(/\$\s*(\d{1,3}(?:,\d{3})*)\b/g)];
   for (const m of dollarMatches) {
@@ -171,12 +194,13 @@ export function extractMileage(text: string): number | null {
 
 export function extractExteriorColor(text: string): string | null {
   const scrubbed = scrubRawText(text);
-  const labeled = scrubbed.match(
-    /(?:Exterior(?:\s*Color)?|Ext\.?\s*Color|Color)\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i,
-  );
+  const labeled = scrubbed.match(EXT_COLOR_RE);
   if (labeled?.[1]) {
-    const c = labeled[1].trim();
-    if (!/^(n\/?a|none|unknown|select)$/i.test(c)) return c;
+    const c = labeled[1]
+      .trim()
+      .split(/\s+(?:Stock|VIN|Mi\.?|Miles|\$)\b/i)[0]
+      .trim();
+    if (c && !/^(n\/?a|none|unknown|select|color|ext\.?)$/i.test(c)) return c;
   }
   return null;
 }
@@ -253,8 +277,16 @@ export function extractStockNumber(
   model = "",
 ): string | null {
   const scrubbed = scrubRawText(text);
+  // Moses / DealerOn "Stock:" / "STOCK:" — never fall through to Unavailable.
+  for (const re of [MOSES_STOCK_RE, MOSES_STOCK_UPPER_RE]) {
+    const moses = scrubbed.match(re);
+    if (moses?.[1]) {
+      const candidate = moses[1].toUpperCase();
+      if (isValidStockNumber(candidate, year, make, model)) return candidate;
+    }
+  }
   // Only accept explicitly labeled stock tokens — unlabeled matches grab years.
-  const labeled = scrubbed.match(/\b(?:STK|STOCK|ID)\s*#?\s*([A-Z0-9]{4,10})\b/i);
+  const labeled = scrubbed.match(STOCK_LABELED_RE);
   if (labeled?.[1]) {
     const candidate = labeled[1].toUpperCase();
     if (isValidStockNumber(candidate, year, make, model)) return candidate;
@@ -643,14 +675,28 @@ export function sanitizeVehicleRecord(
     asNonEmptyString(vehicle.url) ||
     asNonEmptyString(vehicle.href) ||
     "";
+  // Explicit (incl. Stock:) → VDP URL → In Transit → Unavailable.
+  const mosesStock = extractStockNumber(blob, year, make, model);
   let stock = resolveStockNumber(vehicle, year, make, model, vin, link);
+  if (
+    mosesStock &&
+    (!isValidStockNumber(stock, year, make, model) || stock === MISSING_STOCK)
+  ) {
+    stock = mosesStock;
+  }
   if (!isValidStockNumber(stock, year, make, model)) {
-    const labeled = extractStockNumber(blob, year, make, model);
+    const labeled = mosesStock || extractStockNumber(blob, year, make, model);
     const fromUrl = extractStockFromUrl(link, year, make, model, vin);
     stock =
       labeled ||
       fromUrl ||
       (detectInTransit(blob) ? IN_TRANSIT_STOCK : MISSING_STOCK);
+  }
+
+  let mileageOut = mileage;
+  const cond = String(vehicle.condition || "").trim();
+  if ((!mileageOut || mileageOut <= 0) && /^new$/i.test(cond)) {
+    mileageOut = 0;
   }
 
   const exterior = titleCaseColor(
@@ -666,6 +712,7 @@ export function sanitizeVehicleRecord(
         vehicle.color,
         vehicle.Color,
         parsed.exterior_color,
+        extractExteriorColor(blob),
       ),
     ),
   );
@@ -695,8 +742,8 @@ export function sanitizeVehicleRecord(
     model,
     trim,
     price,
-    mileage,
-    miles: mileage,
+    mileage: mileageOut,
+    miles: mileageOut,
     stock_number: stock || MISSING_STOCK,
     stockNumber: stock || MISSING_STOCK,
     exterior_color: exterior,

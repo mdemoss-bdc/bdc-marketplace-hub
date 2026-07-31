@@ -6186,14 +6186,19 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
         if vin in seen:
             continue
         seen.add(vin)
+        chunk_plain = re.sub(r'<[^>]+>', ' ', chunk)
         stock_m = re.search(
             r'data-stock(?:-number|-no|number|num)?=["\']([^"\']+)["\']',
+            chunk, re.IGNORECASE,
+        ) or re.search(
+            r'class=["\'][^"\']*\b(?:stock-number|stock)\b[^"\']*["\'][^>]*>\s*'
+            r'(?:Stock\s*:\s*)?([A-Za-z0-9]{3,15})\s*<',
             chunk, re.IGNORECASE,
         ) or re.search(
             r'class=["\'][^"\']*stockNumber[^"\']*["\'][^>]*>\s*'
             r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{2,20})',
             chunk, re.IGNORECASE,
-        )
+        ) or re.search(r'Stock:\s*([A-Za-z0-9]+)', chunk_plain, re.IGNORECASE)
         year_m  = re.search(r'data-year=["\'](\d{4})["\']', chunk, re.IGNORECASE)
         make_m  = re.search(r'data-make=["\']([^"\']+)["\']', chunk, re.IGNORECASE)
         model_m = re.search(r'data-model=["\']([^"\']+)["\']', chunk, re.IGNORECASE)
@@ -6201,13 +6206,17 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
         price_m = re.search(
             r'data-(?:internet-|final-)?price=["\']([^"\']+)["\']', chunk, re.IGNORECASE
         ) or re.search(
+            r'(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*'
+            r'([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})',
+            chunk_plain, re.IGNORECASE,
+        ) or re.search(r'\$([0-9]{2,3},[0-9]{3})', chunk_plain) or re.search(
             r'class=["\'][^"\']*(?:finalPrice|internetPrice)[^"\']*["\'][^>]*>\s*'
             r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{2,24})',
             chunk, re.IGNORECASE,
         )
         miles_m = re.search(
             r'data-(?:mileage|miles|odometer)=["\']([^"\']+)["\']', chunk, re.IGNORECASE
-        ) or re.search(
+        ) or re.search(r'([0-9,]+)\s*mi\.?\b', chunk_plain, re.IGNORECASE) or re.search(
             r'class=["\'][^"\']*mileage[^"\']*["\'][^>]*>\s*'
             r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{1,24})',
             chunk, re.IGNORECASE,
@@ -6215,9 +6224,13 @@ def _parse_html_inventory(html_text: str, condition: str) -> list[dict]:
         color_m = re.search(
             r'data-(?:ext(?:erior)?-?color|color)=["\']([^"\']+)["\']', chunk, re.IGNORECASE
         ) or re.search(
-            r'class=["\'][^"\']*extColor[^"\']*["\'][^>]*>\s*'
+            r'class=["\'][^"\']*\b(?:ext-color|exterior-color|extColor)\b[^"\']*["\'][^>]*>\s*'
             r'(?:<[^>]+class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?([^<]{2,40})',
             chunk, re.IGNORECASE,
+        ) or re.search(
+            r'(?:Ext(?:erior)?(?:\s*Color)?|Ext\.)\s*[:.]?\s*'
+            r'([A-Za-z][A-Za-z0-9 \-/]{1,40})',
+            chunk_plain, re.IGNORECASE,
         )
         img_m   = re.search(r'<img[^>]+(?:src|data-src)=["\']([^"\']+)["\']', chunk, re.IGNORECASE)
         raw = {
@@ -6687,7 +6700,11 @@ def _apply_safety(vehicles: list[dict], condition: str) -> list[dict]:
         v['condition']     = condition      # absolute lock — URL context wins
         v['year']          = _int_safe(v.get('year'),         0)
         v['price']         = _int_safe(v.get('price'),        0)
-        v['mileage']       = _int_safe(v.get('mileage'),      0)
+        # New + missing mileage → 0 (never invent used-car odometer)
+        miles = _int_safe(v.get('mileage'), 0)
+        if miles <= 0 and str(condition).strip().title() == 'New':
+            miles = 0
+        v['mileage']       = miles
         v['doc_fee']       = _int_safe(v.get('doc_fee'),      0)
         v['retail_price']  = _int_safe(v.get('retail_price'), 0)
         v['savings']       = _int_safe(v.get('savings'),      0)
@@ -6787,6 +6804,49 @@ def _parse_dealeron_html(url: str, html: str, condition: str) -> list[dict]:
         model_v = _da('model').title()
         year_i  = int(year_s) if year_s.isdigit() else 0
 
+        # Scan card body for Moses / DealerOn labeled fields when data-* empty.
+        card_body = html[cm.start():min(cm.start() + 2500, len(html))]
+        card_plain = re.sub(r'<[^>]+>', ' ', card_body)
+
+        stock_raw = (_da('stocknum') or _da('stock') or
+                     _da('stock-number') or _da('stock-num'))
+        if not stock_raw:
+            sm = re.search(
+                r'class=["\'][^"\']*\b(?:stock-number|stock)\b[^"\']*["\'][^>]*>\s*'
+                r'(?:Stock\s*:\s*)?([A-Za-z0-9]{3,15})\s*<',
+                card_body, re.I,
+            ) or re.search(r'Stock:\s*([A-Za-z0-9]+)', card_plain, re.I)
+            if sm:
+                stock_raw = sm.group(1).strip()
+
+        ext_color = _da('color') or _da('exterior-color') or _da('ext-color') or _da('color')
+        if not ext_color:
+            cm_col = re.search(
+                r'class=["\'][^"\']*\b(?:ext-color|exterior-color)\b[^"\']*["\'][^>]*>\s*'
+                r'([^<]{2,48})\s*<',
+                card_body, re.I,
+            ) or re.search(
+                r'(?:Ext(?:erior)?(?:\s*Color)?|Ext\.)\s*[:.]?\s*'
+                r'([A-Za-z][A-Za-z0-9 \-/]{1,40})',
+                card_plain, re.I,
+            )
+            if cm_col:
+                ext_color = cm_col.group(1).strip()
+
+        if not mile_s or mile_s == '0':
+            mm = re.search(r'([0-9,]+)\s*mi\.?\b', card_plain, re.I)
+            if mm:
+                mile_s = re.sub(r'[^\d]', '', mm.group(1))
+
+        if price_i == 0:
+            pm = re.search(
+                r'(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*'
+                r'([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})',
+                card_plain, re.I,
+            ) or re.search(r'\$([0-9]{2,3},[0-9]{3})', card_plain)
+            if pm:
+                price_i = int(re.sub(r'[^\d]', '', pm.group(1)) or '0')
+
         # Condition: normalise whatever DealerOn puts in data-condition
         # (values seen in the wild: "New", "Used", "PreOwned", "CPO", "new").
         # _apply_safety will re-lock to the URL-derived value anyway, but
@@ -6794,6 +6854,10 @@ def _parse_dealeron_html(url: str, html: str, condition: str) -> list[dict]:
         # accidentally overriding the result between here and that sweep.
         raw_cond  = _da('condition') or _da('type') or _da('vehicle-type')
         norm_cond = _norm_condition(raw_cond, fallback=condition) if raw_cond else condition
+
+        miles_i = int(mile_s) if mile_s else 0
+        if miles_i <= 0 and str(norm_cond).strip().title() == 'New':
+            miles_i = 0
 
         # Title — prefer the dealer-assembled data-name attribute (e.g. "2026 GMC
         # Yukon XL AT4") which DealerOn always populates in server HTML.  Fall back
@@ -6813,17 +6877,16 @@ def _parse_dealeron_html(url: str, html: str, condition: str) -> list[dict]:
         vehicles_html.append({
             'vin':            vin,
             # DealerOn VDP/SRP uses data-stocknum (no separator) as the primary
-            # stock attribute; fall back through the hyphenated variants.
-            'stock_number':   (_da('stocknum') or _da('stock') or
-                               _da('stock-number') or _da('stock-num')),
+            # stock attribute; fall back through Moses "Stock:" / .stock DOM.
+            'stock_number':   stock_raw,
             'condition':      norm_cond,
             'year':           year_i,
             'make':           make_v,
             'model':          model_v,
             'trim':           _da('trim'),
-            'mileage':        int(mile_s) if mile_s else 0,
+            'mileage':        miles_i,
             'price':          price_i,
-            'exterior_color': _da('color') or _da('exterior-color') or _da('ext-color'),
+            'exterior_color': ext_color,
             'interior_color': _da('interior-color') or _da('int-color'),
             'image_url':      _da('image-url') or _da('image') or _da('photo'),
             'location':       '',

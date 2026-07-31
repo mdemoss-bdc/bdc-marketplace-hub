@@ -6,10 +6,17 @@
 const VIN_RE = /[A-HJ-NPR-Z0-9]{17}/i;
 const YEAR_RE = /\b(19|20)\d{2}\b/;
 const PRICE_RE = /\$?\b\d{1,3}(?:,\d{3})*\b/;
-const MILEAGE_RE = /\b(\d{1,3}(?:,\d{3})*)\s*(?:mi|miles)\b/i;
+const PRICE_LABEL_RE =
+  /(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})/i;
+const PRICE_CARD_RE = /\$([0-9]{2,3},[0-9]{3})/;
+const MILEAGE_RE = /([0-9,]+)\s*mi\.?\b/i;
+const MOSES_STOCK_RE = /Stock:\s*([A-Za-z0-9]+)/i;
+const MOSES_STOCK_UPPER_RE = /STOCK:\s*([A-Za-z0-9]+)/i;
 const STOCK_LABELED_RE =
   /\b(?:Stock\s*#?\s*:|Stk\s*#?\s*:|Stock\s*Number\s*:|Stock\s*No\.?\s*:|STK\s*#?\s*:|STOCK\s*#|STK\s*#|STOCK|STK|ID)\s*#?\s*:?\s*([A-Z0-9][A-Z0-9\-_/]{2,14})\b/i;
 const STOCK_RE = /\b(?:STK|STOCK|ID)?\s*#?\s*:?\s*([A-Z0-9][A-Z0-9\-_/]{2,14})\b/i;
+const EXT_COLOR_RE =
+  /(?:Ext(?:erior)?(?:\s*Color)?|Ext\.)\s*[:.]?\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i;
 const YMM_RE =
   /\b((?:19|20)\d{2})\s+([A-Za-z][A-Za-z0-9\-]+)\s+([A-Za-z0-9][A-Za-z0-9 \-/]{1,40})/;
 const HTML_TAG_RE = /<[^>]+>/g;
@@ -106,6 +113,16 @@ function extractYear(text) {
 
 function extractPrice(text) {
   const scrubbed = scrubRawText(text);
+  const labeled = scrubbed.match(PRICE_LABEL_RE);
+  if (labeled?.[1]) {
+    const n = digitsOnly(labeled[1]);
+    if (n >= 500 && n <= 5_000_000 && !(n >= 1900 && n <= 2100)) return n;
+  }
+  const card = scrubbed.match(PRICE_CARD_RE);
+  if (card?.[1]) {
+    const n = digitsOnly(card[1]);
+    if (n >= 500 && n <= 5_000_000 && !(n >= 1900 && n <= 2100)) return n;
+  }
   const dollarRe = /\$\s*(\d{1,3}(?:,\d{3})*)\b/g;
   let m;
   while ((m = dollarRe.exec(scrubbed))) {
@@ -136,12 +153,10 @@ function extractMileage(text) {
 
 function extractExteriorColor(text) {
   const scrubbed = scrubRawText(text);
-  const labeled = scrubbed.match(
-    /(?:Exterior(?:\s*Color)?|Ext\.?\s*Color|Color)\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,40})/i,
-  );
+  const labeled = scrubbed.match(EXT_COLOR_RE);
   if (labeled?.[1]) {
-    const c = labeled[1].trim();
-    if (!/^(n\/?a|none|unknown|select)$/i.test(c)) return c;
+    let c = labeled[1].trim().split(/\s+(?:Stock|VIN|Mi\.?|Miles|\$)\b/i)[0].trim();
+    if (c && !/^(n\/?a|none|unknown|select|color|ext\.?)$/i.test(c)) return c;
   }
   return null;
 }
@@ -210,6 +225,14 @@ function stockFallbackFromVin(_vin) {
 
 function extractStockNumber(text, year = 0, make = '', model = '') {
   const scrubbed = scrubRawText(text);
+  // Moses / DealerOn "Stock:" / "STOCK:" — never fall through to Unavailable.
+  for (const re of [MOSES_STOCK_RE, MOSES_STOCK_UPPER_RE]) {
+    const moses = scrubbed.match(re);
+    if (moses?.[1]) {
+      const candidate = moses[1].toUpperCase();
+      if (isValidStockNumber(candidate, year, make, model)) return candidate;
+    }
+  }
   // Only accept explicitly labeled stock tokens — unlabeled matches grab years.
   const labeled = scrubbed.match(STOCK_LABELED_RE);
   if (labeled && labeled[1]) {
@@ -550,15 +573,26 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     asNonEmptyString(vehicle.url) ||
     asNonEmptyString(vehicle.href) ||
     '';
-  // Explicit → VDP URL → In Transit → Unavailable.
+  // Explicit (incl. Stock:) → VDP URL → In Transit → Unavailable.
+  // A Stock: match always wins and never falls through to Unavailable.
+  const mosesStock = extractStockNumber(blob, year, make, model);
   let stock = resolveStockNumber(vehicle, year, make, model, vin, vdpLink);
+  if (mosesStock && (!isValidStockNumber(stock, year, make, model) || stock === MISSING_STOCK)) {
+    stock = mosesStock;
+  }
   if (!isValidStockNumber(stock, year, make, model)) {
-    const labeled = extractStockNumber(blob, year, make, model);
+    const labeled = mosesStock || extractStockNumber(blob, year, make, model);
     const fromUrl = extractStockFromUrl(vdpLink, year, make, model, vin);
     stock =
       labeled ||
       fromUrl ||
       (detectInTransit(blob) ? IN_TRANSIT_STOCK : MISSING_STOCK);
+  }
+
+  let mileageOut = mileage;
+  const cond = String(vehicle.condition || '').trim();
+  if ((!mileageOut || mileageOut <= 0) && /^new$/i.test(cond)) {
+    mileageOut = 0;
   }
 
   const exterior = titleCaseColor(
@@ -574,6 +608,7 @@ function sanitizeVehicleRecord(vehicle, rawText) {
         vehicle.color,
         vehicle.Color,
         parsed.exterior_color,
+        extractExteriorColor(blob),
       ),
     ),
   );
@@ -600,8 +635,8 @@ function sanitizeVehicleRecord(vehicle, rawText) {
     title,
     description,
     price,
-    mileage,
-    miles: mileage,
+    mileage: mileageOut,
+    miles: mileageOut,
     stock_number: stock || MISSING_STOCK,
     stockNumber: stock || MISSING_STOCK,
     exterior_color: exterior,

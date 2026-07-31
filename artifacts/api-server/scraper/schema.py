@@ -6,6 +6,7 @@ import hashlib
 import re
 from typing import Any
 
+from .fields import enrich_from_html, extract_exterior_color, extract_mileage, extract_price
 from .stock import (
     IN_TRANSIT_STOCK,
     MISSING_STOCK,
@@ -75,6 +76,18 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
     if not isinstance(raw, dict):
         return None
 
+    cond_early = str(raw.get("condition") or condition or "Used").strip().title()
+    if cond_early not in ("New", "Used"):
+        cond_early = "Used"
+
+    # Moses / DealerOn: fill color / miles / price from card HTML before normalize.
+    html_pre = _str(
+        raw.get("_html") or raw.get("raw_html") or raw.get("html")
+        or raw.get("raw_text") or raw.get("description")
+    )
+    if html_pre:
+        raw = enrich_from_html(raw, html_pre, condition=cond_early)
+
     def g(*keys: str) -> Any:
         for k in keys:
             if k in raw and raw[k] not in (None, ""):
@@ -95,7 +108,8 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
     trim = _str(g("trim", "trimLevel", "series"))
 
     # Stock first so In Transit / Unavailable cards are never dropped for
-    # missing dealer stock. Order: DOM → VDP URL → In Transit → Unavailable.
+    # missing dealer stock. Order: DOM (incl. Stock:) → VDP URL → In Transit → Unavailable.
+    # A Stock: match always wins and never falls through to Unavailable.
     stock = resolve_stock_number(raw, html_blob, vin="", year=year, link=link)
     if not stock:
         stock = sanitize_stock_number(
@@ -144,17 +158,28 @@ def normalize_vehicle(raw: dict[str, Any] | None, *, condition: str = "Used") ->
     price = _digits(g("price", "internetPrice", "finalPrice", "sellingPrice", "msrp", "listPrice"))
     if 1900 <= price <= 2100:
         price = 0
+    if price <= 0 and html_blob:
+        price = extract_price(html_blob)
 
     mileage = _digits(g("mileage", "miles", "odometer", "distance"))
     color = _str(g("exteriorColor", "exterior_color", "extColor", "color"))
+    if not color and html_blob:
+        color = extract_exterior_color(html_blob)
     image = _str(g("imageUrl", "image_url", "image", "photo", "thumbnail", "image_link"))
     title = _str(g("title", "name")) or " ".join(
         p for p in (str(year) if year else "", make, model, trim) if p
     ).strip()
 
-    cond = (condition or "Used").strip().title()
+    cond = (condition or cond_early or "Used").strip().title()
     if cond not in ("New", "Used"):
         cond = "Used"
+
+    # VIN-decoder / New safety: condition New + missing mileage → 0
+    if mileage <= 0:
+        if html_blob:
+            mileage = extract_mileage(html_blob, condition=cond)
+        elif cond == "New":
+            mileage = 0
 
     # Always retain full payload — never truncate In Transit / Unavailable rows.
     return {

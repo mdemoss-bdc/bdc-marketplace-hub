@@ -52,10 +52,16 @@ _DATA_ATTR_PATTERNS = (
 )
 
 # ── 2) DOM class / nested .value selectors ───────────────────────────────────
+# Moses / DealerOn: .stock, .stock-number (bare code or "Stock: HT60208")
 _DOM_CLASS_PATTERNS = (
+    # DealerOn / Moses: class="stock" / "stock-number" with optional "Stock:" prefix
+    r'class=["\'][^"\']*\bstock-number\b[^"\']*["\'][^>]*>\s*'
+    r'(?:Stock\s*:\s*)?([A-Za-z0-9]{3,15})\s*<',
+    r'class=["\'][^"\']*\bstock\b[^"\']*["\'][^>]*>\s*'
+    r'(?:Stock\s*:\s*)?([A-Za-z0-9]{3,15})\s*<',
     r'class=["\'][^"\']*stock[-_]?number[^"\']*["\'][^>]*>\s*'
     r'(?:<(?:span|div|p|strong|em|dd|b)[^>]*class=["\'][^"\']*value[^"\']*["\'][^>]*>\s*)?'
-    r'([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
+    r'(?:Stock\s*:\s*)?([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
     r'class=["\'][^"\']*item-stock-number[^"\']*["\'][^>]*>\s*'
     r'([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\s*<',
     r'class=["\'][^"\']*stock[^"\']*["\'][^>]*>\s*'
@@ -68,6 +74,9 @@ _DOM_CLASS_PATTERNS = (
 )
 
 # ── 3) Labeled text nodes ────────────────────────────────────────────────────
+# Moses / DealerOn prefer exact "Stock:" / "STOCK:" before broader labels.
+_MOSES_STOCK_RE = re.compile(r"Stock:\s*([A-Za-z0-9]+)", re.I)
+_MOSES_STOCK_UPPER_RE = re.compile(r"STOCK:\s*([A-Za-z0-9]+)", re.I)
 _LABEL_STOCK_RE = re.compile(
     r'(?:Stock\s*#?\s*:|Stk\s*#?\s*:|Stock\s*Number\s*:|Stock\s*No\.?\s*:|'
     r'STK\s*#?\s*:|Stock\s*#)\s*([A-Za-z0-9][A-Za-z0-9\-_/]{2,14})\b',
@@ -160,7 +169,11 @@ def extract_stock_from_html(
     vin: str = "",
     year: int | str = 0,
 ) -> str:
-    """Extract stock from a vehicle card using selector priority."""
+    """Extract stock from a vehicle card using selector priority.
+
+    Moses / DealerOn ``Stock: CODE`` matches always win when present — callers
+    must never fall through to Unavailable after a successful match.
+    """
     text = decode_entities(html_fragment or "")
     if not text:
         return ""
@@ -180,6 +193,14 @@ def extract_stock_from_html(
                 return cleaned
 
     plain = clean_text(re.sub(r"<[^>]+>", " ", text))
+    # Exact Moses / DealerOn "Stock:" / "STOCK:" — never skip to Unavailable.
+    for stock_re in (_MOSES_STOCK_RE, _MOSES_STOCK_UPPER_RE):
+        lm = stock_re.search(plain) or stock_re.search(text)
+        if lm:
+            cleaned = sanitize_stock_number(lm.group(1), vin=vin, year=year)
+            if cleaned:
+                return cleaned
+
     lm = _LABEL_STOCK_RE.search(plain) or _LABEL_STOCK_RE.search(text)
     if lm:
         cleaned = sanitize_stock_number(lm.group(1), vin=vin, year=year)

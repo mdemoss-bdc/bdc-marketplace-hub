@@ -227,11 +227,44 @@ class _VehicleCardCollector(html.parser.HTMLParser):
 
         if self._cur is not None and self._depth == self._cur_depth:
             blob = _WHITESPACE_RE.sub(" ", " ".join(self._text_buf)).strip()
+            html_frag = "".join(self._html_buf)
             self._cur["raw_text"] = blob
             if not self._cur.get("vin") and blob:
                 m = _VIN_RE.search(blob)
                 if m:
                     self._cur["vin"] = m.group(1).upper()
+            # Moses / DealerOn class + label fallbacks when data-* attrs empty.
+            if not self._cur.get("stock_number"):
+                sm = re.search(
+                    r'class=["\'][^"\']*\b(?:stock-number|stock)\b[^"\']*["\'][^>]*>\s*'
+                    r'(?:Stock\s*:\s*)?([A-Za-z0-9]{3,15})\s*<',
+                    html_frag,
+                    re.I,
+                ) or re.search(r"Stock:\s*([A-Za-z0-9]+)", blob, re.I)
+                if sm:
+                    self._cur["stock_number"] = sm.group(1).strip()
+            if not self._cur.get("exterior_color"):
+                cm = re.search(
+                    r'class=["\'][^"\']*\b(?:ext-color|exterior-color)\b[^"\']*["\'][^>]*>\s*'
+                    r'([^<]{2,48})\s*<',
+                    html_frag,
+                    re.I,
+                ) or re.search(r'data-color=["\']([^"\']+)["\']', html_frag, re.I)
+                if cm:
+                    self._cur["exterior_color"] = cm.group(1).strip()
+            if not self._cur.get("mileage"):
+                mm = re.search(r"([0-9,]+)\s*mi\.?\b", blob, re.I)
+                if mm:
+                    self._cur["mileage"] = mm.group(1)
+            if not self._cur.get("price"):
+                pm = re.search(
+                    r"(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*"
+                    r"([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})",
+                    blob,
+                    re.I,
+                ) or re.search(r"\$([0-9]{2,3},[0-9]{3})", blob)
+                if pm:
+                    self._cur["price"] = pm.group(1)
             if self._cur.get("vin") and len(str(self._cur["vin"])) == 17:
                 self.cards.append(dict(self._cur))
             self._cur = None

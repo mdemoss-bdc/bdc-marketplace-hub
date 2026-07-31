@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .fields import enrich_from_html, extract_exterior_color, extract_mileage, extract_price
 from .html_utils import absolutize, clean_text, decode_entities
 from .schema import VIN_RE, normalize_vehicle
 from .stock import detect_in_transit, extract_stock_from_html, resolve_stock_number
@@ -19,16 +20,19 @@ _CONTAINER_RE = re.compile(
 )
 
 _PRICE_RE = re.compile(
+    r'(?:MOSES\s+PRICE|INTERNET\s+PRICE|OUR\s+PRICE|TSRP)\s*:?\s*\$?\s*([\d,]{3,7})|'
+    r'\$([0-9]{2,3},[0-9]{3})|'
     r'(?:\$|USD)\s*([\d,]{3,7}(?:\.\d{2})?)|'
     r'(?:price|internet|asking)\s*[:\s]*\$?\s*([\d,]{3,7})',
     re.I,
 )
-_MILES_RE = re.compile(r'([\d,]{1,7})\s*(?:mi|miles|odometer)\b', re.I)
+_MILES_RE = re.compile(r'([0-9,]+)\s*mi\.?\b', re.I)
 _YMM_RE = re.compile(
     r'\b((?:19|20)\d{2})\s+([A-Z][A-Za-z0-9\-]+)\s+([A-Z0-9][A-Za-z0-9\-]+(?:\s+[A-Z0-9][A-Za-z0-9\-]*)?)',
 )
 _COLOR_RE = re.compile(
-    r'(?:exterior(?:\s*color)?|ext\.?\s*color|color)\s*[:\-]\s*([A-Za-z][A-Za-z0-9 \-/]{1,32})',
+    r'(?:Ext(?:erior)?(?:\s*Color)?|Ext\.|exterior(?:\s*color)?|ext\.?\s*color|color)'
+    r'\s*[:.\-]?\s*([A-Za-z][A-Za-z0-9 \-/]{1,32})',
     re.I,
 )
 _IMG_RE = re.compile(r'<img[^>]+(?:src|data-src|data-lazy)=["\']([^"\']+)["\']', re.I)
@@ -63,20 +67,24 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
         if vin and vin in seen:
             continue
 
-        price = 0
-        pm = _PRICE_RE.search(plain) or _PRICE_RE.search(body)
-        if pm:
-            price = int(float((pm.group(1) or pm.group(2) or "0").replace(",", "")))
+        price = extract_price(body) or extract_price(plain)
+        if not price:
+            pm = _PRICE_RE.search(plain) or _PRICE_RE.search(body)
+            if pm:
+                raw_p = next((g for g in pm.groups() if g), "0")
+                price = int(float(str(raw_p).replace(",", "")))
 
-        mileage = 0
-        mm = _MILES_RE.search(plain)
-        if mm:
-            mileage = int(mm.group(1).replace(",", ""))
+        mileage = extract_mileage(plain, condition=condition)
+        if mileage <= 0:
+            mm = _MILES_RE.search(plain)
+            if mm:
+                mileage = int(mm.group(1).replace(",", ""))
 
-        color = ""
-        cm = _COLOR_RE.search(plain)
-        if cm:
-            color = clean_text(cm.group(1))
+        color = extract_exterior_color(body) or extract_exterior_color(plain)
+        if not color:
+            cm = _COLOR_RE.search(plain)
+            if cm:
+                color = clean_text(cm.group(1))
 
         link = ""
         for hm in _HREF_RE.finditer(body):
@@ -120,7 +128,9 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
             "link": link,
             "imageUrl": image,
             "_html": body,
+            "condition": condition,
         }
+        raw = enrich_from_html(raw, body, condition=condition)
         norm = normalize_vehicle(raw, condition=condition)
         if norm:
             seen.add((norm.get("vin") or vin).upper())
