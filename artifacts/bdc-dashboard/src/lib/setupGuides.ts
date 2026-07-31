@@ -71,11 +71,11 @@ export const SETUP_GUIDES: Record<string, SetupGuide> = {
     id: 'meta-catalog-feed',
     title: 'Meta Catalog Scheduled Feed',
     overview:
-      'Meta Commerce Manager pulls your vehicle catalog from a CSV feed URL hosted by BDC. Once connected on a schedule, Facebook/Instagram ads and Marketplace stay in sync with your scraped inventory.',
+      'Meta Commerce Manager (inside your Business Portfolio) pulls your vehicle catalog from a CSV feed URL hosted by BDC. Once connected on a schedule, Facebook/Instagram ads and Marketplace stay in sync with your scraped inventory.',
     steps: [
       {
         title: 'Sync inventory first',
-        body: 'In Marketplace Hub, ensure vehicles are listed. Save your Commerce Catalog ID (and Business Manager ID) in the Meta section of Inventory Setup.',
+        body: 'In Marketplace Hub, ensure vehicles are listed. Save your Commerce Account Catalog ID (and Business Portfolio ID) in the Meta section of Inventory Setup.',
       },
       {
         title: 'Copy your Feed URL',
@@ -83,7 +83,7 @@ export const SETUP_GUIDES: Record<string, SetupGuide> = {
       },
       {
         title: 'Open Meta Commerce Manager',
-        body: 'Sign in with a Business Manager user that owns the catalog.',
+        body: 'Sign in with a Business Portfolio admin that owns the catalog.',
         link: { label: 'Open Commerce Manager', href: 'https://business.facebook.com/commerce' },
       },
       {
@@ -92,7 +92,7 @@ export const SETUP_GUIDES: Record<string, SetupGuide> = {
       },
       {
         title: 'Add a Scheduled Feed data source',
-        body: 'Catalog → Data sources → Add Data Feed → Use a URL (Scheduled Feed). Paste your Feed URL, set frequency to Hourly or Daily, then Upload / Save.',
+        body: 'In the left menu open `Catalog`, then `Data Sources`. Click `Add Data Feed` → Use a URL (Scheduled Feed). Paste your Feed URL, set frequency to Hourly or Daily, then Upload / Save.',
       },
       {
         title: 'Validate with Diagnostics',
@@ -124,36 +124,49 @@ export const SETUP_GUIDES: Record<string, SetupGuide> = {
 
   'meta-api-credentials': {
     id: 'meta-api-credentials',
-    title: 'Facebook / Meta Graph API Credentials',
+    title: 'Meta Integration Setup Guide',
     overview:
-      'Page ID and a long-lived Page Access Token let BDC post and manage catalog data via the Meta Graph API. Prefer Connect Facebook (OAuth) when available; manual paste is supported for advanced setups.',
+      'Link your Meta Business Portfolio (Business Manager ID), Commerce Catalog, and optional Pixel / Page token so Marketplace Hub can sync inventory into Facebook & Instagram ads.',
     steps: [
       {
+        title: 'Find your Business Portfolio ID',
+        body:
+          'Open Meta Business Settings.\n\n**Look at your browser URL bar** at the top of the screen.\n\nFind the number right after `business_id=` (e.g., 1482371201979188).\n\nCopy and paste that into the **Facebook Business Manager ID** field in Marketplace Hub → Inventory Setup.\n\nTip: you can also open `Business info` under your portfolio if you prefer copying the ID from the settings page.',
+        link: { label: 'Open Meta Business Settings', href: 'https://business.facebook.com/settings' },
+      },
+      {
+        title: 'Find your Commerce Catalog ID',
+        body:
+          'Under the `Accounts` > `Catalogs` tab — or under your Business Assets — locate your inventory Catalog name.\n\nCopy the **15-digit Catalog ID** string listed next to it and paste it into the **Commerce Account Catalog ID** field.',
+      },
+      {
+        title: '(Optional) Add your Meta Pixel ID',
+        body:
+          'In Business Settings → `Data Sources` → Pixels, copy your Pixel ID into the optional Meta Pixel ID field, then Save Settings.',
+      },
+      {
         title: 'Find your Facebook Page ID',
-        body: 'Open your Facebook Page → About (or Professional dashboard → Page settings → Page info). Copy the numeric Page ID.',
+        body:
+          'Open your Facebook Page → About (or Professional dashboard → Page settings → Page info). Copy the numeric Page ID into Settings → Meta API Credentials.',
         link: { label: 'Facebook Pages', href: 'https://www.facebook.com/pages/' },
       },
       {
         title: '(Recommended) Connect via OAuth',
-        body: 'In Settings → Facebook / Meta Integration, click Connect Facebook. Authorize the Business/Page and Commerce Catalog when prompted. Tokens are stored securely — existing passwords and other users are never touched.',
+        body:
+          'In Settings → Facebook / Meta Integration, click `Connect Facebook`. Authorize the Business Portfolio, Page, and Commerce Catalog when prompted. Tokens are stored securely — existing passwords and other users are never touched.',
       },
       {
         title: 'Or create a System User token (manual)',
-        body: 'In Meta Business Settings → Users → System users, create a system user, assign your Page + Catalog with catalog_management / pages_manage_posts permissions, then Generate token.',
+        body:
+          'In Meta Business Settings → Users → System users, create a system user, assign your Page + Catalog with catalog_management / pages_manage_posts permissions, then Generate token. Paste Page ID + token under Settings → Meta API Credentials → Save. Leave the token blank on later saves to keep the stored value.',
         link: { label: 'Meta Business Settings', href: 'https://business.facebook.com/settings' },
-      },
-      {
-        title: 'Paste credentials in Settings',
-        body: 'Settings → Meta API Credentials → paste Facebook Page ID and Meta Access Token → Save Facebook Settings. Leave the token field blank on later saves to keep the stored token.',
-      },
-      {
-        title: 'Add Business / Catalog / Pixel IDs (Marketplace Hub)',
-        body: 'In Marketplace Hub → Inventory Setup → Meta column, enter Facebook Business Manager ID, Commerce Account Catalog ID, and optional Meta Pixel ID, then Save.',
       },
     ],
     troubleshooting: [
+      'Cannot find business_id= in the URL → open business.facebook.com/settings while signed into the correct Business Portfolio; the ID appears after business_id= in the address bar.',
+      'Wrong Catalog ID → confirm you copied the 15-digit ID next to the Vehicles / inventory catalog under Accounts → Catalogs, not a Commerce account or ad account ID.',
       'Token expired → reconnect via Connect Facebook or generate a new long-lived Page token.',
-      'Wrong Page → confirm the Page ID matches the page tied to your Commerce catalog.',
+      'Wrong Page → confirm the Page ID matches the page tied to your Commerce catalog in this Business Portfolio.',
       'Permission errors → System User needs the Page and Catalog assigned with marketing/catalog permissions.',
       'OAuth redirect fails → ensure APP_BASE_URL matches your public HTTPS domain.',
     ],

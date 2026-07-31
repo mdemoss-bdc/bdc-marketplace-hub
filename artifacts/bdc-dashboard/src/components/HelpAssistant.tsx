@@ -89,7 +89,7 @@ const GUIDES: Record<string, Guide[]> = {
       steps: [
         'Your feed URL is: https://[your-domain]/api/feeds/meta?format=csv&user_id=[user_id]',
         'Use the Diagnostics tab in this panel to find your user_id and validate all required fields.',
-        'Open Meta Commerce Manager → Catalogs → your catalog → Data Sources.',
+        'Open Meta Commerce Manager (Business Portfolio) → Catalogs → your catalog → Data Sources.',
         'Click Add Data Source → Scheduled Feed → paste your feed URL.',
         'Set the update schedule to Daily and save.',
         'Run a test upload — use Run Diagnostics here to pre-validate before submitting.',
@@ -177,10 +177,10 @@ const GUIDES: Record<string, Guide[]> = {
       title: 'Connect Facebook integration',
       icon: Store,
       steps: [
-        'Get your Facebook Page ID from facebook.com → your Page → About.',
-        'Create a System User in Meta Business Manager with catalog permissions.',
-        'Generate an Access Token scoped to catalog_management.',
-        'Paste both values in Settings → Facebook Integration and save.',
+        'Open Meta Business Settings and copy the number after business_id= in the URL bar into Facebook Business Manager ID.',
+        'Under Accounts → Catalogs, copy the 15-digit Catalog ID into Commerce Account Catalog ID.',
+        'Get your Facebook Page ID from facebook.com → your Page → About (or use Connect Facebook OAuth).',
+        'Or create a System User in your Business Portfolio with catalog permissions, then paste Page ID + token in Settings → Facebook Integration.',
       ],
     },
     {

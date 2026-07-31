@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { BookOpen, Check, Copy, ExternalLink, HelpCircle, X } from 'lucide-react';
 import {
   expandGuideValue,
@@ -6,6 +6,7 @@ import {
   type SetupGuide,
   type SetupGuideCopyBlock,
 } from '@/lib/setupGuides';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 
 type Props = {
@@ -15,6 +16,64 @@ type Props = {
   /** Optional runtime overrides (e.g. live Meta feed URL). */
   copyOverrides?: SetupGuideCopyBlock[];
 };
+
+/** Renders guide body text with `UI labels` as badges and **bold** callouts. */
+export function GuideRichText({ text, className }: { text: string; className?: string }) {
+  const paragraphs = text.split(/\n\n+/);
+
+  const renderInline = (chunk: string, keyPrefix: string): ReactNode[] => {
+    const parts = chunk.split(/(`[^`]+`|\*\*[^*]+\*\*)/g).filter(Boolean);
+    return parts.map((part, i) => {
+      const key = `${keyPrefix}-${i}`;
+      if (part.startsWith('`') && part.endsWith('`')) {
+        return (
+          <Badge
+            key={key}
+            variant="secondary"
+            className="mx-0.5 align-middle px-1.5 py-0 text-[10px] font-semibold tracking-tight"
+          >
+            {part.slice(1, -1)}
+          </Badge>
+        );
+      }
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={key} className="font-semibold text-foreground">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      return <Fragment key={key}>{part}</Fragment>;
+    });
+  };
+
+  return (
+    <div className={cn('space-y-2', className)}>
+      {paragraphs.map((para, pi) => {
+        const lines = para.split('\n');
+        const useCallout = paragraphs.length > 1;
+        return (
+          <p
+            key={pi}
+            className={cn(
+              'text-xs leading-relaxed',
+              useCallout
+                ? 'rounded-md border border-border/80 bg-muted/50 px-2.5 py-2 text-foreground/90'
+                : 'text-muted-foreground',
+            )}
+          >
+            {lines.map((line, li) => (
+              <Fragment key={li}>
+                {li > 0 && <br />}
+                {renderInline(line, `${pi}-${li}`)}
+              </Fragment>
+            ))}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
 
 function CopyBlock({ block }: { block: SetupGuideCopyBlock }) {
   const [copied, setCopied] = useState(false);
@@ -129,9 +188,7 @@ export function SetupGuideDrawer({ guideId, open, onClose, copyOverrides }: Prop
                   </span>
                   <div className="min-w-0 space-y-1.5">
                     <p className="text-sm font-medium leading-snug">{step.title}</p>
-                    <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap">
-                      {step.body}
-                    </p>
+                    <GuideRichText text={step.body} />
                     {step.link && (
                       <a
                         href={step.link.href}

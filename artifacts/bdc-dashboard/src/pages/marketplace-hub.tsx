@@ -3903,7 +3903,7 @@ export default function MarketplaceHub() {
                         className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-300 dark:text-blue-400 hover:underline underline-offset-2"
                       >
                         <BookOpen className="w-3 h-3" />
-                        Feed Connect Steps
+                        Meta Integration Guide
                       </button>
                     </div>
                   </div>
@@ -4074,9 +4074,75 @@ export default function MarketplaceHub() {
           }
         };
 
+        const UiLabel = ({ children }: { children: ReactNode }) => (
+          <Badge
+            variant="secondary"
+            className="mx-0.5 align-middle px-1.5 py-0 text-[10px] font-semibold tracking-tight"
+          >
+            {children}
+          </Badge>
+        );
+
+        const Callout = ({ children }: { children: ReactNode }) => (
+          <p className="rounded-md border border-border/80 bg-muted/50 px-2.5 py-2 text-xs text-foreground/90 leading-relaxed">
+            {children}
+          </p>
+        );
+
         const steps = [
           {
             n: 1,
+            title: 'Find your Business Portfolio ID',
+            body: (
+              <div className="mt-2 space-y-2">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Open{' '}
+                  <a
+                    href="https://business.facebook.com/settings"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 font-medium text-sky-300 hover:underline dark:text-blue-400"
+                  >
+                    Meta Business Settings <ExternalLink className="w-3 h-3" />
+                  </a>
+                  .
+                </p>
+                <Callout>
+                  <strong className="text-foreground">Look at your browser URL bar</strong> at the top of the screen.
+                </Callout>
+                <Callout>
+                  Find the number right after{' '}
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground">business_id=</code>{' '}
+                  (e.g., <strong className="text-foreground">1482371201979188</strong>).
+                </Callout>
+                <Callout>
+                  Copy and paste that into the <strong className="text-foreground">Facebook Business Manager ID</strong> field in Inventory Setup.
+                </Callout>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  Tip: you can also open <UiLabel>Business info</UiLabel> under your Business Portfolio if you prefer copying the ID from the settings page.
+                </p>
+              </div>
+            ),
+          },
+          {
+            n: 2,
+            title: 'Find your Commerce Catalog ID',
+            body: (
+              <div className="mt-2 space-y-2">
+                <Callout>
+                  Under the <UiLabel>Accounts</UiLabel>
+                  {' > '}
+                  <UiLabel>Catalogs</UiLabel> tab — or under your Business Assets — locate your inventory Catalog name.
+                </Callout>
+                <Callout>
+                  Copy the <strong className="text-foreground">15-digit Catalog ID</strong> string listed next to it and paste it into the{' '}
+                  <strong className="text-foreground">Commerce Account Catalog ID</strong> field.
+                </Callout>
+              </div>
+            ),
+          },
+          {
+            n: 3,
             title: 'Copy your custom Feed URL',
             body: (
               <div className="mt-2 space-y-2">
@@ -4114,52 +4180,63 @@ export default function MarketplaceHub() {
             ),
           },
           {
-            n: 2,
+            n: 4,
             title: 'Open Meta Commerce Manager',
             body: (
-              <a
-                href="https://business.facebook.com/commerce"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-sky-300 hover:underline dark:text-blue-400"
-              >
-                business.facebook.com/commerce <ExternalLink className="w-3 h-3" />
-              </a>
-            ),
-          },
-          {
-            n: 3,
-            title: 'Select your Catalog',
-            body: (
-              <p className="mt-1 text-sm text-muted-foreground">
-                Choose an existing catalog, or create a new one under <strong>Auto &gt; Vehicles</strong>.
-              </p>
-            ),
-          },
-          {
-            n: 4,
-            title: 'Navigate to Data Sources',
-            body: (
-              <p className="mt-1 text-sm text-muted-foreground">
-                In the left menu, click <strong>Catalog</strong>, then select <strong>Data sources</strong>.
-              </p>
+              <div className="mt-1.5 space-y-2">
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Sign in with a Business Portfolio admin that owns the catalog, then open Commerce Manager.
+                </p>
+                <a
+                  href="https://business.facebook.com/commerce"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs text-sky-300 hover:underline dark:text-blue-400"
+                >
+                  business.facebook.com/commerce <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
             ),
           },
           {
             n: 5,
-            title: 'Add a Data Feed',
+            title: 'Select your Catalog',
             body: (
-              <p className="mt-1 text-sm text-muted-foreground">
-                Click <strong>Add Data Feed</strong>, then select <strong>Use a URL or Google Sheets (Scheduled Feed)</strong>.
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                Choose an existing Vehicles catalog, or create a new one under{' '}
+                <UiLabel>Auto</UiLabel>
+                {' > '}
+                <UiLabel>Vehicles</UiLabel>.
               </p>
             ),
           },
           {
             n: 6,
+            title: 'Navigate to Data Sources',
+            body: (
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                In the left menu, click <UiLabel>Catalog</UiLabel>, then select{' '}
+                <UiLabel>Data Sources</UiLabel>.
+              </p>
+            ),
+          },
+          {
+            n: 7,
+            title: 'Add a Data Feed',
+            body: (
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                Click <UiLabel>Add Data Feed</UiLabel>, then select{' '}
+                <strong className="text-foreground">Use a URL or Google Sheets (Scheduled Feed)</strong>.
+              </p>
+            ),
+          },
+          {
+            n: 8,
             title: 'Paste your Feed URL and schedule',
             body: (
-              <p className="mt-1 text-sm text-muted-foreground">
-                Paste the copied Feed URL, set the update frequency to <strong>Hourly</strong>, then click <strong>Upload</strong>.
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                Paste the copied Feed URL, set the update frequency to{' '}
+                <UiLabel>Hourly</UiLabel>, then click <UiLabel>Upload</UiLabel>.
               </p>
             ),
           },
@@ -4178,8 +4255,10 @@ export default function MarketplaceHub() {
                     <BookOpen className="w-4.5 h-4.5 text-sky-300 dark:text-blue-400" />
                   </div>
                   <div>
-                    <h2 className="text-base font-semibold leading-tight">How to Connect Your Inventory to Meta Commerce Manager</h2>
-                    <p className="text-xs text-muted-foreground mt-0.5">Follow these steps to publish your live feed to Facebook &amp; Instagram.</p>
+                    <h2 className="text-base font-semibold leading-tight">Meta Integration Setup Guide</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Link your Business Portfolio, catalog IDs, and scheduled feed to Facebook &amp; Instagram.
+                    </p>
                   </div>
                 </div>
                 <button
@@ -4209,7 +4288,7 @@ export default function MarketplaceHub() {
               {/* Footer */}
               <div className="px-6 py-4 border-t border-border bg-muted/30 flex items-center justify-between gap-3 rounded-b-xl flex-shrink-0">
                 <p className="text-[11px] text-muted-foreground">
-                  Meta refreshes your feed on the schedule you set. New and sold vehicles update automatically.
+                  Meta refreshes your feed on the schedule you set inside your Business Portfolio. New and sold vehicles update automatically.
                 </p>
                 <button
                   onClick={() => setShowMetaGuide(false)}
