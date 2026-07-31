@@ -24,6 +24,7 @@ import os
 import random
 import re
 import secrets
+import sys
 import threading
 import time
 import urllib.parse
@@ -123,6 +124,26 @@ try:
 except Exception as _dc_cfg_err:
     _dealer_config = None  # type: ignore[assignment]
     print(f"[CONFIG] dealer_config unavailable: {_dc_cfg_err}")
+
+# Adaptive 3-tier scraper (JSON-LD → heuristics → LLM) under src/scraper.
+_SCRAPER_SRC = os.path.join(_SCRIPT_DIR, "src")
+if _SCRAPER_SRC not in sys.path:
+    sys.path.insert(0, _SCRAPER_SRC)
+try:
+    from scraper.pipeline import extract_inventory as _adaptive_extract  # noqa: E402
+    from scraper.pipeline import to_engine_rows as _adaptive_to_rows  # noqa: E402
+    from scraper.wipe import (  # noqa: E402
+        clear_feed_caches as _clear_feed_caches,
+        urls_changed as _target_urls_changed,
+        wipe_user_inventory as _wipe_user_inventory,
+    )
+except Exception as _adaptive_err:
+    _adaptive_extract = None  # type: ignore[assignment]
+    _adaptive_to_rows = None  # type: ignore[assignment]
+    _clear_feed_caches = None  # type: ignore[assignment]
+    _target_urls_changed = None  # type: ignore[assignment]
+    _wipe_user_inventory = None  # type: ignore[assignment]
+    print(f"[SCRAPE] adaptive scraper unavailable: {_adaptive_err}")
 
 SERVER_PORT = int(os.environ.get("PORT", 8080))
 SERVER_HOST = os.environ.get("HOST", "0.0.0.0")
@@ -8380,72 +8401,96 @@ def _fetch_dealer_page(
     platform = _detect_platform(url, html)
     vehicles: list[dict] = []
 
-    # ── Steps 2–4: Platform-specific and generic parsing ─────────────────────
-    if platform == 'dealeron':
-        # API probed in 0a/0b — fall back to dedicated DealerOn HTML parser
-        vehicles = (
-            _parse_dealeron_html(url, html, condition) or
-            _parse_json_inventory(html, condition)     or
-            _parse_html_inventory(html, condition)
-        )
+    # ── Adaptive 3-tier pipeline (JSON-LD / heuristics / LLM) ─────────────────
+    # Runs first on the fetched HTML so every platform benefits from VDP link
+    # binding + entity decoding + AI safety-net when thin.
+    if _adaptive_extract is not None and _adaptive_to_rows is not None:
+        try:
+            _adapt = _adaptive_extract(html, url, condition=condition, min_ok=5)
+            vehicles = _adaptive_to_rows(_adapt)
+            if vehicles:
+                print(
+                    f"[SCRAPE] adaptive tier={_adapt.get('tier')} "
+                    f"reason={_adapt.get('reason')} count={len(vehicles)} "
+                    f"url={url!r}"
+                )
+        except Exception as _adapt_exc:
+            print(f"[SCRAPE] adaptive pipeline error (non-fatal): {_adapt_exc}")
+            vehicles = []
 
-    elif platform == 'dealerdotcom':
-        vehicles = _parse_dealerdotcom(url, html, condition)
-        if not vehicles:
+    # ── Steps 2–4: Platform-specific parsers (fill / replace if adaptive thin)
+    if len(vehicles) < 5:
+        if platform == 'dealeron':
             vehicles = (
-                _parse_json_inventory(html, condition) or
-                _parse_html_inventory(html, condition)
+                _parse_dealeron_html(url, html, condition) or
+                _parse_json_inventory(html, condition)     or
+                _parse_html_inventory(html, condition)     or
+                vehicles
             )
 
-    elif platform == 'sincro':
-        vehicles = _parse_sincro(url, html, condition)
-        if not vehicles:
+        elif platform == 'dealerdotcom':
+            vehicles = _parse_dealerdotcom(url, html, condition) or vehicles
+            if len(vehicles) < 5:
+                vehicles = (
+                    _parse_json_inventory(html, condition) or
+                    _parse_html_inventory(html, condition) or
+                    vehicles
+                )
+
+        elif platform == 'sincro':
+            vehicles = _parse_sincro(url, html, condition) or vehicles
+            if len(vehicles) < 5:
+                vehicles = (
+                    _parse_json_inventory(html, condition) or
+                    _parse_html_inventory(html, condition) or
+                    vehicles
+                )
+
+        elif platform == 'dealerspike':
+            vehicles = _parse_dealerspike(url, html, condition) or vehicles
+            if len(vehicles) < 5:
+                vehicles = (
+                    _parse_json_ld(html, condition) or
+                    _parse_json_inventory(html, condition) or
+                    _parse_html_inventory(html, condition) or
+                    vehicles
+                )
+
+        elif platform == 'edealer':
+            vehicles = _parse_edealer(url, html, condition) or vehicles
+            if len(vehicles) < 5:
+                vehicles = (
+                    _parse_json_inventory(html, condition) or
+                    _parse_html_inventory(html, condition) or
+                    vehicles
+                )
+
+        elif platform == 'homenet':
+            vehicles = _parse_homenet(url, html, condition) or vehicles
+            if len(vehicles) < 5:
+                vehicles = (
+                    _parse_json_inventory(html, condition) or
+                    _parse_html_inventory(html, condition) or
+                    vehicles
+                )
+
+        elif platform == 'vinsolutions':
+            vehicles = _parse_vinsolutions(url, html, condition) or vehicles
+            if len(vehicles) < 5:
+                vehicles = (
+                    _parse_json_inventory(html, condition) or
+                    _parse_html_inventory(html, condition) or
+                    vehicles
+                )
+
+        else:
             vehicles = (
                 _parse_json_inventory(html, condition) or
-                _parse_html_inventory(html, condition)
+                _parse_json_ld(html, condition)         or
+                _parse_html_inventory(html, condition)  or
+                _parse_text_blocks(html, condition)     or
+                vehicles
             )
-
-    elif platform == 'dealerspike':
-        vehicles = _parse_dealerspike(url, html, condition)
-        if not vehicles:
-            vehicles = (
-                _parse_json_ld(html, condition) or
-                _parse_json_inventory(html, condition) or
-                _parse_html_inventory(html, condition)
-            )
-
-    elif platform == 'edealer':
-        vehicles = _parse_edealer(url, html, condition)
-        if not vehicles:
-            vehicles = (
-                _parse_json_inventory(html, condition) or
-                _parse_html_inventory(html, condition)
-            )
-
-    elif platform == 'homenet':
-        vehicles = _parse_homenet(url, html, condition)
-        if not vehicles:
-            vehicles = (
-                _parse_json_inventory(html, condition) or
-                _parse_html_inventory(html, condition)
-            )
-
-    elif platform == 'vinsolutions':
-        vehicles = _parse_vinsolutions(url, html, condition)
-        if not vehicles:
-            vehicles = (
-                _parse_json_inventory(html, condition) or
-                _parse_html_inventory(html, condition)
-            )
-
-    else:
-        # Unknown platform — full generic fallback chain
-        vehicles = (
-            _parse_json_inventory(html, condition) or
-            _parse_json_ld(html, condition)         or
-            _parse_html_inventory(html, condition)  or
-            _parse_text_blocks(html, condition)
-        )
 
     # ── Step 5: Generic pagination ───────────────────────────────────────────
     # DealerOn and Dealer.com handle their own pagination inside their API
@@ -15887,6 +15932,52 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     )
                     return
 
+            # Target URL change → full inventory wipe + clear feed caches.
+            _mss_wiped = False
+            _mss_wipe_msg = ""
+            try:
+                _prev_conn = sqlite3.connect(DB_FILE)
+                try:
+                    _prev_row = _prev_conn.execute(
+                        "SELECT inventory_url_used, inventory_url_new, "
+                        "inventory_locations FROM users WHERE id = ?",
+                        (_mss_uid,),
+                    ).fetchone()
+                finally:
+                    _prev_conn.close()
+                _prev_used = (_prev_row[0] or "") if _prev_row else ""
+                _prev_new = (_prev_row[1] or "") if _prev_row else ""
+                _prev_locs = _prev_row[2] if _prev_row else None
+                _next_used = _mss_used if _mss_used is not None else _prev_used
+                _next_new = _mss_new if _mss_new is not None else _prev_new
+                _next_locs = (
+                    _mss_locs_list if "inventory_locations" in payload else _prev_locs
+                )
+                _changed = False
+                if _target_urls_changed is not None:
+                    _changed = _target_urls_changed(
+                        _prev_used,
+                        _prev_new,
+                        _next_used or "",
+                        _next_new or "",
+                        prev_locations=_prev_locs,
+                        next_locations=_next_locs,
+                    )
+                if _changed:
+                    _wiped_n = 0
+                    if _wipe_user_inventory is not None:
+                        _wiped_n = _wipe_user_inventory(DB_FILE, _mss_uid)
+                    if _clear_feed_caches is not None:
+                        _clear_feed_caches(_SCRIPT_DIR)
+                    _mss_wiped = True
+                    _mss_wipe_msg = "Previous inventory purged for new target URL."
+                    print(
+                        f"[MARKETPLACE] Target URL change — wiped {_wiped_n} "
+                        f"inventory rows + feed caches for user {_mss_uid}"
+                    )
+            except Exception as _wipe_exc:
+                print(f"[MARKETPLACE] URL-change wipe error (non-fatal): {_wipe_exc}")
+
             # Only persist keys the form actually sent — never blank a column
             # that wasn't part of this submission.
             _mss_fields = [
@@ -15947,28 +16038,32 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 )
             )
             self._json({
-                "status":         "saved",
-                "message":        "Settings Saved Successfully!",
-                "sync_triggered": _mss_has_urls,
-                "user_id":        _mss_uid,
-                "config_file":    (
+                "status":          "saved",
+                "message":         (
+                    _mss_wipe_msg if _mss_wiped else "Settings Saved Successfully!"
+                ),
+                "sync_triggered":  _mss_has_urls,
+                "inventoryWiped":  _mss_wiped,
+                "user_id":         _mss_uid,
+                "config_file":     (
                     _dealer_config.config_path() if _dealer_config is not None else ""
                 ),
             })
 
             # Post-save: drop stale non-posted inventory and re-scrape so the
-            # showroom reflects the new source URLs.  'posted' rows survive to
-            # preserve the Facebook listing audit trail.
+            # showroom reflects the new source URLs.  Skipped when a full wipe
+            # already ran for a Target URL change (posted rows were purged too).
             if _mss_has_urls:
                 try:
-                    _mss_pc = sqlite3.connect(DB_FILE)
-                    _mss_pc.execute(
-                        "DELETE FROM marketplace_inventory "
-                        "WHERE user_id = ? AND posted_status != 'posted'",
-                        (_mss_uid,),
-                    )
-                    _mss_pc.commit()
-                    _mss_pc.close()
+                    if not _mss_wiped:
+                        _mss_pc = sqlite3.connect(DB_FILE)
+                        _mss_pc.execute(
+                            "DELETE FROM marketplace_inventory "
+                            "WHERE user_id = ? AND posted_status != 'posted'",
+                            (_mss_uid,),
+                        )
+                        _mss_pc.commit()
+                        _mss_pc.close()
                     threading.Thread(
                         target=_sync_user_inventory,
                         args=(_mss_uid, _mss_used or "", _mss_new or ""),
@@ -16567,6 +16662,7 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
             _inv_used = _inv_used_raw.strip() if _inv_used_raw is not None else None
             _inv_new  = _inv_new_raw.strip()  if _inv_new_raw  is not None else None
             _inv_locs_json = None
+            _inv_locs_list: list[dict] = []
             if "inventory_locations" in payload and _scraper_engine is not None:
                 _inv_locs_list = _scraper_engine.normalize_inventory_locations(
                     payload.get("inventory_locations")
@@ -16579,6 +16675,8 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                         _inv_new = _inv_locs_list[0].get("inventory_url_new") or ""
             _rs_uid   = _resolve_user_id(token)
             _saved_ok = False
+            _inv_wiped = False
+            _inv_wipe_msg = ""
             try:
                 # Validate inventory URLs before persisting — reject non-HTTP
                 # strings early so the scraper never receives a bare hostname
@@ -16592,6 +16690,48 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                             400,
                         )
                         return
+
+                # Compare Target URLs before save; wipe inventory if domain/URL changed.
+                if _rs_uid and _target_urls_changed is not None:
+                    try:
+                        _pconn = sqlite3.connect(DB_FILE)
+                        try:
+                            _prow = _pconn.execute(
+                                "SELECT inventory_url_used, inventory_url_new, "
+                                "inventory_locations FROM users WHERE id = ?",
+                                (_rs_uid,),
+                            ).fetchone()
+                        finally:
+                            _pconn.close()
+                        _p_used = (_prow[0] or "") if _prow else ""
+                        _p_new = (_prow[1] or "") if _prow else ""
+                        _p_locs = _prow[2] if _prow else None
+                        _n_used = _inv_used if _inv_used is not None else _p_used
+                        _n_new = _inv_new if _inv_new is not None else _p_new
+                        _n_locs = (
+                            _inv_locs_list
+                            if "inventory_locations" in payload
+                            else _p_locs
+                        )
+                        if _target_urls_changed(
+                            _p_used,
+                            _p_new,
+                            _n_used or "",
+                            _n_new or "",
+                            prev_locations=_p_locs,
+                            next_locations=_n_locs,
+                        ):
+                            if _wipe_user_inventory is not None:
+                                _wipe_user_inventory(DB_FILE, _rs_uid)
+                            if _clear_feed_caches is not None:
+                                _clear_feed_caches(_SCRIPT_DIR)
+                            _inv_wiped = True
+                            _inv_wipe_msg = (
+                                "Previous inventory purged for new target URL."
+                            )
+                    except Exception as _vw_err:
+                        print(f"[SETTINGS] URL-change wipe error: {_vw_err}")
+
                 # Pass None for any key absent from the payload — those columns
                 # will be skipped entirely in the UPDATE rather than blanked.
                 BillingManager.update_settings(
@@ -16619,8 +16759,13 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 _saved_ok = True
                 self._json({
                     "status":         "saved",
-                    "message":        "Settings saved. Inventory is being refreshed…",
+                    "message":        (
+                        _inv_wipe_msg
+                        if _inv_wiped
+                        else "Settings saved. Inventory is being refreshed…"
+                    ),
                     "sync_triggered": bool(_inv_used or _inv_new),
+                    "inventoryWiped": _inv_wiped,
                 })
             except ValueError as exc:
                 self._json({"error": str(exc)}, 400)
@@ -16632,30 +16777,27 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                     500,
                 )
             # ── Post-save: purge stale inventory and trigger a fresh scrape ──────
-            # Only runs when the save actually succeeded and inventory URLs exist.
-            # Rows with posted_status='posted' are excluded from the purge: the
-            # manager may have live Facebook listings for those vehicles and
-            # deleting them destroys the audit trail.  After the re-sync those
-            # VINs will be marked SOLD by mark_sold_by_condition if they no
-            # longer appear in the new source, surfacing them as
-            # "previously posted, now removed from feed" in the Marketplace Hub.
+            # Full wipe already ran when Target URLs changed. Otherwise only
+            # non-posted rows are cleared so Facebook listing audit trails stay.
             if _saved_ok and _rs_uid and (_inv_used or _inv_new):
                 try:
-                    _rs_conn = sqlite3.connect(DB_FILE)
-                    _rs_conn.execute(
-                        "DELETE FROM marketplace_inventory "
-                        "WHERE user_id = ? AND posted_status != 'posted'",
-                        (_rs_uid,),
-                    )
-                    _rs_conn.commit()
-                    _rs_conn.close()
+                    if not _inv_wiped:
+                        _rs_conn = sqlite3.connect(DB_FILE)
+                        _rs_conn.execute(
+                            "DELETE FROM marketplace_inventory "
+                            "WHERE user_id = ? AND posted_status != 'posted'",
+                            (_rs_uid,),
+                        )
+                        _rs_conn.commit()
+                        _rs_conn.close()
                     threading.Thread(
                         target=_sync_user_inventory,
                         args=(_rs_uid, _inv_used, _inv_new),
                         daemon=True,
                     ).start()
                     print(
-                        f"[SETTINGS] Inventory purged (non-posted rows) + "
+                        f"[SETTINGS] Inventory "
+                        f"{'fully wiped' if _inv_wiped else 'purged (non-posted)'} + "
                         f"re-sync triggered for user {_rs_uid} "
                         f"(used={_inv_used!r}, new={_inv_new!r})."
                     )
