@@ -249,24 +249,37 @@ def get_leads(
     sla_only: bool = False,
     db_path: str | None = None,
 ) -> list[dict]:
-    conn = _connect(db_path)
-    clauses: list[str] = []
-    params: list[Any] = []
-    if status:
-        clauses.append("status = ?")
-        params.append(status)
-    if source:
-        clauses.append("source = ?")
-        params.append(source)
-    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-    rows = conn.execute(
-        f"SELECT * FROM leads {where} ORDER BY created_at DESC", params
-    ).fetchall()
-    conn.close()
-    result = [_row_to_dict(r) for r in rows]
-    if sla_only:
-        result = [r for r in result if r["is_unanswered_sla"]]
-    return result
+    try:
+        conn = _connect(db_path)
+    except Exception as exc:
+        print(f"[LEADS] connect failed — empty list: {exc}")
+        return []
+    try:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(
+            f"SELECT * FROM leads {where} ORDER BY created_at DESC", params
+        ).fetchall()
+        result = [_row_to_dict(r) for r in rows]
+        if sla_only:
+            result = [r for r in result if r["is_unanswered_sla"]]
+        return result
+    except sqlite3.OperationalError as exc:
+        # Missing table / schema — Lead Center should show an empty board, not 500.
+        print(f"[LEADS] query failed — empty list: {exc}")
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def get_lead(lead_id: int, db_path: str | None = None) -> dict | None:

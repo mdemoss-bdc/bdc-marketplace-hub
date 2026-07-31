@@ -191,6 +191,10 @@ mount('/api/inventory/sanitize', require('../_routes/inventory/parse'));
 mount('/api/marketplace/parse', require('../_routes/inventory/parse'));
 mount('/api/marketplace/sanitize', require('../_routes/inventory/parse'));
 
+// ── Lead Center board ───────────────────────────────────────────────────────
+mount('/api/leads', require('../_routes/leads'));
+mount('/api/v1/leads', require('../_routes/leads'));
+
 app.get(['/api/healthz', '/healthz'], (_req, res) => {
   res.status(200).json({ status: 'UP', router: 'api/index', success: true });
 });
@@ -204,6 +208,7 @@ app.all(['/api', '/api/index', '/'], (_req, res) => {
       '/api/auth/register',
       '/api/auth/me',
       '/api/users/me',
+      '/api/leads',
       '/api/marketplace/queue',
       '/api/marketplace/inventory',
       '/api/marketplace/schedule',

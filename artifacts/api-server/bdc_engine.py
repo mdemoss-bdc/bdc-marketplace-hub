@@ -13200,24 +13200,21 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
         # Sits ABOVE the auth gate so the Lead Center loads without a session
         # token. Leads are dealership-wide operational data, not per-user.
         if path in ("/api/leads", "/api/v1/leads"):
-            try:
-                from leads_engine import get_leads as _get_leads
-            except ImportError:
-                self._json({"error": "leads_engine not available."}, 500)
-                return
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             _status   = (qs.get("status", [None])[0]) or None
             _source   = (qs.get("source", [None])[0]) or None
             _sla_only = (qs.get("sla_only", ["0"])[0]).lower() in ("1", "true", "yes")
+            # Never surface a red Lead Center banner for missing schema / empty DB.
             try:
+                from leads_engine import get_leads as _get_leads
                 leads = _get_leads(
                     status=_status, source=_source,
                     sla_only=_sla_only, db_path=DB_FILE,
                 )
-                self._json({"leads": leads, "total": len(leads)})
+                self._json({"leads": leads if isinstance(leads, list) else [], "total": len(leads or [])})
             except Exception as exc:
-                print(f"[LEADS] list error: {exc}")
-                self._json({"error": "Failed to load leads."}, 500)
+                print(f"[LEADS] list error (returning empty): {exc}")
+                self._json({"leads": [], "total": 0})
             return
 
         # ── Marketplace publisher queue (public/local) ────────────────
