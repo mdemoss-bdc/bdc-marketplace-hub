@@ -526,6 +526,11 @@ function resolveDisplayStock(raw: Record<string, unknown>, year: number, _vin: s
   return UNAVAILABLE_STOCK;
 }
 
+/** Case-insensitive string equality for inventory filter matching. */
+function eqCI(a: string | undefined | null, b: string | undefined | null): boolean {
+  return (a ?? '').toString().trim().toLowerCase() === (b ?? '').toString().trim().toLowerCase();
+}
+
 /** Pull vehicle rows from either a direct array or nested API payloads. */
 function extractInventoryRows(data: Record<string, unknown> | unknown[] | null | undefined): Record<string, unknown>[] {
   if (Array.isArray(data)) {
@@ -1875,16 +1880,14 @@ function InventoryView({
   const [videoFiles, setVideoFiles] = useState<Record<string, File | null>>({});
 
 
+  // Load the full inventory once. Filter dropdowns bind to client state and
+  // re-filter `filteredInventory` immediately — do not refetch on filter change
+  // (that previously replaced `inventory` with a subset and broke "Showing X of Y").
   const fetchInventory = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     const p = new URLSearchParams();
-    // Location / make / model are filtered client-side for instant cascade.
-    if (filterCondition) p.set('condition', filterCondition);
-    if (filterMinPrice) p.set('min_price', filterMinPrice);
-    if (filterMaxPrice) p.set('max_price', filterMaxPrice);
-    if (filterMinYear) p.set('min_year', filterMinYear);
-    if (filterMaxYear) p.set('max_year', filterMaxYear);
-    if (filterPosted) p.set('posted_status', filterPosted);
+    // Ask the API for the full set (no status/make/price narrowing).
+    p.set('status', 'ALL');
     try {
       const { ok, data } = await fetchMarketplaceJson(`/marketplace/inventory?${p}`, {
         warnOnError: !quiet,
@@ -1922,7 +1925,7 @@ function InventoryView({
     } finally {
       setLoading(false);
     }
-  }, [filterCondition, filterMinPrice, filterMaxPrice, filterMinYear, filterMaxYear, filterPosted]);
+  }, []);
 
   useEffect(() => { fetchInventory(); }, [fetchInventory]);
 
@@ -2210,8 +2213,8 @@ function InventoryView({
   // Makes available at the selected rooftop (and current condition pool).
   const makeOptions = useMemo(() => {
     const pool = inventory.filter(v =>
-      (!filterLocation || v.location === filterLocation)
-      && (!filterCondition || v.condition === filterCondition),
+      (!filterLocation || eqCI(v.location, filterLocation))
+      && (!filterCondition || eqCI(v.condition, filterCondition)),
     );
     return Array.from(new Set(pool.map(v => v.make).filter(Boolean))).sort();
   }, [inventory, filterLocation, filterCondition]);
@@ -2220,25 +2223,51 @@ function InventoryView({
   const modelOptions = useMemo(() => {
     if (!filterMake) return [];
     const pool = inventory.filter(v =>
-      v.make === filterMake
-      && (!filterLocation || v.location === filterLocation)
-      && (!filterCondition || v.condition === filterCondition),
+      eqCI(v.make, filterMake)
+      && (!filterLocation || eqCI(v.location, filterLocation))
+      && (!filterCondition || eqCI(v.condition, filterCondition)),
     );
     return Array.from(new Set(pool.map(v => v.model).filter(Boolean))).sort();
   }, [inventory, filterMake, filterLocation, filterCondition]);
 
-  // Instant client-side cascade: location → make → model → text search.
+  // Instant client-side filter binding — every dropdown/input narrows the
+  // rendered array. Make/model (and other strings) use case-insensitive equality.
   const filteredInventory = useMemo(() => {
     const term = filterSearch.trim().toLowerCase();
+    const minPrice = Number(filterMinPrice) || 0;
+    const maxPrice = Number(filterMaxPrice) || 0;
+    const minYear = Number(filterMinYear) || 0;
+    const maxYear = Number(filterMaxYear) || 0;
     return sortedInventory.filter(v => {
-      if (filterLocation && v.location !== filterLocation) return false;
-      if (filterMake && v.make !== filterMake) return false;
-      if (filterModel && v.model !== filterModel) return false;
+      if (filterCondition && !eqCI(v.condition, filterCondition)) return false;
+      if (filterLocation && !eqCI(v.location, filterLocation)) return false;
+      if (filterMake && !eqCI(v.make, filterMake)) return false;
+      if (filterModel && !eqCI(v.model, filterModel)) return false;
+      if (filterPosted) {
+        const posted = (v.posted_status || 'not_posted').toLowerCase();
+        if (posted !== filterPosted.toLowerCase()) return false;
+      }
+      if (minPrice > 0 && (v.price || 0) < minPrice) return false;
+      if (maxPrice > 0 && (v.price || 0) > maxPrice) return false;
+      if (minYear > 0 && (v.year || 0) < minYear) return false;
+      if (maxYear > 0 && (v.year || 0) > maxYear) return false;
       if (!term) return true;
       return [v.make, v.model, v.trim, v.vin, v.stock_number, v.location, String(v.year ?? '')]
         .some(f => (f ?? '').toString().toLowerCase().includes(term));
     });
-  }, [sortedInventory, filterSearch, filterLocation, filterMake, filterModel]);
+  }, [
+    sortedInventory,
+    filterSearch,
+    filterLocation,
+    filterMake,
+    filterModel,
+    filterCondition,
+    filterPosted,
+    filterMinPrice,
+    filterMaxPrice,
+    filterMinYear,
+    filterMaxYear,
+  ]);
 
   // ── Selection helpers ─────────────────────────────────────────────
 
@@ -2509,21 +2538,28 @@ function InventoryView({
   };
 
   const clearFilters = () => {
-    setFilterCondition(''); setFilterMake(''); setFilterModel(''); setFilterLocation('');
-    setFilterMinPrice(''); setFilterMaxPrice('');
-    setFilterMinYear('');  setFilterMaxYear('');
-    setFilterSearch('');   setFilterPosted('');
+    setFilterCondition('');
+    setFilterMake('');
+    setFilterModel('');
+    setFilterLocation('');
+    setFilterMinPrice('');
+    setFilterMaxPrice('');
+    setFilterMinYear('');
+    setFilterMaxYear('');
+    setFilterSearch('');
+    setFilterPosted('');
     setSortBy('');
   };
   const hasFilters = !!(filterCondition || filterMake || filterModel || filterLocation || filterMinPrice
     || filterMaxPrice || filterMinYear || filterMaxYear || filterSearch || filterPosted
     || sortBy);
 
-  const filteredCount = filteredInventory.length;
-  const totalLoadedCount = inventory.length;
-  const showingCountLabel = hasFilters || filteredCount !== totalLoadedCount
-    ? `Showing ${filteredCount.toLocaleString()} of ${totalLoadedCount.toLocaleString()} vehicles`
-    : `${totalLoadedCount.toLocaleString()} total vehicle${totalLoadedCount === 1 ? '' : 's'}`;
+  // X = exactly the rendered filtered set; Y = full unfiltered inventory.
+  const showingCount = filteredInventory.length;
+  const totalCount = inventory.length;
+  const showingCountLabel = hasFilters || showingCount !== totalCount
+    ? `Showing ${showingCount.toLocaleString()} of ${totalCount.toLocaleString()} vehicles`
+    : `${totalCount.toLocaleString()} total vehicle${totalCount === 1 ? '' : 's'}`;
 
   const onLocationChange = (v: string) => {
     const next = v === 'all' ? '' : v;
@@ -2839,7 +2875,7 @@ function InventoryView({
         <div className="flex items-center justify-between gap-3 px-0.5">
           <span
             className={`inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-medium tabular-nums ${
-              hasFilters || filteredCount !== totalLoadedCount
+              hasFilters || showingCount !== totalCount
                 ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
                 : 'border-slate-700/60 bg-slate-900/60 text-slate-300'
             }`}

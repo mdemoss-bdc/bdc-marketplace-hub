@@ -10081,11 +10081,11 @@ class MarketplaceDB:
                       enabled_locations: set | None = None) -> list[dict]:
         """Return inventory rows for user_id with optional filters.
 
-        ``condition``       : strict exact match ('New' | 'Used') — case-sensitive.
+        ``condition``       : 'New' | 'Used' — case-insensitive equality.
         ``posted_status``   : '' = no filter | 'not_posted' | 'posted'.
         ``min_year/max_year``: inclusive year range; 0 = no bound.
-        ``location``        : exact location string to filter by; '' = no filter.
-        ``model``           : exact model string; '' = no filter.
+        ``location`` / ``make`` / ``model``: case-insensitive equality; '' = no filter.
+        ``status``          : '' / 'ALL' = no filter; otherwise case-insensitive match.
         ``enabled_locations``:
           None  -> no location filter
           set   -> include rows whose location is in the set OR blank/unknown
@@ -10095,16 +10095,28 @@ class MarketplaceDB:
         cursor = conn.cursor()
         clauses: list = ["user_id=?"]
         params:  list = [user_id]
-        if condition:      clauses.append("condition=?");       params.append(condition)
-        if make:           clauses.append("make=?");            params.append(make)
-        if model:          clauses.append("model=?");           params.append(model)
+        if condition:
+            clauses.append("LOWER(condition)=LOWER(?)")
+            params.append(condition)
+        if make:
+            clauses.append("LOWER(make)=LOWER(?)")
+            params.append(make)
+        if model:
+            clauses.append("LOWER(model)=LOWER(?)")
+            params.append(model)
         if min_price:      clauses.append("price>=?");          params.append(min_price)
         if max_price:      clauses.append("price<=?");          params.append(max_price)
         if min_year:       clauses.append("year>=?");           params.append(min_year)
         if max_year:       clauses.append("year<=?");           params.append(max_year)
-        if status:         clauses.append("status=?");          params.append(status)
-        if posted_status:  clauses.append("posted_status=?");   params.append(posted_status)
-        if location:       clauses.append("location=?");        params.append(location)
+        if status and str(status).strip().upper() != 'ALL':
+            clauses.append("UPPER(status)=UPPER(?)")
+            params.append(status)
+        if posted_status:
+            clauses.append("LOWER(COALESCE(posted_status,'not_posted'))=LOWER(?)")
+            params.append(posted_status)
+        if location:
+            clauses.append("LOWER(location)=LOWER(?)")
+            params.append(location)
         if search:
             # Case-insensitive match (LOWER works in both SQLite and PostgreSQL).
             # Covers make, model, trim, vin, stock_number, and year (cast to text).
@@ -10156,13 +10168,13 @@ class MarketplaceDB:
         """Distinct makes, optionally scoped to a rooftop and/or condition."""
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        clauses = ["user_id=?", "make!=''", "status='ACTIVE'"]
+        clauses = ["user_id=?", "make!=''", "UPPER(status)='ACTIVE'"]
         params: list = [user_id]
         if location:
-            clauses.append("location=?")
+            clauses.append("LOWER(location)=LOWER(?)")
             params.append(location)
         if condition:
-            clauses.append("condition=?")
+            clauses.append("LOWER(condition)=LOWER(?)")
             params.append(condition)
         cursor.execute(
             f"SELECT DISTINCT make FROM marketplace_inventory "
@@ -10183,16 +10195,16 @@ class MarketplaceDB:
         """Distinct models for the selected make / rooftop / condition."""
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        clauses = ["user_id=?", "model!=''", "status='ACTIVE'"]
+        clauses = ["user_id=?", "model!=''", "UPPER(status)='ACTIVE'"]
         params: list = [user_id]
         if make:
-            clauses.append("make=?")
+            clauses.append("LOWER(make)=LOWER(?)")
             params.append(make)
         if location:
-            clauses.append("location=?")
+            clauses.append("LOWER(location)=LOWER(?)")
             params.append(location)
         if condition:
-            clauses.append("condition=?")
+            clauses.append("LOWER(condition)=LOWER(?)")
             params.append(condition)
         cursor.execute(
             f"SELECT DISTINCT model FROM marketplace_inventory "
@@ -13655,10 +13667,14 @@ class BDCRequestHandler(BaseHTTPRequestHandler):
                 uid,
                 condition=_qs('condition'),
                 make=_qs('make'),
+                model=_qs('model'),
                 min_price=int(_qs('min_price', '0') or 0),
                 max_price=int(_qs('max_price', '0') or 0),
+                min_year=int(_qs('min_year', '0') or 0),
+                max_year=int(_qs('max_year', '0') or 0),
                 status=status,
                 search=_qs('search'),
+                posted_status=_qs('posted_status'),
                 location=_qs('location'),
             )
             counts = MarketplaceDB.count(uid)

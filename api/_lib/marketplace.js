@@ -239,8 +239,10 @@ async function listInventory(queryParams = {}) {
       params.push(userId);
     }
 
-    const status = String(queryParams.status || 'ACTIVE').trim() || 'ACTIVE';
-    if (status.toUpperCase() !== 'ALL') {
+    // Empty / ALL = full inventory (Hub needs the unfiltered set for accurate
+    // "Showing X of Y" counts). Explicit status values still filter.
+    const status = String(queryParams.status || '').trim();
+    if (status && status.toUpperCase() !== 'ALL') {
       clauses.push(`UPPER(status) = UPPER($${i++})`);
       params.push(status);
     }
