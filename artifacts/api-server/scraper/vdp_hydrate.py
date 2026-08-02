@@ -1,9 +1,9 @@
-"""Fast VDP fallback hydration for thin SRP card parses.
+"""Optional Gauntlet STEP 5 — VDP fallback hydration for thin SRP parses.
 
-When stock is missing/Unavailable or price is 0 after tier1/tier2 normalize,
+After gauntlet steps 1–4, when stock is still missing/Unavailable or price is 0,
 fetch ``vehicle.link`` (stdlib urllib, short timeout, bounded concurrency) and
-fill stock / price / color / mileage from JSON-LD, meta tags, and Moses /
-DealerOn text patterns. Never mutates ``vehicle.link``.
+fill stock / price / color / mileage from JSON-LD, meta tags, and shared DOM /
+text patterns. Never mutates ``vehicle.link``.
 """
 
 from __future__ import annotations

@@ -1,4 +1,9 @@
-"""Strict vehicle record schema for the adaptive scraper."""
+"""Strict vehicle record schema for the adaptive scraper.
+
+Canonical keys (``stockNumber``, ``exteriorColor``, ``price``, ``mileage``,
+``vin``, …) are filled by the Scraper Gauntlet Matrix before normalize; this
+module sanitizes types/aliases and retains In Transit / Unavailable rows.
+"""
 
 from __future__ import annotations
 

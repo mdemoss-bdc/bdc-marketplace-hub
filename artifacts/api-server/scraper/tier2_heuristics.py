@@ -1,4 +1,4 @@
-"""Tier 2 — Structural DOM heuristics (platform-agnostic fallback)."""
+"""Tier 2 — Structural DOM heuristics feeding the Gauntlet Matrix."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from .fields import enrich_from_html, extract_exterior_color, extract_mileage, extract_price
+from .gauntlet import run_gauntlet
 from .html_utils import absolutize, clean_text, decode_entities
 from .schema import VIN_RE, normalize_vehicle
 from .stock import detect_in_transit, extract_stock_from_html, resolve_stock_number
@@ -132,7 +133,14 @@ def extract_tier2(html: str, page_url: str, *, condition: str = "Used") -> list[
             "condition": condition,
         }
         raw = enrich_from_html(raw, body, condition=condition)
-        norm = normalize_vehicle(raw, condition=condition)
+        filled = run_gauntlet(
+            raw,
+            card_html=body,
+            page_html=html,
+            condition=condition,
+            finalize_stock=True,
+        )
+        norm = normalize_vehicle(filled, condition=condition)
         if norm:
             seen.add((norm.get("vin") or vin).upper())
             out.append(norm)

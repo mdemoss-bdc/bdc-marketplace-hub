@@ -112,6 +112,28 @@ _PRICE_LABEL_RE = re.compile(
     re.I,
 )
 _PRICE_CARD_RE = re.compile(r"\$([0-9]{2,3},[0-9]{3})")
+# DealerOn dynamic grid extras (inventory-spec-list / priceStak / final-price)
+_PRICE_STAK_FINAL_RE = re.compile(
+    r'class=["\'][^"\']*\b(?:priceStak-final-price|final-price)\b[^"\']*["\'][^>]*>'
+    r'[\s\S]{0,200}?'
+    r'(?:class=["\'][^"\']*\bvalue\b[^"\']*["\'][^>]*>\s*)?'
+    r'\$?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})',
+    re.I,
+)
+_FINAL_PRICE_VALUE_RE = re.compile(
+    r'class=["\'][^"\']*\bfinal-price\b[^"\']*["\'][^>]*>'
+    r'[\s\S]{0,160}?'
+    r'class=["\'][^"\']*\bvalue\b[^"\']*["\'][^>]*>'
+    r'\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,7})\s*<',
+    re.I,
+)
+_SPEC_LIST_EXT_RE = re.compile(
+    r'class=["\'][^"\']*\b(?:inventory-spec-list|specs)\b[^"\']*["\'][^>]*>'
+    r'[\s\S]{0,600}?'
+    r'(?:Ext(?:erior)?(?:\s*Color)?|Ext\.)\s*[:.]?\s*'
+    r'([A-Za-z][A-Za-z0-9 \-/]{1,40})',
+    re.I,
+)
 
 
 def _plain(html_or_text: str) -> str:
@@ -146,6 +168,7 @@ def extract_exterior_color(html_or_text: str) -> str:
         _SPECS_COLOR_RE,
         _COLORS_VALUE_RE,
         _EXT_COLOR_CLASS_TEXT_RE,
+        _SPEC_LIST_EXT_RE,
     ):
         m = rx.search(text)
         if m:
@@ -223,6 +246,17 @@ def extract_price(html_or_text: str) -> int:
     """Prefer featured highlight / priceBloc / MOSES PRICE, then $NN,NNN."""
     text = decode_entities(html_or_text or "")
     plain = _plain(html_or_text)
+
+    # 0) DealerOn priceStak / final-price .value
+    for rx in (_FINAL_PRICE_VALUE_RE, _PRICE_STAK_FINAL_RE):
+        m = rx.search(text)
+        if m:
+            try:
+                n = int(m.group(1).replace(",", ""))
+                if _price_ok(n):
+                    return n
+            except ValueError:
+                pass
 
     # 1) featuredPrice → vehiclePricingHighlightAmount
     m = _FEATURED_HIGHLIGHT_RE.search(text)

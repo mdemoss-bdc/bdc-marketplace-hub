@@ -1,4 +1,9 @@
-"""Tier 1 — JSON-LD / data-* attributes / VDP anchor binding (fast & free)."""
+"""Tier 1 — card discovery + Gauntlet Matrix fill (JSON-LD first).
+
+Field population for stock / color / price / mileage / vin is owned by
+``gauntlet.run_gauntlet`` (strict multi-platform order). This module keeps
+fast DOM card discovery and VDP anchor binding.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from .fields import enrich_from_html
+from .gauntlet import run_gauntlet
 from .html_utils import absolutize, clean_text, decode_entities
 from .schema import VIN_RE, normalize_vehicle
 from .stock import detect_in_transit, extract_stock_from_html, resolve_stock_number
@@ -312,7 +318,15 @@ def parse_data_attributes(html: str, base_url: str, *, condition: str = "Used") 
         if img_m:
             raw["imageUrl"] = absolutize(img_m.group(1), base_url)
         raw = enrich_from_html(raw, card, condition=condition)
-        norm = normalize_vehicle(raw, condition=condition)
+        # Gauntlet owns fill order (JSON-LD → DealerOn → Sincro → text).
+        filled = run_gauntlet(
+            raw,
+            card_html=card,
+            page_html=text if len(text) < 500_000 else card,
+            condition=condition,
+            finalize_stock=True,
+        )
+        norm = normalize_vehicle(filled, condition=condition)
         if norm:
             out.append(norm)
     return _dedupe(out)
@@ -355,7 +369,22 @@ def bind_vdp_anchors(vehicles: list[dict], html: str, base_url: str) -> list[dic
 
 
 def extract_tier1(html: str, page_url: str, *, condition: str = "Used") -> list[dict]:
+    # Gauntlet step 1 (JSON-LD) via parse_json_ld, then DOM cards through gauntlet.
     vehicles = parse_json_ld(html, condition=condition)
+    # Re-run gauntlet on LD rows so DealerOn/Sincro/text can fill gaps.
+    reinforced: list[dict] = []
+    for v in vehicles:
+        filled = run_gauntlet(
+            v,
+            card_html=str(v.get("_html") or ""),
+            page_html=html,
+            condition=condition,
+            finalize_stock=True,
+        )
+        norm = normalize_vehicle(filled, condition=condition)
+        if norm:
+            reinforced.append(norm)
+    vehicles = reinforced
     if len(vehicles) < 5:
         vehicles = _dedupe(vehicles + parse_data_attributes(html, page_url, condition=condition))
     return bind_vdp_anchors(vehicles, html, page_url)

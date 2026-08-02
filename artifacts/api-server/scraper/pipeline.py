@@ -1,11 +1,21 @@
-"""3-tier self-healing inventory extraction chain."""
+"""Adaptive inventory extraction — Gauntlet Matrix + tier fallbacks.
+
+Core per-vehicle fill order lives in ``gauntlet.py`` (JSON-LD → DealerOn →
+Dealertrack/Sincro → text brute-force → optional VDP/URL/In Transit).
+Tiers 1–3 remain as discovery / LLM safety nets that feed the same gauntlet.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 from urllib.parse import urlparse
 
-from .cosmos import extract_cosmos_inventory, looks_like_skeleton_srp, parse_srp_config_from_html
+from .gauntlet import (
+    critical_payload,
+    extract_with_gauntlet,
+    gauntlet_complete,
+    run_gauntlet,
+)
 from .html_utils import fetch_html
 from .schema import normalize_vehicle, validate_batch
 from .stock import MISSING_STOCK
@@ -24,6 +34,26 @@ def _condition_from_url(url: str, fallback: str = "Used") -> str:
     return fallback
 
 
+def _merge_by_vin(base: list[dict], extra: list[dict]) -> list[dict]:
+    by_vin = { (v.get("vin") or "").upper(): v for v in base if v.get("vin") }
+    for v in extra:
+        vin = (v.get("vin") or "").upper()
+        if not vin:
+            continue
+        prev = by_vin.get(vin)
+        if not prev:
+            by_vin[vin] = v
+            continue
+        merged = dict(prev)
+        for k, val in v.items():
+            if val in ("", 0, None, "N/A", "Unavailable"):
+                continue
+            if merged.get(k) in ("", 0, None, "N/A", "Unavailable"):
+                merged[k] = val
+        by_vin[vin] = merged
+    return list(by_vin.values())
+
+
 def extract_inventory(
     html: str,
     page_url: str,
@@ -32,68 +62,42 @@ def extract_inventory(
     min_ok: int = 5,
     enable_llm: bool = True,
 ) -> dict[str, Any]:
-    """Run tiers 1→2→3 against already-fetched HTML.
+    """Run the Scraper Gauntlet Matrix (+ tier fallbacks) against fetched HTML.
 
     Returns ``{vehicles, tier, reason, count}``.
+
+    Optional final enrichment (after gauntlet steps 1–4): VDP hydrate fills
+    remaining stock/price gaps without mangling ``link``. URL stock / In Transit
+    are applied inside ``gauntlet.step5_optional_stock_enrichment``.
     """
     cond = condition or _condition_from_url(page_url)
     tier_used = 1
-    reason = "tier1"
+    reason = "gauntlet"
 
-    vehicles = extract_tier1(html, page_url, condition=cond)
+    # Primary path — multi-platform gauntlet (owns per-vehicle fill order).
+    vehicles = extract_with_gauntlet(html, page_url, condition=cond)
     ok, why = validate_batch(vehicles, min_count=min_ok)
+    if ok:
+        reason = "gauntlet_ok"
 
-    # DealerOn Cosmos / Wasabi: moses_layout.txt-style SPA shells have skeleton
-    # vehicle-card nodes and empty VehicleListModel — hydrate via SRP REST API
-    # using embedded <script id="dlron-srp-model"> config.
-    if (not ok or looks_like_skeleton_srp(html)) and parse_srp_config_from_html(html, page_url):
-        cosmos = extract_cosmos_inventory(
-            html,
-            page_url,
-            condition=cond,
-            max_pages=1,
-            page_size=24,
-        )
-        if cosmos:
-            by_vin = {v["vin"]: v for v in vehicles}
-            for v in cosmos:
-                prev = by_vin.get(v["vin"])
-                if not prev:
-                    by_vin[v["vin"]] = v
-                    continue
-                merged = dict(prev)
-                for k, val in v.items():
-                    if val in ("", 0, None, "N/A", "Unavailable"):
-                        continue
-                    if merged.get(k) in ("", 0, None, "N/A", "Unavailable"):
-                        merged[k] = val
-                by_vin[v["vin"]] = merged
-            vehicles = list(by_vin.values())
-            ok, why = validate_batch(vehicles, min_count=min_ok)
-            if ok:
-                tier_used = 1
-                reason = "cosmos_ok"
+    # Tier 1 discovery → re-gauntlet thin rows (JSON-LD / data-* cards).
+    if not ok:
+        tier_used = 1
+        reason = f"gauntlet_{why}"
+        t1 = extract_tier1(html, page_url, condition=cond)
+        vehicles = _merge_by_vin(vehicles, t1)
+        ok, why = validate_batch(vehicles, min_count=min_ok)
+        if ok:
+            reason = "tier1_ok"
 
     if not ok:
         tier_used = 2
         reason = f"tier1_{why}"
         t2 = extract_tier2(html, page_url, condition=cond)
-        # Merge by VIN, prefer richer fields
-        by_vin = {v["vin"]: v for v in vehicles}
-        for v in t2:
-            prev = by_vin.get(v["vin"])
-            if not prev:
-                by_vin[v["vin"]] = v
-                continue
-            merged = dict(prev)
-            for k, val in v.items():
-                if val in ("", 0, None, "N/A", "Unavailable"):
-                    continue
-                if merged.get(k) in ("", 0, None, "N/A", "Unavailable"):
-                    merged[k] = val
-            by_vin[v["vin"]] = merged
-        vehicles = list(by_vin.values())
+        vehicles = _merge_by_vin(vehicles, t2)
         ok, why = validate_batch(vehicles, min_count=min_ok)
+        if ok:
+            reason = "tier2_ok"
 
     if not ok and enable_llm:
         tier_used = 3
@@ -104,23 +108,29 @@ def extract_inventory(
             reason = "tier3_ok"
         else:
             reason = f"tier3_{why}"
-    elif ok and tier_used == 1:
-        reason = "tier1_ok"
-    elif ok and tier_used == 2:
-        reason = "tier2_ok"
 
     # Final normalize pass
     clean: list[dict] = []
     seen: set[str] = set()
     for raw in vehicles:
+        # Re-run gauntlet finalize on residual gaps (no double VDP fetch here).
+        if not gauntlet_complete(raw, condition=cond):
+            raw = run_gauntlet(
+                raw,
+                card_html=str(raw.get("_html") or ""),
+                page_html=html,
+                condition=cond,
+                finalize_stock=True,
+            )
         n = normalize_vehicle(raw, condition=cond)
         if not n or n["vin"] in seen:
             continue
         seen.add(n["vin"])
+        n.pop("_mileage_resolved", None)
         clean.append(n)
 
-    # VDP hydration: fill stock/price/color/miles when SRP cards were thin.
-    # Bounded concurrency + max fetches keep sync within timeout budgets.
+    # Optional STEP 5 enrichment: bounded VDP hydrate when stock/price still thin.
+    # Documented in gauntlet.py — does not mangle vehicle.link.
     clean = hydrate_vehicles(
         clean,
         condition=cond,
@@ -136,6 +146,7 @@ def extract_inventory(
         "count": len(clean),
         "condition": cond,
         "url": page_url,
+        "sample": critical_payload(clean[0]) if clean else {},
     }
 
 
@@ -157,6 +168,7 @@ def scrape_url(
             "count": 0,
             "condition": condition or _condition_from_url(url),
             "url": url,
+            "sample": {},
         }
     return extract_inventory(
         html, url, condition=condition, min_ok=min_ok, enable_llm=enable_llm,
